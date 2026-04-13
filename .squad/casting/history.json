@@ -1,0 +1,29 @@
+{
+  "universe_usage_history": [
+    {
+      "assignment_id": "gigabrain-initial-2026-04-13",
+      "universe": "Futurama",
+      "created_at": "2026-04-13T14:22:20Z"
+    }
+  ],
+  "assignment_cast_snapshots": {
+    "gigabrain-initial-2026-04-13": {
+      "universe": "Futurama",
+      "created_at": "2026-04-13T14:22:20Z",
+      "members": [
+        "Leela",
+        "Fry",
+        "Bender",
+        "Amy",
+        "Hermes",
+        "Zapp",
+        "Professor",
+        "Nibbler",
+        "Scruffy",
+        "Kif",
+        "Mom"
+      ],
+      "notes": "OpenSpec-first workflow, GitHub issues intake, docs and review heavy squad."
+    }
+  }
+}

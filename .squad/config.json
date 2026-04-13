@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "defaultModel": "claude-sonnet-4.6",
+  "agentModelOverrides": {
+    "Fry": "claude-opus-4.6",
+    "Bender": "claude-opus-4.6",
+    "Professor": "gpt-5.4",
+    "Nibbler": "gpt-5.4",
+    "Scruffy": "gpt-5.4"
+  },
+  "agentModelNotes": {
+    "Kif": "Requested Gemini 3.1 Pro when the active client surface supports it.",
+    "Mom": "Requested Gemini 3.1 Pro when the active client surface supports it."
+  }
+}
