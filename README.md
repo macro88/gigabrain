@@ -15,8 +15,8 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
-| **Phase 1** — Core storage + CLI | 🔜 Not started | `gbrain init`, `import`, `get`, `put`, `search`, `link`, `graph`, `stats`, `compact` |
-| **Phase 2** — Intelligence layer | 🔜 Not started | Local embeddings, hybrid search, MCP server, `query`, `check`, `gaps` |
+| **Phase 1** — Core storage + CLI | 🔜 Not started | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
+| **Phase 2** — Intelligence layer | 🔜 Not started | `link`, `graph`, `stats`, `check`, `gaps` |
 | **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.

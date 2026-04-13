@@ -1,25 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use std::path::PathBuf;
-
 mod commands;
 mod core;
 mod mcp;
-
-/// Platform-safe default database path.
-/// Uses `$HOME/brain.db` on all platforms, with proper home-dir resolution.
-/// Falls back to `./brain.db` if the home directory cannot be determined.
-fn default_db_path() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(|home| {
-            let mut p = PathBuf::from(home);
-            p.push("brain.db");
-            p.to_string_lossy().into_owned()
-        })
-        .unwrap_or_else(|_| "brain.db".to_owned())
-}
 
 #[derive(Parser)]
 #[command(
@@ -28,7 +12,7 @@ fn default_db_path() -> String {
     about = "Personal knowledge brain — SQLite + FTS5 + local vector embeddings"
 )]
 struct Cli {
-    /// Path to brain database file [default: ./brain.db]
+    /// Path to brain database file [env: GBRAIN_DB] [default: ./brain.db]
     #[arg(long, env = "GBRAIN_DB", global = true)]
     db: Option<String>,
 
@@ -43,7 +27,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialise a new brain database
-    Init,
+    Init {
+        /// Path to create the new brain database
+        path: Option<String>,
+    },
     /// Read a page by slug
     Get { slug: String },
     /// Write or update a page (reads from stdin)
@@ -113,8 +100,26 @@ enum Commands {
         #[arg(long)]
         valid_until: Option<String>,
     },
-    /// Close a temporal link by ID
-    Unlink { link_id: u64 },
+    /// Close a temporal link interval by ID
+    #[command(name = "link-close")]
+    LinkClose {
+        link_id: u64,
+        #[arg(long)]
+        valid_until: String,
+    },
+    /// List all outbound links for a page (with IDs)
+    Links {
+        slug: String,
+        #[arg(long)]
+        temporal: Option<String>,
+    },
+    /// Remove a cross-reference entirely
+    Unlink {
+        from: String,
+        to: String,
+        #[arg(long)]
+        relationship: Option<String>,
+    },
     /// List backlinks for a page
     Backlinks {
         slug: String,
@@ -130,6 +135,19 @@ enum Commands {
         slug: String,
         #[arg(long, default_value = "20")]
         limit: u32,
+    },
+    /// Add a structured timeline entry
+    #[command(name = "timeline-add")]
+    TimelineAdd {
+        slug: String,
+        #[arg(long)]
+        date: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        detail: Option<String>,
     },
     /// N-hop graph neighbourhood
     Graph {
@@ -180,16 +198,32 @@ enum Commands {
         tool: String,
         params: Option<String>,
     },
+    /// JSONL pipe mode (one JSON object per line)
+    Pipe,
+    /// Print version information
+    Version,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let db_path = cli.db.unwrap_or_else(default_db_path);
+
+    // Commands that don't require a database connection
+    match &cli.command {
+        Commands::Version => return commands::version::run(),
+        Commands::Init { path } => {
+            let db_path = cli.db.as_deref().unwrap_or("brain.db");
+            let init_path = path.as_deref().unwrap_or(db_path);
+            return commands::init::run(init_path);
+        }
+        _ => {}
+    }
+
+    let db_path = cli.db.unwrap_or_else(|| "brain.db".to_owned());
     let db = core::db::open(&db_path)?;
 
     match cli.command {
-        Commands::Init => commands::init::run(&db),
+        Commands::Init { .. } | Commands::Version => unreachable!(),
         Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
         Commands::Put { slug } => commands::put::run(&db, &slug),
         Commands::List {
@@ -224,13 +258,29 @@ async fn main() -> Result<()> {
             valid_from,
             valid_until,
         } => commands::link::run(&db, &from, &to, &relationship, valid_from, valid_until),
-        Commands::Unlink { link_id } => commands::link::unlink(&db, link_id),
+        Commands::LinkClose {
+            link_id,
+            valid_until,
+        } => commands::link::close(&db, link_id, &valid_until),
+        Commands::Links { slug, temporal } => commands::link::links(&db, &slug, temporal, cli.json),
+        Commands::Unlink {
+            from,
+            to,
+            relationship,
+        } => commands::link::unlink(&db, &from, &to, relationship),
         Commands::Backlinks { slug, temporal } => {
             commands::link::backlinks(&db, &slug, temporal, cli.json)
         }
         Commands::Tag { slug, tags } => commands::tags::tag(&db, &slug, &tags),
         Commands::Untag { slug, tags } => commands::tags::untag(&db, &slug, &tags),
         Commands::Timeline { slug, limit } => commands::timeline::run(&db, &slug, limit, cli.json),
+        Commands::TimelineAdd {
+            slug,
+            date,
+            summary,
+            source,
+            detail,
+        } => commands::timeline::add(&db, &slug, &date, &summary, source, detail),
         Commands::Graph {
             slug,
             depth,
@@ -247,5 +297,6 @@ async fn main() -> Result<()> {
         Commands::Stats => commands::stats::run(&db, cli.json),
         Commands::Skills { action } => commands::skills::run(action),
         Commands::Call { tool, params } => commands::call::run(&db, &tool, params).await,
+        Commands::Pipe => commands::pipe::run(&db),
     }
 }

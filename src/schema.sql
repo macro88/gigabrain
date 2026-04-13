@@ -288,7 +288,8 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     resolved_by_slug TEXT    DEFAULT NULL,
     detected_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     CHECK (sensitivity IN ('internal', 'external', 'redacted')),
-    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+    CHECK (query_text IS NULL OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)),
+    CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at)

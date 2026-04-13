@@ -94,7 +94,7 @@ gbrain graph people/pedro-franceschi --depth 2
 # Close a link that is no longer current
 gbrain link people/pedro-franceschi companies/brex \
   --relationship founded \
-  --valid-to 2022-12-31
+  --valid-until 2022-12-31
 ```
 
 ### 6. Brain health

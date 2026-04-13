@@ -1,6 +1,5 @@
 use anyhow::Result;
-use rusqlite::Connection;
 
-pub fn run(_db: &Connection) -> Result<()> {
-    todo!("init: create brain schema")
+pub fn run(_path: &str) -> Result<()> {
+    todo!("init: create brain schema at the given path")
 }
