@@ -209,6 +209,103 @@ Phase 2 (blocked on Phase 1 gate):
 
 **Status:** Plan ready, waiting on code.
 
+### 2026-04-14: Phase 1 Markdown Slice — T03 decisions
+
+**By:** Fry
+
+**What:** Completed `src/core/markdown.rs` with four foundational parsing/render decisions:
+1. **Frontmatter keys render alphabetically** — Deterministic output for byte-exact round-trip. Canonical format: unquoted YAML values, sorted keys.
+2. **Timeline separator omit-when-empty** — No spurious `\n---\n` for empty timelines; `split_content` already handles zero-separator case (returns empty timeline).
+3. **YAML parse graceful degradation** — Returns `(HashMap<String, String>, String)` with no `Result`. Malformed YAML → empty map; body still extracted.
+4. **Non-scalar YAML skip** — Sequences and mappings dropped; HashMap<String, String> contract holds scalars only. Tags stored separately in `tags` table.
+
+**Implications for downstream:**
+- **Bender:** `roundtrip_raw.rs` fixtures must use canonical format (alphabetically sorted frontmatter keys) to pass byte-exact gate.
+- **Professor:** No review needed; pure text parsing layer with no DB/search impact.
+- **Leela:** T03 complete; T04 (palace.rs) now unblocked.
+
+**Why:** Small but team-visible choices affecting every downstream module. Locked in before Bender writes test fixtures to prevent re-litigation per-file.
+
+**Status:** All gates pass. Code on branch `phase1/p1-core-storage-cli`. Ready for integration.
+
+### 2026-04-14: Rust skill standing guidance — adoption decision
+
+**By:** Fry (recommended), macro88 (accepted)
+
+**What:** Adopt `rust-best-practices` skill (Apollo GraphQL public handbook) as standing Rust guidance. Key emphases for GigaBrain:
+- **Borrowing:** Prefer borrowing and slices/`&str` at API boundaries unless ownership required
+- **Error handling:** `Result`-based errors; reserve `anyhow` for binary-facing orchestration; typed errors for library surfaces
+- **Clippy:** Use as standing gate; prefer local `#[expect(clippy::...)]` with rationale over `#[allow]`
+- **Comments:** Focus on why, safety, workarounds, or linked design decisions
+- **Performance:** Measurement-first; avoid unnecessary cloning
+
+**Standing guidance for this repo (required):**
+- Borrowing and slices/`&str` at API boundaries
+- Treat unnecessary cloning, panic-based control flow, and silent lint suppression as review smells
+- Use Clippy as standing gate
+- Keep comments focused on rationale
+
+**Optional guidance (use as heuristic, not law):**
+- Type-state pattern, snapshot testing (`insta`), `#![deny(missing_docs)]`, pedantic Clippy groups, `Cow`-based API design
+
+**Caveats:**
+- `#[expect(...)]` requires MSRV ≥1.81 (current `Cargo.toml` is `edition = "2021"` without explicit MSRV; verify before enforcing)
+- `rustfmt.toml` import reordering (`group_imports`) uses nightly syntax; defer until stable or CI has nightly step
+- Snapshot testing deferred to Phase 1 testing work
+- `Cow<'_, T>` useful in parsing but avoid over-application; refactor only if profiling shows benefit
+- Type-state and dynamic dispatch overkill for current scope; revisit if architecture emerges
+
+**Why:** Aligns with GigaBrain's existing practices (error handling split, CI discipline, performance constraints). Provides consistent vocabulary for code review.
+
+**Decision:** Adopted. All agents writing or reviewing Rust should reference the SKILL.md quick reference before starting work.
+
+### 2026-04-14: Phase 1 markdown test strategy — test expectations locked
+
+**By:** Scruffy
+
+**What:** Prepared comprehensive unit test expectations for T03 before Fry writes parsing logic. Organized by function with minimum must-cover cases:
+
+**parse_frontmatter (5 must-cover cases):**
+1. Parses string scalar frontmatter when file starts with bare `---` boundary
+2. Returns empty map and full body when opening boundary missing
+3. Treats leading newline before boundary as no frontmatter
+4. Accepts empty frontmatter block
+5. Stops at first closing bare boundary
+
+**split_content (5 must-cover cases):**
+1. Splits on first bare boundary line
+2. Returns full body and empty timeline when boundary missing
+3. Only splits once when timeline contains additional boundaries (later `---` stays inside)
+4. Does not split on horizontal rule variants (` ---`, `--- `, `----`)
+5. Preserves newlines around sections without trimming
+
+**extract_summary (4 must-cover cases):**
+1. Returns first non-heading non-empty paragraph
+2. Falls back to first line when no paragraph exists
+3. Caps summary at 200 chars deterministically
+4. Ignores leading blank lines
+
+**render_page (4 must-cover cases):**
+1. Renders frontmatter, compiled truth, and timeline in canonical order
+2. Parse-render-parse is idempotent for canonical page
+3. Renders empty timeline deterministically
+4. Renders empty frontmatter deterministically
+
+**Fixture guidance:**
+- Canonical fixture: standard frontmatter + heading + paragraph + timeline
+- Boundary trap: proves split only cuts once
+- No-frontmatter: proves parse fallback is lossless
+
+**Critical implementation traps:**
+- HashMap order nondeterministic (must sort for canonical output)
+- Do not trim() away fidelity (breaking raw round-trip)
+- Frontmatter type coercion underspecified (use string-scalar fixtures only in Phase 1)
+- Two different `---` roles exist (frontmatter delimiters vs compiled-truth/timeline split)
+
+**Why:** Locks expectations before code lands, preventing re-writing tests per-function. Prevents markdown round-trip from drifting in Phase 2.
+
+**Status:** Strategy prepared. Test module ready once Fry lands code.
+
 ## Governance
 
 - All meaningful changes require team consensus

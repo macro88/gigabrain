@@ -92,12 +92,12 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** crud-commands/spec.md — Auto-derive wing from slug
 > **Design decision:** wing = first slug segment; room = Phase 1 returns empty string; classify_intent is a simple heuristic
 
-- [ ] Implement derive_wing(slug: &str) -> String: split on /; return first segment; fall back to general for flat slugs
-- [ ] Implement derive_room(_content: &str) -> String: Phase 1 — always return empty string (room-level filtering deferred)
-- [ ] Implement classify_intent(query: &str) -> Option<String>: return wing segment if query contains a slug-like token; else None
-- [ ] Unit test: derive_wing(people/alice) returns people
-- [ ] Unit test: derive_wing(readme) returns general
-- [ ] cargo test palace passes
+- [x] Implement derive_wing(slug: &str) -> String: split on /; return first segment; fall back to general for flat slugs
+- [x] Implement derive_room(_content: &str) -> String: Phase 1 — always return empty string (room-level filtering deferred)
+- [x] Implement classify_intent(query: &str) -> Option<String>: return wing segment if query contains a slug-like token; else None
+- [x] Unit test: derive_wing(people/alice) returns people
+- [x] Unit test: derive_wing(readme) returns general
+- [x] cargo test palace passes
 
 ---
 

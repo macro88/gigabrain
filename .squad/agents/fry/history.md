@@ -71,3 +71,13 @@
 - Fry, Leela, Bender histories updated with cross-team context.
 - Ready for git commit.
 
+## 2026-04-14T03:59:44Z Scribe Merge (T03 completion)
+
+- Scribe wrote orchestration log and session log for T03 completion.
+- Three inbox decisions merged into canonical `decisions.md`:
+  - Fry's T03 markdown slice decisions (frontmatter canonical order, timeline sep omit-when-empty, YAML parse graceful degradation, non-scalar skip)
+  - Professor's rust-best-practices skill standing guidance (adopted with caveats for MSRV, nightly, phase deferral)
+  - Scruffy's phase 1 markdown test strategy (20+ must-cover cases, fixture guidance, critical implementation traps)
+- Inbox files deleted after merge.
+- Git commit staged and ready.
+
