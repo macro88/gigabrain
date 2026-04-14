@@ -42,3 +42,13 @@
 - Inbox files deleted after merge.
 - Cross-agent history updates applied.
 - Ready for git commit.
+
+## 2026-04-14 Phase 1 Search/Embed/Query Validation
+
+- Validated T14, T16, T18, T19 against implementation code. All 113 tests pass.
+- **Finding 1:** `gbrain embed <SLUG>` (single-page embed) is not implemented. The clap CLI only has `--all` and `--stale` flags, no positional slug argument. T18 checkbox correctly open.
+- **Finding 2:** `--token-budget` in `gbrain query` counts characters, not tokens. The flag name is misleading — a user passing `--token-budget 4000` gets ~4000 chars, not tokens. T19 spec says "hard cap on output chars in Phase 1" which is honest, but the flag name is a footgun.
+- **Finding 3:** `embed()` in inference.rs is a deterministic SHA-256 shim, not Candle/BGE-small. Produces correct-shape vectors but no semantic similarity. BEIR benchmarks against this shim will be meaningless. T14 `[~]` status is honest but needs explicit documentation.
+- No production code modified. Findings written to `.squad/decisions/inbox/bender-embed-validation.md`.
+- No user-visible breakage found in current code — all paths that exist work correctly.
+- Verdict: embed command is incomplete (missing single-slug mode), query budget semantics are misleading, inference shim status should be documented. All three must be addressed before Phase 1 ship gate.
