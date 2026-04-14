@@ -173,9 +173,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T06, T07
 > **Spec:** crud-commands/spec.md — gbrain tags command
 
-- [ ] Without flags: print current tags (one per line) from pages.tags JSON array
-- [ ] --add: read current page, append tag to tags list, re-put with OCC using current version
-- [ ] --remove: read current page, drop tag from list, re-put with OCC using current version
+- [ ] Without flags: SELECT tags from the tags table for the given slug; print one per line
+- [ ] --add: INSERT OR IGNORE into tags table for the given slug + tag; no OCC needed (tags are independent of page version)
+- [ ] --remove: DELETE from tags table for the given slug + tag; no OCC needed
 - [ ] Unit test: add a tag, list tags — tag appears; remove it — tag gone
 
 ---
@@ -185,9 +185,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02
 > **Spec:** crud-commands/spec.md — gbrain link command
 
-- [ ] Insert row into links table with from_slug, to_slug, relationship, valid_from, valid_until, created_at
-- [ ] --valid-until on existing link: UPDATE valid_until field to close the link
-- [ ] Unit test: create link — row exists in links; close link — valid_until is set
+- [x] Insert row into links table with from_slug, to_slug, relationship, valid_from, valid_until, created_at
+- [x] --valid-until on existing link: UPDATE valid_until field to close the link
+- [x] Unit test: create link — row exists in links; close link — valid_until is set
 
 ---
 
@@ -196,7 +196,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02
 > **Spec:** crud-commands/spec.md — gbrain compact command
 
-- [ ] Call db::compact(conn) — print success; on error print to stderr and exit 1
+- [x] Call db::compact(conn) — print success; on error print to stderr and exit 1
 
 ---
 

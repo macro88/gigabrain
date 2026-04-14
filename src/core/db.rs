@@ -70,7 +70,6 @@ pub fn open(path: &str) -> Result<Connection, DbError> {
 }
 
 /// Checkpoint the WAL back into the main database file.
-#[allow(dead_code)] // wired in task 6.8 (compact command)
 pub fn compact(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
