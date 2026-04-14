@@ -25,3 +25,13 @@
 - Rust skill adoption recommendation delivered and accepted by team. Fry's work product captured in `.squad/orchestration-log/2026-04-14T01-53-00Z-fry.md` and merged into team decisions ledger.
 - Decision now stands: adopt `rust-best-practices` skill as standing guidance for all Rust implementation and review. Key caveats documented for future reference: MSRV ≥1.81 for `#[expect]`, nightly-only for `rustfmt` import grouping, snapshot testing deferred to Phase 1.
 - Team coordination: orchestration logs written, session log recorded, inbox decisions merged and deleted, cross-agent updates applied. Ready for git commit.
+
+## 2026-04-14 Phase 1 Foundation Slice
+
+- Implemented `src/core/types.rs` (tasks 2.1–2.6): `Page`, `Link`, `Tag`, `TimelineEntry`, `SearchResult`, `KnowledgeGap`, `IngestRecord` structs + `SearchMergeStrategy` enum + `OccError`/`DbError` thiserror enums.
+- `Page.page_type` uses `#[serde(rename = "type")]` because `type` is a Rust keyword.
+- `Link` stores slugs (not page IDs) — DB layer resolves to IDs internally.
+- All integer IDs/versions are `i64` to match SQLite INTEGER.
+- Module-level `#![allow(dead_code)]` is temporary — remove when db.rs wires types.
+- `cargo check`, `cargo clippy -- -D warnings`, and `cargo fmt --check` all pass clean.
+- Decision note written to `.squad/decisions/inbox/fry-p1-foundation-slice.md`.
