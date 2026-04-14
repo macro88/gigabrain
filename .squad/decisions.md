@@ -54,6 +54,31 @@ Applied targeted fixes to Sprint 0 artifacts so the scaffold is internally coher
 
 **Why:** Closes gaps identified by Nibbler's adversarial review, ensuring scaffold passes its documented gate and all proposals internally cohere. No implementation logic added beyond minimum for platform safety.
 
+### 2026-04-14: Adopt rust-best-practices skill as standing Rust guidance
+
+**By:** Fry (recommended), macro88 (accepted)
+
+**What:** Adopt the `rust-best-practices` skill (Apollo GraphQL public handbook, 9 chapters) as standing guidance for all Rust implementation and review work in this repo. Key chapters: borrowing vs cloning, clippy discipline, performance mindset, error handling, testing, generics, type-state, documentation, concurrency.
+
+**Caveats:**
+- `#[expect(...)]` requires MSRV ≥1.81; verify before enforcing (current `Cargo.toml` specifies `edition = "2021"` without explicit MSRV)
+- `rustfmt.toml` import reordering (`group_imports = "StdExternalCrate"`) needs nightly; don't add until stable supports it or CI has a nightly-fmt step
+- Snapshot testing (`insta`) recommended but defer to Phase 1 testing work, not before
+- `Cow<'_, T>` useful in parsing but don't over-apply; prefer `&str`/`String` initially, refactor only if profiling shows benefit
+- Dynamic dispatch and type-state pattern: overkill for current scope; revisit if plugin architecture or multi-step builder API emerges
+
+**Why:** The skill directly aligns with GigaBrain's existing practices: error handling split (`thiserror` for `src/core/`, `anyhow` for CLI/main), CI discipline (`cargo fmt --check`, `cargo clippy -- -D warnings`), and performance constraints (single static binary, lean embedding/search pipeline). Provides consistent vocabulary for code review and implementation guidance.
+
+**Decision:** Adopted. All agents writing or reviewing Rust should reference the SKILL.md quick reference before starting work.
+
+### 2026-04-14: User directive — review Rust workspace skill and use consistently
+
+**By:** macro88 (via Copilot)
+
+**What:** Review the Rust-specific skill in the workspace and, if it is good, use it consistently when building Rust in this project.
+
+**Why:** User request — captured for team memory. (Fry reviewed and recommended adoption — see above decision.)
+
 ### 2026-04-13: User directive — branch + PR workflow
 
 **By:** macro88 (via Copilot)

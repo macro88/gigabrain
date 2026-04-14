@@ -18,3 +18,11 @@ Scribe owns logs, orchestration records, and decision merging for GigaBrain.
 
 - Every meaningful change begins with an OpenSpec change proposal before implementation.
 - Scribe records outcomes after work; Scribe does not replace OpenSpec proposal authoring.
+
+## 2026-04-14 Session
+
+- Orchestrated team coordination session on Rust skill review + MCP assessment
+- Created orchestration logs for Fry (completed rust-skill-adoption work) and Professor (MCP evaluation pending)
+- Merged inbox decisions into canonical ledger and deleted merged files
+- Updated cross-agent history with session outcomes
+- Ready for git commit of all `.squad/` changes
