@@ -222,17 +222,17 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T01, T02
 > **Spec:** embeddings/spec.md — Candle model initialization, Text embedding generation, Vector search
 
-- [ ] Declare static MODEL: OnceLock<EmbeddingModel> and ensure_model() -> &'static EmbeddingModel
-- [ ] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError>:
+- [x] Declare static MODEL: OnceLock<EmbeddingModel> and ensure_model() -> &'static EmbeddingModel
+- [~] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError>:
   - Return Err(InferenceError::EmptyInput) for empty/whitespace input
   - Tokenize + forward pass on CPU via BGE-small-en-v1.5; L2-normalize output; return 384-dim vector
-- [ ] Implement search_vec(query: &str, k: usize, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
+- [x] Implement search_vec(query: &str, k: usize, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
   - Embed query; KNN query on page_embeddings_vec_384; join to pages for slug + summary; apply wing filter
   - Return empty vec on no embeddings
-- [ ] Unit test: embed returns Vec of len 384 with L2 norm approximately 1.0
-- [ ] Unit test: embed empty string returns InferenceError::EmptyInput
-- [ ] Unit test: vector search on empty DB returns empty vec without error
-- [ ] cargo test inference passes (first run is slow due to model init)
+- [x] Unit test: embed returns Vec of len 384 with L2 norm approximately 1.0
+- [x] Unit test: embed empty string returns InferenceError::EmptyInput
+- [x] Unit test: vector search on empty DB returns empty vec without error
+- [x] cargo test inference passes (first run is slow due to model init)
 
 ---
 
@@ -241,14 +241,14 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T01, T03
 > **Spec:** embeddings/spec.md — Temporal sub-chunking
 
-- [ ] Implement chunk_page(page: &Page) -> Vec<Chunk>:
+- [x] Implement chunk_page(page: &Page) -> Vec<Chunk>:
   - Split compiled_truth at ## headers — one Chunk per section with chunk_type = truth
   - Split timeline at --- separators — one Chunk per entry with chunk_type = timeline
   - Per chunk: content_hash = SHA-256(chunk.content), token_count = content.len() / 4 (Phase 1 approximation), heading_path set to heading text
-- [ ] Unit test: 3-section compiled_truth — produces 3 truth chunks, each with heading_path set
-- [ ] Unit test: 5 timeline entries separated by --- — produces 5 timeline chunks
-- [ ] Unit test: every chunk has non-empty content_hash
-- [ ] cargo test chunking passes
+- [x] Unit test: 3-section compiled_truth — produces 3 truth chunks, each with heading_path set
+- [x] Unit test: 5 timeline entries separated by --- — produces 5 timeline chunks
+- [x] Unit test: every chunk has non-empty content_hash
+- [x] cargo test chunking passes
 
 ---
 
@@ -258,18 +258,18 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** search/spec.md — SMS exact-match short-circuit, Hybrid search with set-union merge, Wing-level palace filtering
 > **Design decision:** SMS fires first; then FTS5 + vec fan-out; then set-union merge (default) or RRF via config
 
-- [ ] Implement hybrid_search(query: &str, wing: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
+- [x] Implement hybrid_search(query: &str, wing: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
   - Stage 1 SMS: strip [[ and ]]; if query matches a slug exactly return that page only
   - Stage 2 fan-out: call search_fts then search_vec sequentially
   - Stage 3 set-union (default): deduplicate by slug; score = weighted BM25 + cosine; sort descending
   - Stage 3 RRF (when config search_merge_strategy = rrf): apply Reciprocal Rank Fusion instead
-- [ ] Implement read_merge_strategy(conn: &Connection) -> SearchMergeStrategy: read from config table; default SetUnion
-- [ ] Unit test: exact slug query — short-circuits, returns 1 result
-- [ ] Unit test: wiki-link format [[slug]] — same short-circuit behaviour
-- [ ] Unit test: FTS=[A,B,C] + vec=[B,C,D] — set-union returns [A,B,C,D] with no duplicates
-- [ ] Unit test: no exact match — both FTS5 and vec are searched
-- [ ] Unit test: wing filter restricts both sub-queries
-- [ ] cargo test search passes
+- [x] Implement read_merge_strategy(conn: &Connection) -> SearchMergeStrategy: read from config table; default SetUnion
+- [x] Unit test: exact slug query — short-circuits, returns 1 result
+- [x] Unit test: wiki-link format [[slug]] — same short-circuit behaviour
+- [x] Unit test: FTS=[A,B,C] + vec=[B,C,D] — set-union returns [A,B,C,D] with no duplicates
+- [x] Unit test: no exact match — both FTS5 and vec are searched
+- [x] Unit test: wing filter restricts both sub-queries
+- [x] cargo test search passes
 
 ---
 
@@ -278,9 +278,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T13
 > **Spec:** search/spec.md — gbrain search command
 
-- [ ] Call search_fts(query, wing, conn)
-- [ ] Print results as <slug>: <summary> lines ordered by score, up to --limit (default 10)
-- [ ] If no results: print No results found. and exit 0
+- [x] Call search_fts(query, wing, conn)
+- [x] Print results as <slug>: <summary> lines ordered by score, up to --limit (default 10)
+- [x] If no results: print No results found. and exit 0
 
 ---
 
@@ -289,10 +289,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T14, T15, T02
 > **Spec:** embeddings/spec.md — gbrain embed command
 
-- [ ] gbrain embed <SLUG>: chunk the page, embed each chunk, upsert into page_embeddings and page_embeddings_vec_384
-- [ ] gbrain embed --all: iterate all pages, embed all chunks (skip if content_hash unchanged)
-- [ ] gbrain embed --stale: only re-embed pages where stored content_hash differs from current
-- [ ] Unit test: embed a page — embedding rows appear in page_embeddings; re-embed unchanged page — no new rows added
+- [x] gbrain embed <SLUG>: chunk the page, embed each chunk, upsert into page_embeddings and page_embeddings_vec_384
+- [x] gbrain embed --all: iterate all pages, embed all chunks (skip if content_hash unchanged)
+- [x] gbrain embed --stale: only re-embed pages where stored content_hash differs from current
+- [x] Unit test: embed a page — embedding rows appear in page_embeddings; re-embed unchanged page — no new rows added
 
 ---
 
@@ -301,9 +301,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T16
 > **Spec:** embeddings/spec.md — gbrain query command
 
-- [ ] Call hybrid_search(query, wing, conn)
-- [ ] Print top results up to --limit (default 10), truncated by --token-budget if set (hard cap on output chars in Phase 1)
-- [ ] Phase 1: print slug + summary per result (depth/progressive expansion deferred to Phase 2)
+- [x] Call hybrid_search(query, wing, conn)
+- [x] Print top results up to --limit (default 10), truncated by --token-budget if set (hard cap on output chars in Phase 1)
+- [x] Phase 1: print slug + summary per result (depth/progressive expansion deferred to Phase 2)
 
 ---
 

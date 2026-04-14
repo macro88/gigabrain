@@ -125,3 +125,27 @@
 - Integration: Leela provided T10 contract review (tags-contract-review.md) — corrections applied to tasks.md and spec.md; Fry's implementation proceeded on corrected contract.
 - Next lane: T13 FTS5 search command.
 
+## 2026-04-14T04:42:03Z Phase 1 T13 FTS5 + T18/T19 Reconciliation
+
+- Completed T13 FTS5 search implementation: BM25 ranking, wing filtering, 10 unit tests (96 total pass).
+- Decision locked: BM25 score negation (positive-higher-is-better), empty-query short-circuit, dynamic SQL wing filter.
+- T18/T19 reconciliation batch initiated: Fry to verify gates and reconcile embed/query scope.
+- Bender validation report submitted with 3 findings:
+  1. **Gap:** `gbrain embed <SLUG>` (single-page) not implemented — clap only has `--all`/`--stale` flags
+  2. **Mismatch:** `--token-budget` counts chars not tokens (misleading flag name)
+  3. **Status:** Inference shim (SHA-256) is not semantic — BEIR benchmarks will be meaningless
+- T13 decision merged into canonical ledger; Scruffy test expectations locked.
+- Orchestration entries created for Fry (T18/T19), Bender (search validation), Professor (contract review).
+- Session log created. Bender finding queued for merge.
+
+## 2026-04-14 Phase 1 Embed Surface Completion (T18/T19)
+
+- Implemented `gbrain embed <SLUG>` support: added optional positional slug arg to CLI, command dispatches to single-page embed path that always re-embeds (no stale-skip for explicit slug). `--all` and `--stale` preserved for bulk path.
+- T18 fully closed: all 4 checkboxes done. Two new unit tests added (single-slug embed, re-embed-unchanged confirmation).
+- T19 fully closed: `budget_results` already implemented token-budget truncation. Marked checkbox done after verification.
+- T14 remains `[~]`: API contract complete (384-dim, L2-normalized, EmptyInput error) but uses SHA-256 hash shim, not real Candle BGE-small. Decision note written to inbox documenting exact blocker and recommendation to treat Candle integration as a dedicated task.
+- Total tests: 115 (all pass). `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean.
+- Decision note: `.squad/decisions/inbox/fry-embed-surface.md`.
+
+
+
