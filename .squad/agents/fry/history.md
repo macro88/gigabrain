@@ -35,3 +35,12 @@
 - Module-level `#![allow(dead_code)]` is temporary — remove when db.rs wires types.
 - `cargo check`, `cargo clippy -- -D warnings`, and `cargo fmt --check` all pass clean.
 - Decision note written to `.squad/decisions/inbox/fry-p1-foundation-slice.md`.
+
+## 2026-04-14 Scribe Merge
+
+- Orchestration logs written for Leela, Fry, Bender (Phase 1 startup).
+- Session log recorded to `.squad/log/2026-04-14T03-38-04Z-phase1-start.md`.
+- Decisions inbox merged into `decisions.md`; inbox files deleted.
+- Cross-agent updates: Leela and Fry histories updated.
+- Ready for git commit.
+

@@ -87,6 +87,76 @@ Applied targeted fixes to Sprint 0 artifacts so the scaffold is internally coher
 
 **Why:** User request — ensuring team memory captures governance requirement.
 
+### 2026-04-14: Phase 1 OpenSpec Unblock
+
+**By:** Leela  
+**Date:** 2026-04-14  
+
+**What:** Created the complete OpenSpec artifact set for `p1-core-storage-cli` to unblock `openspec apply`:
+- `design.md` — technical design with 10 key decisions and risk analysis
+- `specs/core-storage/spec.md` — DB init, OCC, WAL specs
+- `specs/crud-commands/spec.md` — init, get, put, list, stats, tags, link, compact specs
+- `specs/search/spec.md` — FTS5, SMS short-circuit, hybrid set-union merge specs
+- `specs/embeddings/spec.md` — candle model init, embed, chunking, vector search specs
+- `specs/ingest-export/spec.md` — import, export, ingest, markdown parsing, round-trip specs
+- `specs/mcp-server/spec.md` — 5 core MCP tools, error codes, OCC over MCP
+- `tasks.md` — 57 actionable tasks in 12 groups for Fry on `phase1/p1-core-storage-cli`
+
+**Key Design Decisions:**
+1. Single connection per invocation; WAL handles concurrent readers
+2. Candle lazy singleton init via `OnceLock`; only embed/query pay cost
+3. Model weights via `include_bytes!` (default offline; `online-model` feature for smaller builds)
+4. Hybrid search: SMS → FTS5+vec → set-union merge (RRF switchable via config)
+5. OCC error codes: CLI exit 1; MCP `-32009` with `current_version` in data
+6. Room-level palace filtering deferred to Phase 2; wing-only in Phase 1
+7. CPU-only inference in Phase 1; GPU detection deferred to Phase 3
+8. `thiserror` in core, `anyhow` in commands (standing team decisions)
+
+**Scope Boundary:**
+
+Phase 1 (Fry executes now):
+- All CRUD commands, FTS5 search, candle embeddings, hybrid search
+- Import/export, ingest with SHA-256 idempotency, round-trip tests
+- 5 core MCP tools via rmcp stdio
+- Static binary verification
+
+Phase 2 (blocked on Phase 1 gate):
+- Graph traversal, assertions, contradiction detection, progressive retrieval
+- Palace room-level filtering, novelty checking
+- Full MCP write surface
+
+**Routing:** Fry (implementation), Professor (db.rs/search.rs/inference.rs review), Nibbler (MCP adversarial), Bender (round-trip tests), Scruffy (unit test coverage)
+
+**Why:** All artifacts now complete; `openspec apply p1-core-storage-cli` ready. Phase boundary locked. Spec-driven execution can begin on branch `phase1/p1-core-storage-cli`.
+
+### 2026-04-14: Phase 1 Foundation Slice — types.rs design decisions
+
+**By:** Fry
+
+**What:** Implemented `src/core/types.rs` (tasks 2.1–2.6) with foundational type system:
+- `Page`, `Link`, `Tag`, `TimelineEntry`, `SearchResult`, `KnowledgeGap`, `IngestRecord` structs
+- `SearchMergeStrategy` enum (SetUnion, Rrf)
+- `OccError`, `DbError` enums (thiserror-derived)
+- All gates pass: `cargo check`, `cargo clippy -- -D warnings`, `cargo fmt --check`
+
+**Design Choices:**
+1. **`Page.page_type` instead of `type`** — Rust keyword reserved; `#[serde(rename = "type")]` for JSON/YAML
+2. **`HashMap<String, String>` for frontmatter** — Simple string-to-string; upgrade to `serde_yaml::Value` if nested structures needed later
+3. **`Link` uses slugs, not page IDs** — DB layer resolves to IDs internally; type system stays user-facing
+4. **`i64` for all integer IDs/versions** — Matches SQLite INTEGER (64-bit signed)
+5. **Module-level `#![allow(dead_code)]`** — Temporary; remove when db.rs wires types
+6. **`SearchMergeStrategy::from_config`** — Parses config table strings with SetUnion default (fail-safe)
+
+**Why:** Small but team-visible choices affecting how every module imports core types. Documented now to prevent re-litigation per-file.
+
+### 2026-04-14: User directive (copilot) — main protection enabled
+
+**By:** macro88 (via Copilot)
+
+**What:** Main branch is now protected. All commits must flow through branch → PR → review → merge workflow.
+
+**Why:** User request — ensuring branch hygiene and team consensus on all changes.
+
 ## Governance
 
 - All meaningful changes require team consensus

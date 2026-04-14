@@ -8,8 +8,51 @@
 ## Learnings
 
 - `docs\spec.md` is the primary product spec.
+
+## Phase 1 OpenSpec Unblock — 2026-04-14
+
+**What was done:**
+- Created all missing OpenSpec artifacts for `p1-core-storage-cli` to make `openspec apply` ready
+- Verified: `openspec status --change "p1-core-storage-cli" --json` shows `isComplete: true`, all 4 artifacts `done`
+- Artifacts created: `design.md`, `specs/core-storage/spec.md`, `specs/crud-commands/spec.md`, `specs/search/spec.md`, `specs/embeddings/spec.md`, `specs/ingest-export/spec.md`, `specs/mcp-server/spec.md`, `tasks.md`
+- 57 actionable tasks in 12 groups; Fry executes on branch `phase1/p1-core-storage-cli`
+
+**Architecture decisions locked:**
+- Single rusqlite connection per invocation (no pool); WAL handles concurrent readers at OS level
+- Candle model init via `OnceLock` — lazy, one-time per process; CPU-only in Phase 1
+- Model weights: `include_bytes!` default (offline), `online-model` feature flag for smaller builds
+- Hybrid search: SMS exact-match short-circuit → FTS5+vec fan-out → set-union merge (RRF switchable via config table)
+- OCC: CLI exit code 1 + MCP JSON-RPC error `-32009` with `current_version` in error data
+- Room-level palace filtering deferred to Phase 2; wing-only in Phase 1
+- Error handling: `thiserror` in `src/core/`, `anyhow` in `src/commands/`
+- MCP error codes: `-32001` not found, `-32002` parse error, `-32003` db error, `-32009` OCC conflict
+
+**Key file paths:**
+- Design: `openspec/changes/p1-core-storage-cli/design.md`
+- Specs: `openspec/changes/p1-core-storage-cli/specs/*/spec.md` (6 files)
+- Tasks: `openspec/changes/p1-core-storage-cli/tasks.md`
+- Decision log: `.squad/decisions/inbox/leela-p1-openspec-unblock.md`
+
+**Phase 1 scope boundary:**
+- In: CRUD, FTS5, candle embeddings, hybrid search, import/export, ingest, 5 MCP tools, static binary
+- Out (Phase 2): graph, assertions, contradiction detection, progressive retrieval, room-level palace, full MCP write surface
+
+**Patterns learned:**
+- `openspec status --change "<name>" --json` is the canonical check for artifact readiness
+- spec-driven schema requires: proposal → design → specs/**/*.md → tasks.md (in dependency order)
+- `openspec instructions <artifact-id> --change "<name>" --json` gives template + rules for each artifact
+- Tasks must use `- [ ] N.M description` format or apply won't track them
 - GitHub issues and OpenSpec both drive work intake.
 - Meaningful changes require an OpenSpec proposal before implementation.
+
+## 2026-04-14 Scribe Merge
+
+- Orchestration logs written for Leela, Fry, Bender (Phase 1 startup).
+- Session log recorded to `.squad/log/2026-04-14T03-38-04Z-phase1-start.md`.
+- Decisions inbox merged into `decisions.md`; inbox files deleted.
+- Cross-agent updates: Leela and Fry histories updated.
+- Ready for git commit.
+
 
 ## Sprint 0 — 2026-04-13
 

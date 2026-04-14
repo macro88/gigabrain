@@ -10,3 +10,14 @@
 - Validation needs to cover ingest, retrieval, CLI behavior, and MCP behavior.
 - OpenSpec proposals define what must be proven, not just what must be built.
 - This project values round-trip safety and harsh failure testing.
+- Phase 1 tasks 2.1–2.6 (core types) are the foundation — schema-struct alignment is the highest-value check before any downstream work.
+- The Link struct has a known schema-vs-task mismatch: task says from_slug/to_slug, schema uses from_page_id/to_page_id (integer FK). Must verify Fry's resolution.
+- `type` is a Rust keyword; the Page struct must rename the field (e.g., `page_type`) and handle serde/rusqlite column mapping.
+- Anticipatory QA validation plan for tasks 2.1–2.6 written to `.squad/decisions/inbox/bender-p1-foundation-validation.md` on 2026-04-14.
+
+## 2026-04-14 Scribe Merge
+
+- Orchestration log written for Bender validation plan (anticipatory, triggers on types.rs completion).
+- Decisions inbox merged into `decisions.md`; inbox file deleted.
+- Phase 1 startup logged. Ready for git commit.
+
