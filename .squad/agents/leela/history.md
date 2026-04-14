@@ -9,6 +9,39 @@
 
 - `docs\spec.md` is the primary product spec.
 
+## 2026-04-14 Search/Embed/Query Revision — T14/T18/T19 Honesty Pass
+
+**What was done:**
+- Professor rejected Fry's T14–T19 artifact; Fry locked out of revision cycle.
+- Root cause: inference.rs used a SHA-256 hash shim but was presented as BGE-small-en-v1.5.
+  T18 and T19 were closed as done without acknowledging the quality gap from T14 incompleteness.
+  The promised decision note in inbox was never written.
+- Fixes applied:
+  1. `src/core/inference.rs`: module-level PLACEHOLDER CONTRACT doc block added; `embed()` and
+     `EmbeddingModel` docs clarified to name the hash shim explicitly.
+  2. `src/commands/embed.rs`: runtime `eprintln!` warning added to `run()` so callers on stderr
+     see that embeddings are hash-indexed, not semantic. Comment tells the next engineer when to remove it.
+  3. `openspec/changes/p1-core-storage-cli/tasks.md`:
+     - T14: `[~]` step broken into `[x]` EmptyInput guard + `[ ]` Candle forward-pass, with a
+       BLOCKER note listing the exact missing assets and wiring steps.
+     - T18: honest status note added — plumbing done, hash-indexed, runtime warning in place.
+     - T19: honest status note added — plumbing done, FTS5 ranking unaffected, vector quality gap stated.
+  4. `.squad/decisions/inbox/leela-search-revision.md`: full decision note written.
+- Validation: `cargo test` 115/115 passed. `cargo check` clean.
+
+**Key lessons:**
+- When a task is `[x]` but its dependency is `[~]`, the honest answer is to add a caveat note,
+  not to let the `[x]` stand silently. The reviewers will catch it.
+- The model name in the DB (`bge-small-en-v1.5`) is the intended name for the real model, not a lie —
+  but it creates a false impression when the implementation is a hash shim. The fix is documentation,
+  not changing the DB seed.
+- A promised decision note that isn't written is a review blocker in itself. Always write the note
+  before closing the task.
+- `eprintln!` to stderr is the right channel for runtime placeholder warnings: stdout stays parseable,
+  tests don't capture stderr, and the warning can be found by grepping the run output.
+
+**Decision file:** `.squad/decisions/inbox/leela-search-revision.md`
+
 ## Phase 1 OpenSpec Unblock — 2026-04-14
 
 **What was done:**

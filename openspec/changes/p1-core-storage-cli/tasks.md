@@ -223,9 +223,13 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** embeddings/spec.md — Candle model initialization, Text embedding generation, Vector search
 
 - [x] Declare static MODEL: OnceLock<EmbeddingModel> and ensure_model() -> &'static EmbeddingModel
-- [~] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError>:
-  - Return Err(InferenceError::EmptyInput) for empty/whitespace input
-  - Tokenize + forward pass on CPU via BGE-small-en-v1.5; L2-normalize output; return 384-dim vector
+- [~] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError):
+  - [x] Return Err(InferenceError::EmptyInput) for empty/whitespace input
+  - [ ] Tokenize + forward pass on CPU via BGE-small-en-v1.5; L2-normalize output; return 384-dim vector
+  - **BLOCKER:** Current implementation is a SHA-256 hash projection shim (see `src/core/inference.rs`
+    module doc). `candle-core`, `candle-nn`, `candle-transformers`, and `tokenizers` are declared in
+    `Cargo.toml` but not yet wired. Model weight assets (`model.safetensors`, `tokenizer.json`) are not
+    embedded. This step must be completed before vector similarity scores are semantically meaningful.
 - [x] Implement search_vec(query: &str, k: usize, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
   - Embed query; KNN query on page_embeddings_vec_384; join to pages for slug + summary; apply wing filter
   - Return empty vec on no embeddings
@@ -288,6 +292,12 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T14, T15, T02
 > **Spec:** embeddings/spec.md — gbrain embed command
+>
+> **T14 dependency (honest status):** Command plumbing is ✅ complete — all three
+> invocation modes work, embedding rows are stored, stale-skip logic is correct.
+> The stored vectors are hash-indexed (not semantic) until T14 ships Candle/BGE-small.
+> `gbrain embed` emits a runtime note on stderr to prevent the output from being
+> mistaken for true semantic indexing.
 
 - [x] gbrain embed <SLUG>: chunk the page, embed each chunk, upsert into page_embeddings and page_embeddings_vec_384
 - [x] gbrain embed --all: iterate all pages, embed all chunks (skip if content_hash unchanged)
@@ -300,6 +310,11 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 > **Depends on:** T16
 > **Spec:** embeddings/spec.md — gbrain query command
+>
+> **T14 dependency (honest status):** Command plumbing is ✅ complete — hybrid
+> search, token-budget truncation, limit, wing filter, and JSON output all work.
+> Vector similarity scores in results are hash-proximity until T14 ships. FTS5
+> ranking in the merged output remains fully accurate regardless of T14 status.
 
 - [x] Call hybrid_search(query, wing, conn)
 - [x] Print top results up to --limit (default 10), truncated by --token-budget if set (hard cap on output chars in Phase 1)

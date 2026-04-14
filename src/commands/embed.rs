@@ -7,6 +7,13 @@ use crate::core::inference::{embed, embedding_to_blob};
 
 pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Result<()> {
     let (model_name, vec_table) = active_model(db)?;
+    // T14 incomplete: the active model uses SHA-256 hash projections, not the real
+    // BGE-small-en-v1.5 Candle model.  Warn so the output is not mistaken for
+    // semantic indexing.  Remove this block when T14 ships the Candle forward-pass.
+    eprintln!(
+        "note: '{model_name}' is running as a hash-indexed placeholder \
+         (Candle/BGE-small not wired); vector similarity is not semantic until T14 completes"
+    );
     anyhow::ensure!(
         is_safe_identifier(&vec_table),
         "unsafe vec table name: {vec_table}"
