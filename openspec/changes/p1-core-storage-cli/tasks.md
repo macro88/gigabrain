@@ -150,10 +150,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02
 > **Spec:** crud-commands/spec.md — gbrain list command
 
-- [ ] Build query over pages table with optional wing/type filters, ORDER BY updated_at DESC LIMIT N
-- [ ] Default limit: 50
-- [ ] Print one line per page: <slug>  <type>  <summary>
-- [ ] Unit test: list with wing filter returns only matching pages
+- [x] Build query over pages table with optional wing/type filters, ORDER BY updated_at DESC LIMIT N
+- [x] Default limit: 50
+- [x] Print one line per page: <slug>  <type>  <summary>
+- [x] Unit test: list with wing filter returns only matching pages
 
 ---
 
@@ -162,9 +162,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02
 > **Spec:** crud-commands/spec.md — gbrain stats command
 
-- [ ] Query: total pages, pages by type (GROUP BY page_type), total links, embedding count, DB file size via std::fs::metadata
-- [ ] Print structured summary to stdout
-- [ ] Unit test: stats on empty DB returns zeros without error; on populated DB returns correct counts
+- [x] Query: total pages, pages by type (GROUP BY page_type), total links, embedding count, DB file size via std::fs::metadata
+- [x] Print structured summary to stdout
+- [x] Unit test: stats on empty DB returns zeros without error; on populated DB returns correct counts
 
 ---
 

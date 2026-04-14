@@ -103,6 +103,14 @@
   - Fry's T05+T07 implementation decisions (get_page helper, JSON frontmatter, --json output, no main.rs changes needed)
   - Scruffy's T06 put unit test spec (3 core cases + 4 assertion guards + implementation seam requirement)
 - Inbox files deleted after merge (all three inbox .md files removed).
-- Cross-agent history updates applied (Fry, Bender, Scruffy histories appended with session context).
 - Ready for git commit.
+
+## Phase 1 T08 list.rs + T09 stats.rs (COMPLETE)
+
+- Implemented `src/commands/list.rs` (T08): dynamic query with optional wing/type filters, ORDER BY updated_at DESC, LIMIT N (default 50). Supports `--json` output. 7 unit tests covering all filter combos, limit, ordering, empty DB.
+- Implemented `src/commands/stats.rs` (T09): gathers total pages, pages-by-type, links, embeddings, FTS rows, DB file size. DB path resolved from `pragma_database_list` — no main.rs plumbing changes. Supports `--json` output. 4 unit tests covering empty DB, counts, FTS trigger rows, file size.
+- No main.rs changes needed — clap dispatch was already wired correctly.
+- Test count: 68 (57 baseline + 11 new). All gates pass: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (68/68).
+- Decision note written to `.squad/decisions/inbox/fry-p1-list-stats-slice.md`.
+- Task checkboxes updated in `openspec/changes/p1-core-storage-cli/tasks.md`.
 
