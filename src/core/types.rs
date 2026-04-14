@@ -139,6 +139,16 @@ pub enum OccError {
     Conflict { current_version: i64 },
 }
 
+/// Errors from FTS5 or hybrid search operations.
+#[derive(Debug, Error)]
+pub enum SearchError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("search failed: {message}")]
+    Internal { message: String },
+}
+
 /// Database-layer errors surfaced by `src/core/`.
 #[derive(Debug, Error)]
 pub enum DbError {

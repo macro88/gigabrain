@@ -173,10 +173,10 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T06, T07
 > **Spec:** crud-commands/spec.md — gbrain tags command
 
-- [ ] Without flags: SELECT tags from the tags table for the given slug; print one per line
-- [ ] --add: INSERT OR IGNORE into tags table for the given slug + tag; no OCC needed (tags are independent of page version)
-- [ ] --remove: DELETE from tags table for the given slug + tag; no OCC needed
-- [ ] Unit test: add a tag, list tags — tag appears; remove it — tag gone
+- [x] Without flags: SELECT tags from the tags table for the given slug; print one per line
+- [x] --add: INSERT OR IGNORE into tags table for the given slug + tag; no OCC needed (tags are independent of page version)
+- [x] --remove: DELETE from tags table for the given slug + tag; no OCC needed
+- [x] Unit test: add a tag, list tags — tag appears; remove it — tag gone
 
 ---
 
@@ -207,13 +207,13 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Depends on:** T02, T01
 > **Spec:** search/spec.md — FTS5 full-text search
 
-- [ ] Implement search_fts(query: &str, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
+- [x] Implement search_fts(query: &str, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
   - BM25-ranked FTS5 query joining page_fts to pages; apply wing filter when provided
   - Return empty vec on no results (not an error)
-- [ ] Unit test: insert a page, search for a word from its content — page appears in results
-- [ ] Unit test: search with wing filter — only matching-wing pages returned
-- [ ] Unit test: search on empty DB — empty vec returned without error
-- [ ] cargo test fts passes
+- [x] Unit test: insert a page, search for a word from its content — page appears in results
+- [x] Unit test: search with wing filter — only matching-wing pages returned
+- [x] Unit test: search on empty DB — empty vec returned without error
+- [x] cargo test fts passes
 
 ---
 
