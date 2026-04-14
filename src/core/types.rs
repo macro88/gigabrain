@@ -24,17 +24,26 @@ pub struct Page {
     pub version: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub truth_updated_at: String,
+    pub timeline_updated_at: String,
 }
 
 // ── Link ──────────────────────────────────────────────────────
 
 /// Typed temporal cross-reference between two pages.
+///
+/// Uses slugs (`from_slug`, `to_slug`) as the application-layer identity.
+/// The DB layer resolves slugs to integer page IDs (`from_page_id`, `to_page_id`)
+/// on insert and reverses the join on read. Callers never see raw page IDs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Link {
-    pub id: i64,
+    /// `None` before the link is persisted; `Some(id)` after insert.
+    pub id: Option<i64>,
     pub from_slug: String,
     pub to_slug: String,
     pub relationship: String,
+    /// Optional note stored alongside the link (schema column: `context`).
+    pub context: String,
     pub valid_from: Option<String>,
     pub valid_until: Option<String>,
     pub created_at: String,
