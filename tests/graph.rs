@@ -1,0 +1,199 @@
+//! Integration tests for `gbrain graph` (tasks 2.5).
+
+use gbrain::core::db;
+use gbrain::core::graph::{self, GraphError, TemporalFilter};
+use rusqlite::Connection;
+use std::path::Path;
+
+fn open_test_db(path: &Path) -> Connection {
+    db::open(path.to_str().unwrap()).unwrap()
+}
+
+fn insert_page(conn: &Connection, slug: &str, page_type: &str, title: &str) {
+    conn.execute(
+        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+                            frontmatter, wing, room, version) \
+         VALUES (?1, ?2, ?3, '', '', '', '{}', '', '', 1)",
+        rusqlite::params![slug, page_type, title],
+    )
+    .unwrap();
+}
+
+fn insert_link(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    rel: &str,
+    valid_from: Option<&str>,
+    valid_until: Option<&str>,
+) {
+    let from_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = ?1", [from], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let to_id: i64 = conn
+        .query_row("SELECT id FROM pages WHERE slug = ?1", [to], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    conn.execute(
+        "INSERT INTO links (from_page_id, to_page_id, relationship, valid_from, valid_until) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![from_id, to_id, rel, valid_from, valid_until],
+    )
+    .unwrap();
+}
+
+// ── Human-readable output format ─────────────────────────────
+
+#[test]
+fn graph_cli_human_output_shows_root_and_edges() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_link(
+        &conn,
+        "people/alice",
+        "companies/acme",
+        "works_at",
+        None,
+        None,
+    );
+
+    // Call the CLI command function directly
+    let result = gbrain::commands::graph::run(&conn, "people/alice", 2, "current", false);
+    assert!(result.is_ok());
+}
+
+// ── JSON output is valid JSON with nodes and edges keys ──────
+
+#[test]
+fn graph_cli_json_output_has_nodes_and_edges() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_link(
+        &conn,
+        "people/alice",
+        "companies/acme",
+        "works_at",
+        None,
+        None,
+    );
+
+    // Use the core function to get the result
+    let result =
+        graph::neighborhood_graph("people/alice", 2, TemporalFilter::Active, &conn).unwrap();
+    let json_str = serde_json::to_string_pretty(&result).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    assert!(parsed.get("nodes").is_some(), "JSON must have 'nodes' key");
+    assert!(parsed.get("edges").is_some(), "JSON must have 'edges' key");
+    assert!(parsed["nodes"].is_array());
+    assert!(parsed["edges"].is_array());
+    assert_eq!(parsed["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(parsed["edges"].as_array().unwrap().len(), 1);
+}
+
+// ── Unknown slug returns error ───────────────────────────────
+
+#[test]
+fn graph_cli_unknown_slug_returns_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    let result = gbrain::commands::graph::run(&conn, "nobody/ghost", 1, "current", false);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("page not found"));
+}
+
+// ── JSON node objects have expected fields ────────────────────
+
+#[test]
+fn graph_json_nodes_have_slug_type_title() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice Johnson");
+
+    let result =
+        graph::neighborhood_graph("people/alice", 0, TemporalFilter::Active, &conn).unwrap();
+    let json_str = serde_json::to_string(&result).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let node = &parsed["nodes"][0];
+    assert_eq!(node["slug"], "people/alice");
+    assert_eq!(node["type"], "person");
+    assert_eq!(node["title"], "Alice Johnson");
+}
+
+// ── JSON edge objects have expected fields ────────────────────
+
+#[test]
+fn graph_json_edges_have_from_to_relationship() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_link(
+        &conn,
+        "people/alice",
+        "companies/acme",
+        "works_at",
+        Some("2024-01"),
+        None,
+    );
+
+    let result =
+        graph::neighborhood_graph("people/alice", 1, TemporalFilter::Active, &conn).unwrap();
+    let json_str = serde_json::to_string(&result).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let edge = &parsed["edges"][0];
+    assert_eq!(edge["from"], "people/alice");
+    assert_eq!(edge["to"], "companies/acme");
+    assert_eq!(edge["relationship"], "works_at");
+    assert_eq!(edge["valid_from"], "2024-01");
+    assert!(edge["valid_until"].is_null());
+}
+
+// ── Temporal filter mapping in CLI ───────────────────────────
+
+#[test]
+fn graph_cli_all_temporal_includes_closed_links() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_link(
+        &conn,
+        "people/alice",
+        "companies/acme",
+        "works_at",
+        Some("2020-01-01"),
+        Some("2020-12-31"),
+    );
+
+    // "current" (default) should exclude closed link
+    let result_current =
+        graph::neighborhood_graph("people/alice", 1, TemporalFilter::Active, &conn).unwrap();
+    assert_eq!(result_current.nodes.len(), 1);
+
+    // "all" should include closed link
+    let result_all =
+        graph::neighborhood_graph("people/alice", 1, TemporalFilter::All, &conn).unwrap();
+    assert_eq!(result_all.nodes.len(), 2);
+}
