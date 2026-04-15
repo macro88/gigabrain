@@ -30,7 +30,13 @@ PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
 shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
-mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+# Option A: install for the current user
+mkdir -p "${HOME}/.local/bin"
+mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+chmod +x "${HOME}/.local/bin/gbrain"
+
+# Option B: install system-wide (requires root)
+sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
 ## 2) Initialize a brain

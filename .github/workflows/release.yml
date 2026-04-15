@@ -143,7 +143,7 @@ jobs:
             curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
             curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
             shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
-            mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+            sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
             ```
 
             Or build from source: `cargo build --release`

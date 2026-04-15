@@ -24,7 +24,7 @@ See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
 The scaffold compiles today. Full functionality ships in Phase 1.
 
-**Requirements:** Rust stable toolchain. No other system dependencies — SQLite, sqlite-vec, and the embedding model are all bundled.
+**Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. Embeddings are offline-first: the build uses cached BGE-small weights from the HuggingFace cache when present, can download them when built with the `online-model` feature, and otherwise falls back to a hash-based shim.
 
 ```bash
 git clone https://github.com/macro88/gigabrain
@@ -57,7 +57,13 @@ PLATFORM="linux-x86_64"   # linux-x86_64 | linux-aarch64 | darwin-arm64 | darwin
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
 shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
-mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+# Option A: install for the current user
+mkdir -p "${HOME}/.local/bin"
+mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+chmod +x "${HOME}/.local/bin/gbrain"
+
+# Option B: install system-wide (requires root)
+sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
 ### npm global install (deferred)

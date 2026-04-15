@@ -95,7 +95,13 @@ PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
 shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
-mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+# Option A: install for the current user
+mkdir -p "${HOME}/.local/bin"
+mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+chmod +x "${HOME}/.local/bin/gbrain"
+
+# Option B: install system-wide (requires root)
+sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
 Or build from source (available now — scaffold compiles; full features land with Phase 1):
@@ -104,7 +110,7 @@ Or build from source (available now — scaffold compiles; full features land wi
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at target/release/gbrain (~90MB with embedded model weights once Phase 1 ships)
+# Binary at target/release/gbrain
 ```
 
 > **Deferred distribution channels.** npm global installation (`npm install -g gbrain`), Homebrew, and a one-command curl installer are planned follow-on work. They are **not part of this release** and will be proposed separately when implementation is ready.
