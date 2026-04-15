@@ -1,1 +1,568 @@
-// TODO: embedding generation and inference
+//! Inference — text embedding and vector search via BGE-small-en-v1.5.
+//!
+//! Uses Candle (pure Rust ML) to run the BAAI/bge-small-en-v1.5 BERT model on
+//! CPU. Model weights are downloaded from HuggingFace Hub on first use (when
+//! built with `--features online-model`) and cached in the HuggingFace Hub
+//! cache directory (`~/.cache/huggingface/hub/`).
+//!
+//! If the model cannot be loaded (no network, no cache, missing feature flag),
+//! the system falls back to a SHA-256 hash-based shim that satisfies the API
+//! contract (384-dim, L2-normalised) but produces non-semantic vectors.
+//!
+//! The public API (`embed`, `search_vec`, `ensure_model`, `embedding_to_blob`)
+//! is stable regardless of which backend is active.
+
+use std::sync::OnceLock;
+
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use rusqlite::types::ToSql;
+use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+use tokenizers::Tokenizer;
+
+use super::types::{InferenceError, SearchError, SearchResult};
+
+const EMBEDDING_DIMENSIONS: usize = 384;
+const HASH_CHUNK_COUNT: usize = EMBEDDING_DIMENSIONS / 32;
+#[cfg(feature = "online-model")]
+const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
+
+static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
+
+/// BGE-small-en-v1.5 embedding model backed by Candle, with SHA-256 fallback.
+pub struct EmbeddingModel {
+    backend: EmbeddingBackend,
+}
+
+enum EmbeddingBackend {
+    /// Real BGE-small-en-v1.5 BERT model via Candle.
+    Candle {
+        model: Box<BertModel>,
+        tokenizer: Box<Tokenizer>,
+        device: Device,
+    },
+    /// SHA-256 hash-based fallback (non-semantic, deterministic).
+    HashShim,
+}
+
+impl std::fmt::Debug for EmbeddingModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.backend {
+            EmbeddingBackend::Candle { .. } => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &"Candle(BGE-small-en-v1.5)")
+                .finish(),
+            EmbeddingBackend::HashShim => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &"HashShim")
+                .finish(),
+        }
+    }
+}
+
+impl EmbeddingModel {
+    fn new() -> Self {
+        match Self::try_load_candle() {
+            Ok(backend) => Self { backend },
+            Err(err) => {
+                eprintln!(
+                    "Warning: BGE-small model not available ({err}), \
+                     using hash-based embeddings. Build with --features online-model \
+                     and run `gbrain embed --all` to initialize semantic embeddings."
+                );
+                Self {
+                    backend: EmbeddingBackend::HashShim,
+                }
+            }
+        }
+    }
+
+    fn try_load_candle() -> Result<EmbeddingBackend, String> {
+        let (config_path, tokenizer_path, model_path) =
+            download_model_files().map_err(|e| format!("model download: {e}"))?;
+
+        let config_text =
+            std::fs::read_to_string(&config_path).map_err(|e| format!("read config.json: {e}"))?;
+        let config: BertConfig =
+            serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+
+        let tokenizer =
+            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
+
+        let device = Device::Cpu;
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
+                .map_err(|e| format!("load model weights: {e}"))?
+        };
+        let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
+
+        Ok(EmbeddingBackend::Candle {
+            model: Box::new(model),
+            tokenizer: Box::new(tokenizer),
+            device,
+        })
+    }
+
+    fn embed(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
+        match &self.backend {
+            EmbeddingBackend::Candle {
+                model,
+                tokenizer,
+                device,
+            } => embed_candle(text, model, tokenizer, device),
+            EmbeddingBackend::HashShim => embed_hash_shim(text),
+        }
+    }
+}
+
+/// Run the BERT forward pass and mean-pool + L2-normalize the output.
+fn embed_candle(
+    text: &str,
+    model: &BertModel,
+    tokenizer: &Tokenizer,
+    device: &Device,
+) -> Result<Vec<f32>, InferenceError> {
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("tokenizer: {e}"),
+        })?;
+
+    let ids = encoding.get_ids();
+    let mask = encoding.get_attention_mask();
+
+    let input_ids = Tensor::new(ids, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("input_ids tensor: {e}"),
+        })?;
+
+    let token_type_ids = input_ids
+        .zeros_like()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("token_type_ids: {e}"),
+        })?;
+
+    let attention_mask = Tensor::new(mask, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("attention_mask tensor: {e}"),
+        })?;
+
+    let output = model
+        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("BERT forward: {e}"),
+        })?;
+
+    // Mean pooling over token dimension, masked by attention_mask
+    let mask_f32 = attention_mask
+        .unsqueeze(2)
+        .and_then(|t| t.to_dtype(DType::F32))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mask expand: {e}"),
+        })?;
+
+    let mask_broadcast =
+        mask_f32
+            .broadcast_as(output.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("mask broadcast: {e}"),
+            })?;
+
+    let masked = output
+        .mul(&mask_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mask mul: {e}"),
+        })?;
+
+    let sum = masked.sum(1).map_err(|e| InferenceError::Internal {
+        message: format!("sum: {e}"),
+    })?;
+
+    let count = mask_f32.sum(1).map_err(|e| InferenceError::Internal {
+        message: format!("count: {e}"),
+    })?;
+
+    let count_broadcast =
+        count
+            .broadcast_as(sum.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("count broadcast: {e}"),
+            })?;
+
+    let mean = sum
+        .div(&count_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mean: {e}"),
+        })?;
+
+    // L2 normalize
+    let norm = mean
+        .sqr()
+        .and_then(|t| t.sum_keepdim(1))
+        .and_then(|t| t.sqrt())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("norm: {e}"),
+        })?;
+
+    let norm_broadcast = norm
+        .broadcast_as(mean.shape())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("norm broadcast: {e}"),
+        })?;
+
+    let normalized = mean
+        .div(&norm_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("normalize: {e}"),
+        })?;
+
+    let embedding = normalized
+        .squeeze(0)
+        .and_then(|t| t.to_vec1::<f32>())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("to_vec: {e}"),
+        })?;
+
+    Ok(embedding)
+}
+
+/// Download BGE-small-en-v1.5 model files using hf-hub.
+#[cfg(feature = "online-model")]
+fn download_model_files(
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
+    use hf_hub::api::sync::Api;
+
+    let api = Api::new().map_err(|e| format!("HuggingFace API init: {e}"))?;
+    let repo = api.model(MODEL_ID.to_string());
+
+    let config_path = repo
+        .get("config.json")
+        .map_err(|e| format!("download config.json: {e}"))?;
+    let tokenizer_path = repo
+        .get("tokenizer.json")
+        .map_err(|e| format!("download tokenizer.json: {e}"))?;
+    let model_path = repo
+        .get("model.safetensors")
+        .map_err(|e| format!("download model.safetensors: {e}"))?;
+
+    Ok((config_path, tokenizer_path, model_path))
+}
+
+/// Without `online-model`, look for model files in the HuggingFace cache.
+#[cfg(not(feature = "online-model"))]
+fn download_model_files(
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
+    // Check HuggingFace Hub cache (standard location)
+    let cache_dir = dirs_for_model();
+
+    for dir in &cache_dir {
+        let config = dir.join("config.json");
+        let tokenizer = dir.join("tokenizer.json");
+        let model = dir.join("model.safetensors");
+        if config.exists() && tokenizer.exists() && model.exists() {
+            return Ok((config, tokenizer, model));
+        }
+    }
+
+    Err(format!(
+        "BGE-small model files not found. Build with --features online-model \
+         to download automatically, or place model files in one of: {:?}",
+        cache_dir
+    ))
+}
+
+/// Return candidate directories where model files might be cached.
+#[cfg(not(feature = "online-model"))]
+fn dirs_for_model() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    // ~/.gbrain/models/bge-small-en-v1.5/
+    if let Some(home) = home_dir() {
+        dirs.push(
+            home.join(".gbrain")
+                .join("models")
+                .join("bge-small-en-v1.5"),
+        );
+    }
+
+    // HuggingFace Hub cache — look for snapshot dirs
+    if let Some(home) = home_dir() {
+        let hub_model = home
+            .join(".cache")
+            .join("huggingface")
+            .join("hub")
+            .join("models--BAAI--bge-small-en-v1.5")
+            .join("snapshots");
+        if let Ok(entries) = std::fs::read_dir(&hub_model) {
+            for entry in entries.flatten() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+
+    dirs
+}
+
+#[cfg(not(feature = "online-model"))]
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// SHA-256 hash-based fallback for when the real model is unavailable.
+fn embed_hash_shim(text: &str) -> Result<Vec<f32>, InferenceError> {
+    let mut embedding = vec![0.0; EMBEDDING_DIMENSIONS];
+
+    for (token_index, token) in text.split_whitespace().enumerate() {
+        accumulate_token_hash(token, token_index, &mut embedding);
+    }
+
+    if embedding.iter().all(|value| *value == 0.0) {
+        accumulate_token_hash(text, 0, &mut embedding);
+    }
+
+    normalize(&mut embedding)?;
+    Ok(embedding)
+}
+
+fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32]) {
+    for chunk_index in 0..HASH_CHUNK_COUNT {
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hasher.update((token_index as u64).to_le_bytes());
+        hasher.update((chunk_index as u64).to_le_bytes());
+        let digest = hasher.finalize();
+        let start = chunk_index * 32;
+
+        for (offset, byte) in digest.iter().enumerate() {
+            let centered = (*byte as f32 / 127.5) - 1.0;
+            embedding[start + offset] += centered;
+        }
+    }
+}
+
+/// Lazily initialises the process-global embedding model.
+pub fn ensure_model() -> &'static EmbeddingModel {
+    MODEL.get_or_init(EmbeddingModel::new)
+}
+
+/// Returns an L2-normalized 384-dimensional embedding vector.
+///
+/// When the BGE-small-en-v1.5 model is loaded, this produces a real semantic
+/// embedding. Otherwise falls back to a deterministic SHA-256 hash projection.
+pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(InferenceError::EmptyInput);
+    }
+
+    ensure_model().embed(trimmed)
+}
+
+/// Searches the active vector table and returns page-ranked matches.
+pub fn search_vec(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    if query.trim().is_empty() || k == 0 {
+        return Ok(Vec::new());
+    }
+
+    let (model_name, vec_table) = active_model(conn)?;
+
+    let embedding_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM page_embeddings WHERE model = ?1",
+        [&model_name],
+        |row| row.get(0),
+    )?;
+    if embedding_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    if !is_safe_identifier(&vec_table) {
+        return Err(SearchError::Internal {
+            message: format!("unsafe vec table name: {vec_table}"),
+        });
+    }
+
+    let query_embedding = embed(query).map_err(|err| SearchError::Internal {
+        message: err.to_string(),
+    })?;
+    let query_blob = embedding_to_blob(&query_embedding);
+
+    let mut sql = format!(
+        "SELECT p.slug, p.title, p.summary, \
+                MAX(1.0 - vec_distance_cosine(pev.embedding, ?1)) AS score, \
+                p.wing \
+         FROM {vec_table} pev \
+         JOIN page_embeddings pe ON pev.rowid = pe.vec_rowid \
+         JOIN pages p ON p.id = pe.page_id \
+         WHERE pe.model = ?2"
+    );
+
+    let mut params: Vec<Box<dyn ToSql>> = vec![Box::new(query_blob), Box::new(model_name)];
+
+    if let Some(wing) = wing_filter {
+        sql.push_str(" AND p.wing = ?3");
+        params.push(Box::new(wing.to_owned()));
+    }
+
+    let limit_index = params.len() + 1;
+    sql.push_str(" GROUP BY p.id ORDER BY score DESC LIMIT ?");
+    sql.push_str(&limit_index.to_string());
+    params.push(Box::new(k as i64));
+
+    let param_refs: Vec<&dyn ToSql> = params.iter().map(|param| param.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(SearchResult {
+            slug: row.get(0)?,
+            title: row.get(1)?,
+            summary: row.get(2)?,
+            score: row.get(3)?,
+            wing: row.get(4)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
+    conn.query_row(
+        "SELECT name, vec_table FROM embedding_models WHERE active = 1 LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => SearchError::Internal {
+            message: "no active embedding model configured".to_owned(),
+        },
+        other => SearchError::from(other),
+    })
+}
+
+pub(crate) fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(std::mem::size_of_val(embedding));
+    for value in embedding {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob
+}
+
+fn is_safe_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
+    let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm == 0.0 {
+        return Err(InferenceError::Internal {
+            message: "embedding norm is zero".to_owned(),
+        });
+    }
+
+    for value in values {
+        *value /= norm;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db;
+
+    fn open_test_db() -> Connection {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let db_path = dir.path().join("test_brain.db");
+        let conn = db::open(db_path.to_str().expect("utf8 path")).expect("open db");
+        std::mem::forget(dir);
+        conn
+    }
+
+    #[test]
+    fn embed_returns_normalized_vector_of_expected_length() {
+        let embedding = embed("Alice works at Acme Corp").expect("embed text");
+        let norm = embedding
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+
+        assert_eq!(embedding.len(), EMBEDDING_DIMENSIONS);
+        assert!((norm - 1.0).abs() < 1e-5, "unexpected norm: {norm}");
+    }
+
+    #[test]
+    fn embed_returns_error_for_empty_input() {
+        let err = embed("   ").expect_err("empty input should fail");
+        assert!(matches!(err, InferenceError::EmptyInput));
+    }
+
+    #[test]
+    fn search_vec_on_empty_db_returns_empty_vec() {
+        let conn = open_test_db();
+        let results = search_vec("board member tech company", 5, None, &conn)
+            .expect("empty db search should succeed");
+
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn search_vec_returns_ranked_results_from_vec_table() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, 'person', ?2, ?3, '', '', '{}', ?4, '', 1)",
+            rusqlite::params!["people/alice", "Alice", "Founder", "people"],
+        )
+        .expect("insert page");
+
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+
+        let query_embedding = embed("startup founder").expect("embed query");
+        let query_blob = embedding_to_blob(&query_embedding);
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![1_i64, query_blob],
+        )
+        .expect("insert vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'bge-small-en-v1.5', 1, 'truth_section', 0, 'startup founder', 'hash', 2, 'State')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert embedding metadata");
+
+        let results = search_vec("startup founder", 5, Some("people"), &conn)
+            .expect("vector search should succeed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "people/alice");
+        assert!(
+            results[0].score > 0.99,
+            "unexpected score: {}",
+            results[0].score
+        );
+    }
+}

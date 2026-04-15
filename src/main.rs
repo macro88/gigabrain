@@ -34,7 +34,12 @@ enum Commands {
     /// Read a page by slug
     Get { slug: String },
     /// Write or update a page (reads from stdin)
-    Put { slug: String },
+    Put {
+        slug: String,
+        /// Expected current version for OCC (omit for new pages or unconditional upsert)
+        #[arg(long)]
+        expected_version: Option<i64>,
+    },
     /// List pages with optional filters
     List {
         #[arg(long)]
@@ -55,8 +60,11 @@ enum Commands {
     /// Semantic / hybrid query
     Query {
         query: String,
+        /// Retrieval depth (Phase 2: progressive expansion; deferred in Phase 1)
         #[arg(long, default_value = "auto")]
         depth: String,
+        #[arg(long, default_value = "10")]
+        limit: u32,
         #[arg(long, default_value = "4000")]
         token_budget: u32,
         #[arg(long)]
@@ -84,6 +92,8 @@ enum Commands {
     },
     /// Generate or refresh embeddings
     Embed {
+        /// Embed a single page by slug
+        slug: Option<String>,
         #[arg(long)]
         all: bool,
         #[arg(long)]
@@ -126,10 +136,16 @@ enum Commands {
         #[arg(long)]
         temporal: Option<String>,
     },
-    /// Tag a page
-    Tag { slug: String, tags: Vec<String> },
-    /// Untag a page
-    Untag { slug: String, tags: Vec<String> },
+    /// Manage tags on a page (list, add, remove)
+    Tags {
+        slug: String,
+        /// Add a tag (repeatable)
+        #[arg(long)]
+        add: Vec<String>,
+        /// Remove a tag (repeatable)
+        #[arg(long)]
+        remove: Vec<String>,
+    },
     /// Show timeline entries for a page
     Timeline {
         slug: String,
@@ -225,7 +241,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { .. } | Commands::Version => unreachable!(),
         Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
-        Commands::Put { slug } => commands::put::run(&db, &slug),
+        Commands::Put {
+            slug,
+            expected_version,
+        } => commands::put::run(&db, &slug, expected_version),
         Commands::List {
             wing,
             r#type,
@@ -237,9 +256,10 @@ async fn main() -> Result<()> {
         Commands::Query {
             query,
             depth,
+            limit,
             token_budget,
             wing,
-        } => commands::query::run(&db, &query, &depth, token_budget, wing, cli.json).await,
+        } => commands::query::run(&db, &query, &depth, limit, token_budget, wing, cli.json).await,
         Commands::Ingest { path, force } => commands::ingest::run(&db, &path, force),
         Commands::Import {
             path,
@@ -250,7 +270,7 @@ async fn main() -> Result<()> {
             raw,
             import_id,
         } => commands::export::run(&db, &path, raw, import_id),
-        Commands::Embed { all, stale } => commands::embed::run(&db, all, stale),
+        Commands::Embed { slug, all, stale } => commands::embed::run(&db, slug, all, stale),
         Commands::Link {
             from,
             to,
@@ -271,8 +291,7 @@ async fn main() -> Result<()> {
         Commands::Backlinks { slug, temporal } => {
             commands::link::backlinks(&db, &slug, temporal, cli.json)
         }
-        Commands::Tag { slug, tags } => commands::tags::tag(&db, &slug, &tags),
-        Commands::Untag { slug, tags } => commands::tags::untag(&db, &slug, &tags),
+        Commands::Tags { slug, add, remove } => commands::tags::run(&db, &slug, &add, &remove),
         Commands::Timeline { slug, limit } => commands::timeline::run(&db, &slug, limit, cli.json),
         Commands::TimelineAdd {
             slug,
@@ -293,7 +312,7 @@ async fn main() -> Result<()> {
         Commands::Compact => commands::compact::run(&db),
         Commands::Config { action } => commands::config::run(&db, action),
         Commands::Validate { all } => commands::validate::run(&db, all),
-        Commands::Serve => commands::serve::run(&db).await,
+        Commands::Serve => commands::serve::run(db).await,
         Commands::Stats => commands::stats::run(&db, cli.json),
         Commands::Skills { action } => commands::skills::run(action),
         Commands::Call { tool, params } => commands::call::run(&db, &tool, params).await,

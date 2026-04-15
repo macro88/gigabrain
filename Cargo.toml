@@ -30,6 +30,9 @@ candle-transformers = "0.8"
 safetensors = "0.4"
 tokenizers = "0.20"
 
+# Model download from HuggingFace Hub (used in online-model mode)
+hf-hub = { version = "0.3", optional = true }
+
 # MCP server (stdio transport, JSON-RPC 2.0)
 rmcp = "0.1"
 
@@ -61,12 +64,12 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 
 [features]
-default = ["bundled", "embed-model"]
+default = ["bundled"]
 bundled = ["rusqlite/bundled"]
 # embed-model: include_bytes!() model weights into binary (~90MB, zero first-run download)
 embed-model = []
-# online-model: download weights on first run (~10MB binary, requires internet once)
-online-model = []
+# online-model: download weights from HuggingFace on first run (~10MB binary, requires internet once)
+online-model = ["hf-hub"]
 
 [profile.release]
 opt-level = 3
