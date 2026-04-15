@@ -974,3 +974,251 @@ For future revisions with incomplete features:
    sub-bullets
 
 This revision is a model for Phase 2 work with known Phase 3 blockers.
+
+---
+
+### 2026-04-14: T20 Novelty Detection Implementation
+
+**Author:** Fry  
+**Date:** 2026-04-14  
+**Status:** Implemented
+
+#### Context
+
+T20 requires a `check_novelty` function to prevent duplicate content from being ingested. The function must combine Jaccard token-set similarity with cosine similarity from stored embeddings when available.
+
+#### Decisions
+
+1. **Dual-signal approach:** Jaccard similarity (whitespace-tokenised word sets) is always computed. Cosine similarity from stored page embeddings is used when the page has vectors in `page_embeddings_vec_384`. When both are available, they are averaged with equal weight.
+
+2. **Similarity threshold:** Combined similarity ≥ 0.85 → content is NOT novel (likely duplicate). Below 0.85 → novel. This threshold balances false positives (rejecting genuine updates) vs false negatives (accepting near-duplicates).
+
+3. **Existing text composition:** Both `compiled_truth` and `timeline` are concatenated for comparison, since timeline content is meaningful and should count toward deduplication.
+
+4. **Embedding honesty:** The module doc comment explicitly acknowledges the T14 SHA-256 hash shim limitation. Cosine scores reflect hash proximity, not semantic similarity. Jaccard provides genuine token-level dedup regardless.
+
+5. **Graceful degradation:** If no embeddings exist for the page, or embedding fails, the function falls back to Jaccard-only. No errors are surfaced for missing embeddings.
+
+6. **Module-level `#![allow(dead_code)]`:** Applied because `check_novelty` is not yet wired into the ingest pipeline (that's T22 `migrate.rs` work). Will be removed when wired.
+
+#### Test Coverage
+
+- 4 Jaccard unit tests (identical, disjoint, partial overlap, both empty)
+- 5 check_novelty integration tests (identical, clearly different, minor edit, substantial addition, timeline inclusion)
+- Total: 9 new tests, 128 total (119 baseline + 9)
+
+---
+
+### 2026-04-14: T21–T34 Phase 1 Complete
+
+**Author:** Fry (Main Engineer)  
+**Date:** 2026-04-14  
+**Status:** Implemented
+
+#### Summary
+
+All remaining Phase 1 tasks (T21–T34) are implemented, tested, and passing all gates.
+
+#### Key Decisions
+
+1. **import_hashes table:** Created separately from `ingest_log` in schema.sql. The schema's `ingest_log` tracks MCP/API-level ingestion events; `import_hashes` tracks file-level SHA-256 dedup for `gbrain import`/`gbrain ingest`.
+
+2. **MCP server threading:** Uses `Arc<Mutex<Connection>>` because rmcp's `ServerHandler` trait requires `Clone + Send + Sync + 'static`. Since MCP stdio is single-threaded in practice, the mutex is never contended.
+
+3. **Error code mapping:** MCP tools use custom JSON-RPC error codes: `-32009` (OCC conflict), `-32001` (not found), `-32002` (parse error), `-32003` (DB error). Wrapped in `rmcp::model::ErrorCode`.
+
+4. **Fixture format:** New test fixtures use LF line endings, alphabetically sorted frontmatter keys, no quoted values. This matches `render_page` canonical output for byte-exact round-trip testing.
+
+5. **Timeline command:** Parses timeline section from the page's stored `timeline` field, splitting on bare `---` lines. No structured `timeline_entries` table query — uses the raw markdown timeline from the page.
+
+6. **Skill files:** Updated `skills/ingest/SKILL.md` and `skills/query/SKILL.md` to reflect actual Phase 1 command surface rather than aspirational tier-based processing.
+
+#### Test Results
+
+- 142 tests passing
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `cargo fmt --check`: clean
+
+---
+
+### 2026-04-14: Leela — Search/Embed/Query Revision Verdict
+
+**Author:** Leela (Lead)  
+**Date:** 2026-04-14  
+**Status:** Accepted for Landing
+
+#### Verdict
+
+The artifact resolves all three of Professor's concrete rejection points. The revision is honest, compile-clean, and test-green. This is the landing candidate.
+
+#### Professor's Blockers — Resolution Status
+
+**1. Tests fail compilation**
+- **Was:** `cargo test` failed to compile.
+- **Now:** 119 tests pass, 0 failures.
+- **Status:** ✅ Resolved
+
+**2. Embed CLI mixed-mode allowed**
+- **Was:** `gbrain embed people/alice --all` silently ignored `--all`. `--all` also force-re-embedded every page regardless of content_hash, contradicting the spec.
+- **Fix applied:** Added mutual-exclusion guard at the top of `embed::run()`. Changed skip logic to apply `page_needs_refresh()` content_hash check. Three new rejection tests added; one new `--all`-skips-unchanged test added.
+- **Status:** ✅ Resolved
+
+**3. Inference shim not Candle**
+- **Was:** `search_vec()` and `hybrid_search()` used SHA-256 hash projections, not Candle/BGE-small.
+- **Was addressed by Fry:** `eprintln!()` warning emitted at runtime; T14 checkbox kept at `[~]`; decisions.md documents "shim suitable for Phase 1 plumbing, deferred to Phase 1-stretch or Phase 2".
+- **Status:** ✅ Resolved (by documented deferral)
+
+#### Validation
+
+- `cargo test`: 119 passed, 0 failed
+- Mutual-exclusion enforcement: 3 new rejection tests
+- `--all` skip behavior: 1 new test confirming unchanged content is skipped
+
+---
+
+### 2026-04-14: Scruffy — T20 Novelty Test Caveat
+
+**Author:** Scruffy  
+**Date:** 2026-04-14  
+**Status:** Caveat Documented
+
+#### Context
+
+`src/core/novelty.rs` now has deterministic unit coverage for duplicate-vs-different behavior under the current T14 embedding shim.
+
+#### Caveat
+
+Do **not** freeze paraphrase or semantic-near-duplicate expectations in novelty unit tests yet. The current embedding path in `src/core/inference.rs` is still the documented SHA-256 placeholder.
+
+#### Testing Contract
+
+- Keep asserting that identical content is rejected as non-novel.
+- Keep asserting that clearly different content remains novel when embeddings are absent.
+- Keep asserting that clearly different content remains novel even when placeholder embeddings are present.
+- Defer any "same meaning, different wording" assertions until Candle/BGE embeddings replace the shim.
+
+---
+
+### 2026-04-14: T20 Novelty Detection Implementation
+
+---
+
+### 2026-04-14: T20 Novelty Detection Implementation
+
+**Author:** Fry
+**Date:** 2026-04-14
+**Status:** Implemented
+
+#### Context
+
+T20 requires a `check_novelty` function to prevent duplicate content from being ingested. The function must combine Jaccard token-set similarity with cosine similarity from stored embeddings when available.
+
+#### Decisions
+
+1. **Dual-signal approach:** Jaccard similarity (whitespace-tokenised word sets) is always computed. Cosine similarity from stored page embeddings is used when the page has vectors in `page_embeddings_vec_384`. When both are available, they are averaged with equal weight.
+
+2. **Similarity threshold:** Combined similarity ≥ 0.85 → content is NOT novel (likely duplicate). Below 0.85 → novel. This threshold balances false positives (rejecting genuine updates) vs false negatives (accepting near-duplicates).
+
+3. **Existing text composition:** Both `compiled_truth` and `timeline` are concatenated for comparison, since timeline content is meaningful and should count toward deduplication.
+
+4. **Embedding honesty:** The module doc comment explicitly acknowledges the T14 SHA-256 hash shim limitation. Cosine scores reflect hash proximity, not semantic similarity. Jaccard provides genuine token-level dedup regardless.
+
+5. **Graceful degradation:** If no embeddings exist for the page, or embedding fails, the function falls back to Jaccard-only. No errors are surfaced for missing embeddings.
+
+6. **Module-level `#![allow(dead_code)]`:** Applied because `check_novelty` is not yet wired into the ingest pipeline (that's T22 `migrate.rs` work). Will be removed when wired.
+
+#### Test Coverage
+
+- 4 Jaccard unit tests (identical, disjoint, partial overlap, both empty)
+- 5 check_novelty integration tests (identical, clearly different, minor edit, substantial addition, timeline inclusion)
+- Total: 9 new tests, 128 total (119 baseline + 9)
+
+---
+
+### 2026-04-14: T21–T34 Phase 1 Complete
+
+**Author:** Fry (Main Engineer)
+**Date:** 2026-04-14
+**Status:** Implemented
+
+#### Summary
+
+All remaining Phase 1 tasks (T21–T34) are implemented, tested, and passing all gates.
+
+#### Key Decisions
+
+1. **import_hashes table:** Created separately from `ingest_log` in schema.sql. The schema's `ingest_log` tracks MCP/API-level ingestion events; `import_hashes` tracks file-level SHA-256 dedup for `gbrain import`/`gbrain ingest`.
+
+2. **MCP server threading:** Uses `Arc<Mutex<Connection>>` because rmcp's `ServerHandler` trait requires `Clone + Send + Sync + 'static`. Since MCP stdio is single-threaded in practice, the mutex is never contended.
+
+3. **Error code mapping:** MCP tools use custom JSON-RPC error codes: `-32009` (OCC conflict), `-32001` (not found), `-32002` (parse error), `-32003` (DB error). Wrapped in `rmcp::model::ErrorCode`.
+
+4. **Fixture format:** New test fixtures use LF line endings, alphabetically sorted frontmatter keys, no quoted values. This matches `render_page` canonical output for byte-exact round-trip testing.
+
+5. **Timeline command:** Parses timeline section from the page's stored `timeline` field, splitting on bare `---` lines. No structured `timeline_entries` table query — uses the raw markdown timeline from the page.
+
+6. **Skill files:** Updated `skills/ingest/SKILL.md` and `skills/query/SKILL.md` to reflect actual Phase 1 command surface rather than aspirational tier-based processing.
+
+#### Test Results
+
+- 142 tests passing
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `cargo fmt --check`: clean
+
+---
+
+### 2026-04-14: Leela — Search/Embed/Query Revision Verdict
+
+**Author:** Leela (Lead)
+**Date:** 2026-04-14
+**Status:** Accepted for Landing
+
+#### Verdict
+
+The artifact resolves all three of Professor's concrete rejection points. The revision is honest, compile-clean, and test-green. This is the landing candidate.
+
+#### Professor's Blockers — Resolution Status
+
+**1. Tests fail compilation**
+- **Was:** `cargo test` failed to compile.
+- **Now:** 119 tests pass, 0 failures.
+- **Status:** ✅ Resolved
+
+**2. Embed CLI mixed-mode allowed**
+- **Was:** `gbrain embed people/alice --all` silently ignored `--all`. `--all` also force-re-embedded every page regardless of content_hash, contradicting the spec.
+- **Fix applied:** Added mutual-exclusion guard at the top of `embed::run()`. Changed skip logic to apply `page_needs_refresh()` content_hash check. Three new rejection tests added; one new `--all`-skips-unchanged test added.
+- **Status:** ✅ Resolved
+
+**3. Inference shim not Candle**
+- **Was:** `search_vec()` and `hybrid_search()` used SHA-256 hash projections, not Candle/BGE-small.
+- **Was addressed by Fry:** `eprintln!()` warning emitted at runtime; T14 checkbox kept at `[~]`; decisions.md documents "shim suitable for Phase 1 plumbing, deferred to Phase 1-stretch or Phase 2".
+- **Status:** ✅ Resolved (by documented deferral)
+
+#### Validation
+
+- `cargo test`: 119 passed, 0 failed
+- Mutual-exclusion enforcement: 3 new rejection tests
+- `--all` skip behavior: 1 new test confirming unchanged content is skipped
+
+---
+
+### 2026-04-14: Scruffy — T20 Novelty Test Caveat
+
+**Author:** Scruffy
+**Date:** 2026-04-14
+**Status:** Caveat Documented
+
+#### Context
+
+`src/core/novelty.rs` now has deterministic unit coverage for duplicate-vs-different behavior under the current T14 embedding shim.
+
+#### Caveat
+
+Do **not** freeze paraphrase or semantic-near-duplicate expectations in novelty unit tests yet. The current embedding path in `src/core/inference.rs` is still the documented SHA-256 placeholder.
+
+#### Testing Contract
+
+- Keep asserting that identical content is rejected as non-novel.
+- Keep asserting that clearly different content remains novel when embeddings are absent.
+- Keep asserting that clearly different content remains novel even when placeholder embeddings are present.
+- Defer any "same meaning, different wording" assertions until Candle/BGE embeddings replace the shim.
