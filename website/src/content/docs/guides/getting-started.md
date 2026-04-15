@@ -179,8 +179,10 @@ The `original` type is for your own thinking — distinct from compiled external
 
 ---
 
-## Next steps
+## What's Next?
 
-- Read the [Roadmap](/contributing/roadmap/) to understand what is built vs. what is coming.
-- Read [Contributing](/contributing/) to start contributing.
-- Read the [Spec](/reference/spec/) for the full technical specification.
+- [Quick Start](/gigabrain/guides/quick-start/) — five commands to a running brain
+- [CLI Reference](/gigabrain/reference/cli/) — full flag and subcommand reference
+- [MCP Server](/gigabrain/guides/mcp-server/) — connect Claude Code or any MCP agent
+- [Architecture](/gigabrain/reference/architecture/) — how the internals fit together
+- [Roadmap](/gigabrain/contributing/roadmap/) — what is built vs. what is coming

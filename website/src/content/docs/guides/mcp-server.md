@@ -1,6 +1,10 @@
 ---
 title: MCP Server
-description: Run `gbrain serve` and connect any MCP client over stdio JSON-RPC.
+description: Run `gbrain serve` and connect any MCP client over stdio JSON-RPC 2.0. Zero config — just a binary and a JSON block.
+sidebar:
+  badge:
+    text: New
+    variant: tip
 ---
 
 ## What `gbrain serve` does
