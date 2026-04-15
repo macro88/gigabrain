@@ -11,6 +11,7 @@ use crate::commands::get::get_page;
 use crate::core::fts::search_fts;
 use crate::core::markdown;
 use crate::core::palace;
+use crate::core::progressive::progressive_retrieve;
 use crate::core::search::hybrid_search;
 use crate::core::types::SearchError;
 
@@ -134,6 +135,8 @@ pub struct BrainQueryInput {
     pub wing: Option<String>,
     /// Maximum results to return
     pub limit: Option<u32>,
+    /// Retrieval depth: "auto" for progressive expansion, absent/empty for direct results only
+    pub depth: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -321,6 +324,22 @@ impl GigaBrainServer {
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
         let results = hybrid_search(&input.query, input.wing.as_deref(), &db, limit)
             .map_err(map_search_error)?;
+
+        let results = match input.depth.as_deref() {
+            Some("auto") => {
+                let budget: usize = db
+                    .query_row(
+                        "SELECT value FROM config WHERE key = 'default_token_budget'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(4000);
+                progressive_retrieve(results, budget, 3, &db).map_err(map_search_error)?
+            }
+            _ => results,
+        };
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;

@@ -1,8 +1,21 @@
+use crate::core::progressive::progressive_retrieve;
 use crate::core::types::SearchResult;
 use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::core::search::hybrid_search;
+
+/// Read `default_token_budget` from the config table, falling back to 4000.
+fn read_token_budget(db: &Connection) -> usize {
+    db.query_row(
+        "SELECT value FROM config WHERE key = 'default_token_budget'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|v| v.parse::<usize>().ok())
+    .unwrap_or(4000)
+}
 
 pub async fn run(
     db: &Connection,
@@ -13,9 +26,15 @@ pub async fn run(
     wing: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let _ = depth;
-
     let results = hybrid_search(query, wing.as_deref(), db, limit as usize)?;
+
+    let results = if depth == "auto" {
+        let budget = read_token_budget(db).max(token_budget as usize);
+        progressive_retrieve(results, budget, 3, db).unwrap_or_else(|_| Vec::new())
+    } else {
+        results
+    };
+
     let results = budget_results(results, limit as usize, token_budget as usize);
 
     if json {

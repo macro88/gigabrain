@@ -50,12 +50,12 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 ## Group 5 — Progressive Retrieval (`src/core/progressive.rs`)
 
-- [ ] 5.1  Implement `progressive_retrieve(initial: Vec<SearchResult>, budget: usize, depth: u32, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>`. Token approximation: `len(page.compiled_truth) / 4`. Hard cap depth at 3. Dedup by slug using `HashSet<String>`.
-- [ ] 5.2  Expansion loop: for each result in the current frontier (starting with `initial`), fetch the page's outbound links, retrieve linked pages, add to result list if budget permits.
-- [ ] 5.3  Read `default_token_budget` from the `config` table in `query.rs` and pass it to `progressive_retrieve` when `--depth auto` is specified.
-- [ ] 5.4  Add `--depth` arg to CLI `gbrain query` (already has a placeholder clap arg with `/// Phase 2: deferred` comment — remove the comment and wire it).
-- [ ] 5.5  Add `depth` field to `BrainQueryInput` MCP struct (optional string, `"auto"` triggers expansion).
-- [ ] 5.6  Write unit tests: budget exhausted before depth cap stops expansion; depth cap stops expansion before budget; empty initial returns empty; duplicates from expansion are deduplicated; zero depth returns initial results unchanged.
+- [x] 5.1  Implement `progressive_retrieve(initial: Vec<SearchResult>, budget: usize, depth: u32, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>`. Token approximation: `len(page.compiled_truth) / 4`. Hard cap depth at 3. Dedup by slug using `HashSet<String>`.
+- [x] 5.2  Expansion loop: for each result in the current frontier (starting with `initial`), fetch the page's outbound links, retrieve linked pages, add to result list if budget permits.
+- [x] 5.3  Read `default_token_budget` from the `config` table in `query.rs` and pass it to `progressive_retrieve` when `--depth auto` is specified.
+- [x] 5.4  Add `--depth` arg to CLI `gbrain query` (already has a placeholder clap arg with `/// Phase 2: deferred` comment — remove the comment and wire it).
+- [x] 5.5  Add `depth` field to `BrainQueryInput` MCP struct (optional string, `"auto"` triggers expansion).
+- [x] 5.6  Write unit tests: budget exhausted before depth cap stops expansion; depth cap stops expansion before budget; empty initial returns empty; duplicates from expansion are deduplicated; zero depth returns initial results unchanged.
 
 ## Group 6 — Novelty Check Wiring (`src/commands/ingest.rs`)
 
