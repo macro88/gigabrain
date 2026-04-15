@@ -59,26 +59,26 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 ## Group 6 — Novelty Check Wiring (`src/commands/ingest.rs`)
 
-- [ ] 6.1  In `ingest.rs`, after resolving the slug and before the `INSERT ... ON CONFLICT` upsert, check if the page exists. If it does and `--force` is false, call `check_novelty(new_content, &existing_page, conn)`. If `Ok(false)`, print to stderr "Skipping ingest: content not novel (slug: <slug>)" and return `Ok(())`.
-- [ ] 6.2  Remove `#![allow(dead_code)]` from `src/core/novelty.rs`.
-- [ ] 6.3  Write tests: near-duplicate content (Jaccard ≥ 0.85) is skipped; distinct content proceeds; `--force` bypasses the check; first-time ingest (no prior page) skips the novelty check.
+- [x] 6.1  In `ingest.rs`, after resolving the slug and before the `INSERT ... ON CONFLICT` upsert, check if the page exists. If it does and `--force` is false, call `check_novelty(new_content, &existing_page, conn)`. If `Ok(false)`, print to stderr "Skipping ingest: content not novel (slug: <slug>)" and return `Ok(())`.
+- [x] 6.2  Remove `#![allow(dead_code)]` from `src/core/novelty.rs`.
+- [x] 6.3  Write tests: near-duplicate content (Jaccard ≥ 0.85) is skipped; distinct content proceeds; `--force` bypasses the check; first-time ingest (no prior page) skips the novelty check.
 
 ## Group 7 — Palace Room Filtering (`src/core/palace.rs`)
 
-- [ ] 7.1  Replace the stub body of `derive_room(content: &str) -> String` with: find the first line matching `^## (.+)`, lowercase it, replace spaces with hyphens, strip non-`[a-z0-9-]` characters. Return `""` if no `##` heading found.
-- [ ] 7.2  Remove the `#![allow(dead_code)]` attribute from `palace.rs` if still present.
-- [ ] 7.3  Update `src/commands/put.rs`, `src/commands/ingest.rs`, and `src/mcp/server.rs` (brain_put handler) to pass `derive_room(&compiled_truth)` instead of the current `palace::derive_room(&compiled_truth)` stub (no call-site change needed — verify the result is actually non-empty for headed content).
-- [ ] 7.4  Write tests: h2 heading produces kebab-case room; no heading returns `""`; heading with special characters is cleaned; second h2 heading is ignored.
+- [x] 7.1  Replace the stub body of `derive_room(content: &str) -> String` with: find the first line matching `^## (.+)`, lowercase it, replace spaces with hyphens, strip non-`[a-z0-9-]` characters. Return `""` if no `##` heading found.
+- [x] 7.2  Remove the `#![allow(dead_code)]` attribute from `palace.rs` if still present.
+- [x] 7.3  Update `src/commands/put.rs`, `src/commands/ingest.rs`, and `src/mcp/server.rs` (brain_put handler) to pass `derive_room(&compiled_truth)` instead of the current `palace::derive_room(&compiled_truth)` stub (no call-site change needed — verify the result is actually non-empty for headed content).
+- [x] 7.4  Write tests: h2 heading produces kebab-case room; no heading returns `""`; heading with special characters is cleaned; second h2 heading is ignored.
 
 ## Group 8 — Knowledge Gaps (`src/core/gaps.rs` + `src/commands/gaps.rs`)
 
-- [ ] 8.1  Implement `log_gap(query: &str, context: &str, confidence_score: Option<f64>, conn: &Connection) -> Result<(), GapsError>` in `src/core/gaps.rs`: insert into `knowledge_gaps` with `query_hash = sha256_hex(query)`, `sensitivity = 'internal'`, `query_text = NULL`. Use `INSERT OR IGNORE` to be idempotent on the same query hash.
-- [ ] 8.2  Implement `list_gaps(resolved: bool, limit: usize, conn: &Connection) -> Result<Vec<KnowledgeGap>, GapsError>`.
-- [ ] 8.3  Implement `resolve_gap(id: i64, resolved_by_slug: &str, conn: &Connection) -> Result<(), GapsError>`.
-- [ ] 8.4  In `src/commands/query.rs` and `src/mcp/server.rs` (brain_query handler), after `hybrid_search`, if `results.len() < 2` or all scores < 0.3, call `log_gap`. On success print to stderr "Knowledge gap logged."
-- [ ] 8.5  Implement `run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()>` in `src/commands/gaps.rs` calling `core::gaps::list_gaps`.
-- [ ] 8.6  Wire `gaps::run` into `src/main.rs` dispatch (currently has a `todo!`).
-- [ ] 8.7  Write tests: `log_gap` inserts a row; duplicate query is idempotent; `list_gaps` returns only unresolved by default; `resolve_gap` sets resolved_at; low-result query auto-logs gap.
+- [x] 8.1  Implement `log_gap(query: &str, context: &str, confidence_score: Option<f64>, conn: &Connection) -> Result<(), GapsError>` in `src/core/gaps.rs`: insert into `knowledge_gaps` with `query_hash = sha256_hex(query)`, `sensitivity = 'internal'`, `query_text = NULL`. Use `INSERT OR IGNORE` to be idempotent on the same query hash.
+- [x] 8.2  Implement `list_gaps(resolved: bool, limit: usize, conn: &Connection) -> Result<Vec<KnowledgeGap>, GapsError>`.
+- [x] 8.3  Implement `resolve_gap(id: i64, resolved_by_slug: &str, conn: &Connection) -> Result<(), GapsError>`.
+- [x] 8.4  In `src/commands/query.rs` and `src/mcp/server.rs` (brain_query handler), after `hybrid_search`, if `results.len() < 2` or all scores < 0.3, call `log_gap`. On success print to stderr "Knowledge gap logged."
+- [x] 8.5  Implement `run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()>` in `src/commands/gaps.rs` calling `core::gaps::list_gaps`.
+- [x] 8.6  Wire `gaps::run` into `src/main.rs` dispatch (currently has a `todo!`).
+- [x] 8.7  Write tests: `log_gap` inserts a row; duplicate query is idempotent; `list_gaps` returns only unresolved by default; `resolve_gap` sets resolved_at; low-result query auto-logs gap.
 
 ## Group 9 — MCP Phase 2 Write Surface (`src/mcp/server.rs`)
 
