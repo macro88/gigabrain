@@ -353,3 +353,39 @@
 **Outcome:** P3 Release project **COMPLETE**. Coverage visible in GitHub UI, release workflow hardened, README/website/workflow docs all aligned, all gates passed. Project ready for release.
 
 **Decision note:** `.squad/decisions.md` (merged from inbox) — P3 Release section documents all routing, decisions, gate feedback, and final approvals.
+
+## 2026-04-15 Phase 2 Kickoff — Architecture Completion
+
+**Role:** Phase 2 director, OpenSpec unblock architect, decision logger
+
+**What happened:**
+- Leela created complete OpenSpec artifact set for `p2-intelligence-layer`: design.md (8 design decisions), specs/graph/spec.md, specs/assertions/spec.md, specs/progressive-retrieval/spec.md, specs/novelty-gaps/spec.md, specs/mcp-phase2/spec.md, tasks.md (49 tasks across 10 groups).
+- Defined scope boundary decisions: OCC on brain_put excluded (Phase 1), commands/link excluded (Phase 1), novelty logic excluded (Phase 1), derive_room included (real logic in Phase 2), graph BFS iterative not recursive, assertions regex not LLM, progressive depth 3-hop hard cap, room taxonomy freeform from heading.
+- Established reviewer routing: Professor (Groups 1, 5, Task 10.6), Nibbler (Group 9, Task 10.7), Mom (temporal Task 10.8), Bender (ingest Task 10.9).
+- Created branch `phase2/p2-intelligence-layer` from main at v0.1.0.
+- Opened PR #22 (not merged per user directive — user reviews + merges).
+- Updated issue #6 to in-progress; created 8 sub-issues per agent lane (Fry, Scruffy, Bender, Amy, Hermes, Professor, Nibbler, Mom).
+- Committed Sprint 0 + Phase 1 OpenSpec archives to branch.
+
+**Critical blockers identified (Professor + Nibbler + Bender):**
+1. Schema gap: `knowledge_gaps.query_hash` missing UNIQUE constraint — blocks Group 8/9 validation
+2. Graph contract ambiguity: undirected vs outbound-first — blocks Group 1 sign-off
+3. Edge deduplication on cycles missing — blocks Group 1 sign-off
+4. Progressive retrieval not started; contract unclear — blocks Group 5 sign-off
+5. OCC erosion risk in Group 9 MCP writes — blocks Group 9 sign-off
+6. Active temporal reads must check both interval ends — ship-gate blocker (Nibbler D1)
+7. Graph traversal needs output budgets, not just hop cap — ship-gate blocker (Nibbler D2)
+
+**Team coordination:**
+- 6 agents completed planning (Leela kickoff, Scruffy coverage, Bender validation, Amy docs, Professor review, Nibbler guardrails)
+- 2 agents running implementation (Fry Groups 1–9, Hermes website docs)
+- 1 agent running edge-case review (Mom temporal links)
+- All agents aligned on blockers and ready to work
+- Orchestration logs written for each completed agent
+- Session log recorded
+- Decision inbox merged to decisions.md (14 items)
+- Cross-agent history updates applied
+
+**Outcome:** Phase 2 architecture **COMPLETE**. Blockers visible to all teams. PR #22 open and in review queue. Team can execute Phase 2 implementation with clear gates and parallel lanes.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — Phase 2 Kickoff section documents all 6 leela decisions (D1–D6), full planning artifacts per agent, blocker findings from Professor and Nibbler, and guardrails for ship gate.

@@ -1682,3 +1682,213 @@ Phase 3 scope cut and implementation routing **APPROVED**. Final deliverables al
 **Team:** Leela, Fry, Amy, Hermes, Zapp, Kif, Scruffy
 
 **Status:** ✅ Complete — Ready for release
+---
+
+## Phase 2 Kickoff Decisions (2026-04-15)
+
+### Leela: Phase 2 Branch, Team Execution, Issue Actions, Archives, Coverage, No Pre-Merge
+
+**Decision IDs:** leela-phase2-kickoff (6 decisions: D1–D6)
+
+**What:**
+- **D1:** Branch phase2/p2-intelligence-layer created from main at v0.1.0
+- **D2:** Team execution split across 8 lanes (Fry impl, Scruffy coverage, Bender integration, Amy docs, Hermes website, Professor review, Nibbler adversarial, Mom temporal)
+- **D3:** Issue actions: close P1 issues #2–5; update #6 in-progress; create 8 sub-issues per lane
+- **D4:** Commit Sprint 0 + Phase 1 OpenSpec archives to branch
+- **D5:** Coverage target 90%+ (≥200 unit tests)
+- **D6:** PR #22 opened but NOT merged; owner macro88 merges manually per user directive
+
+**Why:** Formal phase boundary separation with clear team lanes, issue hygiene, and governance control at owner level.
+
+---
+
+### Scruffy: Phase 2 Coverage Lane + Contradiction Idempotency
+
+**Decision IDs:** scruffy-phase2-coverage (2 decisions: D1–D2)
+
+**What:**
+- **D1:** Coverage strategy: core-first unit tests alongside Fry's implementation; defer CLI process-level tests until stable formatting seams exist
+- **D2:** Contradiction reruns must stay idempotent—rerunning check_assertions does not duplicate rows for same fingerprint
+
+**Why:** Parallelize tests with implementation using OpenSpec specs as contract; ensure contradiction table stays clean on repeated scans.
+
+---
+
+### Bender: Phase 2 Validation Plan + Schema Gap Blocker
+
+**Decision IDs:** bender-phase2-signoff (validation scenarios S1–S24, evidence E1–E10)
+
+**BLOCKER:** knowledge_gaps.query_hash missing UNIQUE constraint. Task 8.1 specifies INSERT OR IGNORE for idempotency, which requires a UNIQUE constraint. Without it, every low-confidence query logs a duplicate row. Resolution required before Group 8 validation.
+
+**What:**
+- 24 destructive validation scenarios (contradiction round-trip, novelty-skip, graph traversal, progressive retrieval, knowledge gaps, MCP tools, regression, full suite)
+- Evidence checklist (E1–E10) including scenarios pass, schema fix, dead_code removal, derive_room behavior
+- Sign-off gate: all evidence required before Bender approves Phase 2 ship
+
+**Why:** Comprehensive edge-case validation ensures Phase 2 is adversarially sound before merge. Schema gap is foundational blocker for Groups 8–9.
+
+---
+
+### Amy: Phase 2 Docs Audit + Post-Ship Checklist
+
+**Decision IDs:** amy-phase2-docs (pre-ship + post-ship update map)
+
+**What:**
+- Pre-ship updates applied: README roadmap + usage note, docs/roadmap Phase 2 status, docs/getting-started callouts for Phase 2 tools, docs/contributing reviewer gates
+- Post-ship checklist created: exact map of what changes after Phase 2 merges and v0.2.0 tags (15 items across README, docs, spec, OpenSpec proposal)
+
+**Why:** Safe pre-ship updates reflect current status without claiming unshipped behavior. Post-ship checklist eliminates guesswork after merge.
+
+---
+
+### Professor: Phase 2 Early Review Gate (Blocking Findings)
+
+**Decision IDs:** professor-phase2-review (4 blocking findings F1–F4, non-blocking guidance)
+
+**BLOCKING FINDINGS:**
+- **F1:** Graph traversal undirected vs spec outbound-first mismatch—choose contract now (neighborhood = undirected adjacency or outbound traversal)
+- **F2:** Edge deduplication missing on cyclic graphs—deduplicate by link ID or (from,to,relationship,valid_from,valid_until)
+- **F3:** Progressive retrieval not started—settle contract before coding to avoid guaranteed rework
+- **F4:** OCC erosion risk in Group 9 MCP writes—preserve Phase 1 OCC discipline on every page-scoped write tool
+
+**What:** Early review identifies architectural gaps before implementation. Non-blocking guidance on BFS loop performance and test structure.
+
+**Why:** Blocking findings are spec-clarification gates. Do not merge Groups 1, 5, 9 without Professor sign-off.
+
+---
+
+### Nibbler: Phase 2 Adversarial Guardrails (5 Ship-Gate Blockers)
+
+**Decision IDs:** nibbler-phase2-adversarial (5 decisions D1–D5)
+
+**BLOCKING GUARDRAILS:**
+- **D1:** Active temporal reads must respect both ends of interval (valid_from ≤ today AND valid_until ≥ today)
+- **D2:** Graph traversal needs output budgets (max nodes/edges/bytes) + explicit direction, not just hop cap
+- **D3:** Contradiction detection idempotent + manual assertions preserved (not erased by re-indexing)
+- **D4:** Gap logging deduplicated via unique query_hash (real key, not just SELECT EXISTS)
+- **D5:** MCP tools return typed truth, not delegated CLI side effects (backlinks temporal arg, timeline shape, tags feedback)
+
+**What:** Adversarial guardrails prevent future-dated links masquerading as present truth, hub-page DoS, contradiction table poisoning, gap noise, and MCP output shape lies.
+
+**Why:** Nibbler sign-off is ship-level gate. These are implementable within Phase 2 scope and critical for product correctness.
+
+---
+
+### Fry: Phase 2 Graph BFS + Phase 2 OpenSpec Completion
+
+**Decision IDs:** fry-phase2-graph (bidirectional traversal + edge dedup), leela-p2-openspec (OpenSpec artifacts)
+
+**What:**
+- **Graph Decision:** Bidirectional BFS (both outbound and inbound links) with edge deduplication by link row ID to build neighbourhood. CLI maps --temporal flag to temporal filters (current→Active, all→All).
+- **OpenSpec Completion:** Leela completed full artifact set (design.md, 5 specs, tasks.md with 49 tasks across 10 groups, scope boundary decisions, reviewer routing)
+
+**Why:** Bidirectional neighbourhood matches real knowledge graphs; edge dedup prevents duplicates on cycles. OpenSpec completion unblocks implementation.
+
+---
+
+### Leela: Phase 2 OpenSpec Package Completion
+
+**Decision IDs:** leela-p2-openspec
+
+**What:** Created full OpenSpec artifact set for p2-intelligence-layer:
+- design.md (8 design decisions)
+- specs/graph/spec.md (N-hop BFS)
+- specs/assertions/spec.md (triple extraction + contradiction detection)
+- specs/progressive-retrieval/spec.md (token-budget gating)
+- specs/novelty-gaps/spec.md (novelty wiring + gaps log/list/resolve)
+- specs/mcp-phase2/spec.md (7 new MCP tools)
+- tasks.md (49 tasks across 10 groups)
+
+**Scope boundary decisions:** OCC on brain_put (excluded—Phase 1), commands/link (excluded—wiring only), novelty logic (excluded—wiring only), derive_room (included—real logic), graph BFS (iterative not recursive), assertions (regex not LLM), progressive depth (3-hop hard cap), room taxonomy (freeform from heading).
+
+**Reviewer routing:** Professor (Groups 1, 5, Task 10.6), Nibbler (Group 9, Task 10.7), Mom (temporal, Task 10.8), Bender (ingest, Task 10.9).
+
+**Why:** Complete artifact set unblocks implementation; scope accuracy prevents rework; reviewer routing clarifies gates.
+
+---
+
+### User Directive: Do Not Leave Half-Finished Work Locally
+
+**Directive ID:** copilot-directive-2026-04-15T12-35-00Z
+
+**What:** Do not leave half-finished work only on local computer. Everything must be committed to a working branch, pushed remote, and tracked through a PR.
+
+**Why:** User request (macro88) — captured for team memory to enforce distributed decision records and PR-gated review.
+
+---
+
+### User Directive: Complete Phase 2 with Frequent Checkpoints + User-Driven Merge
+
+**Directive ID:** copilot-directive-2026-04-15T22-37-52Z
+
+**What:** Complete Phase 2 with frequent commit/push checkpoints, open a PR for review, and do NOT merge the PR—the user will review and merge it.
+
+**Why:** User request (macro88) — enforces checkpoint discipline and preserves owner-level merge control per D6.
+
+---
+
+## P3 Release Branch Decisions (2026-04-13)
+
+### Fry: P3 Branch and PR Workflow
+
+**Decision ID:** fry-pr-workflow
+
+**What:** Created branch p3/release-readiness-docs-coverage from local main and opened draft PR #15 to origin/main. Branch includes 4 prior local commits (scribe summaries, doc drift fixes, decision merges) + 1 new commit with all P3 implementation (CI coverage, release hardening, docs accuracy, docs-site polish, OpenSpec artifacts).
+
+**Why:** Reviewers evaluate against OpenSpec task checklist. 4 prior commits are squad-internal; final commit is P3 payload. Draft status chosen because reviewer gates not yet complete.
+
+---
+
+## Phase 1 Release Decisions (2026-04-15)
+
+### Fry: Phase 1 Release Gap
+
+**Decision ID:** fry-release-gap
+
+**What:** Phase 1 (all 34 tasks + 9 ship gates) is complete, PR #12 merged, PR #15 merged, CI passes, Cargo.toml has version = "0.1.0", but **v0.1.0 tag was never pushed**. Release workflow never fired; no GitHub Release exists. Public docs still say "Phase 1 in progress" (inaccurate).
+
+**Action:** 
+1. Update all docs to reflect Phase 1 complete (README, docs/, website/)
+2. After PR merges, push v0.1.0 tag: git tag v0.1.0 && git push origin v0.1.0
+3. Verify release against .github/RELEASE_CHECKLIST.md
+
+**Why:** Roadmap commits to v0.1.0 after Phase 1. Phase 1 is done. Gap is purely operational.
+
+---
+
+### Fry: v0.1.0 Release Repair
+
+**Decision ID:** fry-release-repair
+
+**What:** v0.1.0 release workflow failed on Linux musl targets. Root causes:
+1. sqlite-vec uses BSD types (u_int8_t, etc.) not in strict musl
+2. db.rs hardcoded i8 transmute but c_char is u8 on aarch64
+3. Static binary check too strict (matched "statically linked" not "static-pie linked")
+
+**Fixes applied:**
+- PR #20: Added Cross.toml with CFLAGS passthrough (-Du_int8_t=uint8_t)
+- PR #21: Changed db.rs to use std::ffi::c_char/c_int (platform-correct); updated grep pattern
+- Tag recreated twice on updated HEAD to re-trigger workflow
+
+**Result:** Release published with 4 platform binaries + checksums. Workflow run 24462421225 succeeded.
+
+**Future implications:** New musl targets need CFLAGS in Cross.toml; sqlite-vec upgrades need aarch64 musl testing.
+
+---
+
+### Zapp: Release Contract Wording
+
+**Decision ID:** zapp-release-contract-wording
+
+**What:** Two locations implied a release existed when no GitHub Release was cut:
+1. README.md—"channels for this release" treated v0.1.0 as shipped
+2. docs/contributing.md—issue script had "[Phase 3] v0.1.0 release" (should be Phase 1)
+
+**Option chosen:** (b) Tighten wording—no release is published yet.
+
+**Changes made:**
+- README.md: split build-from-source (available now) from GitHub Releases (landing with v0.1.0); curl block labeled "Not yet available"
+- docs/contributing.md: issue script corrected: "[Phase 3] v0.1.0 release" → "[Phase 1] v0.1.0 release"
+
+**Why:** Accurate wording removes false implication that release already exists. Release contract unchanged (v0.1.0 cuts after Phase 1 gates pass).
+

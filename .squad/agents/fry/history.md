@@ -263,3 +263,84 @@
 **Outcome:** P3 Release CI/Release component **COMPLETE**. Coverage job running, release workflow tested, artifact verification validated, all gates passed.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — documents coverage tool selection, checksum format standardization, informational (non-gating) coverage policy, and optional Codecov handling.
+
+## 2026-04-15 Phase 2 Kickoff — Blocker Summary
+
+**Phase 2 branch:** `phase2/p2-intelligence-layer` from main at v0.1.0. PR #22 opened (not merged per user directive).
+
+### CRITICAL BLOCKERS (must resolve before sign-off)
+
+1. **Schema gap: `knowledge_gaps.query_hash` missing UNIQUE constraint (Bender + Nibbler)**
+   - Task 8.1 specifies `INSERT OR IGNORE` for idempotency on duplicate queries
+   - `INSERT OR IGNORE` requires a UNIQUE constraint to trigger
+   - Without it, every low-confidence query logs a duplicate row — idempotency contract broken
+   - **Resolution required:** Add `UNIQUE(query_hash)` to schema (preferred) or create index at init time in db.rs
+   - **Impact:** Blocks Group 8 (knowledge gaps) and Group 9 (MCP write surface) validation
+
+2. **Graph contract ambiguity (Professor)**
+   - Current: BFS traverses both outbound and inbound edges (bidirectional)
+   - Spec: Tasks + spec/graph/spec.md describe outbound-first reachability
+   - CLI output: Each edge printed as `→ <edge.to>`, misleading for inbound-only edges pointing back at root
+   - **Resolution required:** Choose one now
+     - Option A: neighbourhood = undirected adjacency → update spec + CLI renderer to show both directions explicitly
+     - Option B: neighbourhood = outbound traversal → remove inbound BFS from core
+   - **Impact:** Blocks Group 1 sign-off; blocks Professor approval
+
+3. **Edge deduplication on cyclic graphs (Professor)**
+   - Nodes deduplicated with `visited` HashSet, but edges appended unconditionally
+   - Two-node cycle (`a -> b`, `b -> a`) with depth ≥ 2: same link appears twice in result
+   - **Resolution required:** Deduplicate edges by stable identity (prefer link ID, else `(from,to,relationship,valid_from,valid_until)`)
+   - Add test: cyclic graph with depth > 1 asserts duplicate-free edges
+   - **Impact:** Blocks Group 1 sign-off
+
+4. **Progressive retrieval not started (Professor)**
+   - src/core/progressive.rs is still a stub
+   - src/commands/query.rs still Phase 1 behavior: ignores `depth`, never follows links, budgets rendered line length not token count
+   - docs/spec.md describes `summary/section/full/auto` expansion vs Phase 2 tasks simplify to linked-page expansion → `Vec<SearchResult>`
+   - **Resolution required:** Settle contract before coding. Either implement richer spec surface or explicitly narrow spec/design now.
+   - Avoid guaranteed rework
+   - **Impact:** Blocks Group 5 sign-off
+
+5. **OCC erosion risk in Group 9 MCP writes (Professor)**
+   - docs/spec.md: all page-scoped mutators (`brain_link`, `brain_unlink`, `brain_timeline_add`, `brain_tag`, `brain_raw`) must require `page_version` and bump `pages.version`
+   - Group 9 tasks currently say `brain_link/brain_link_close/brain_tags` delegate directly to command helpers that do NOT perform page-version checks
+   - **Resolution required:** Either preserve Phase 1 OCC discipline on every new page-scoped write tool OR amend product spec before implementation
+   - Do NOT quietly weaken write contract
+   - **Impact:** Blocks Group 9 sign-off
+
+### ADVERSARIAL GUARDRAILS (Nibbler, ship-gate blockers)
+
+1. **Active temporal reads (D1)**
+   - Default "active/current" reads must treat link as active only when BOTH:
+     - `valid_from IS NULL OR valid_from <= today` AND
+     - `valid_until IS NULL OR valid_until >= today`
+   - Currently: future-dated links (valid_from > today) indistinguishable from present if only `valid_until` checked
+   - **Impact:** Blocks ship gate until future-dated links excluded from default active views + tested
+
+2. **Graph output budgets (D2)**
+   - Hop cap of 10 alone insufficient; one attacker-controlled hub page with thousands of edges forces huge BFS fan-out
+   - **Resolution required:** Enforce at least one non-depth budget (max nodes, max edges, or max serialized bytes)
+   - Make traversal direction explicit in contract
+   - **Impact:** Ship-gate blocker for Fry + Professor
+
+3. **Contradiction idempotency (D3)**
+   - `extract_assertions` must only replace agent-generated assertions for target page (not erase manual/import)
+   - Contradiction rows must deduplicate by stable fingerprint, not free-form text
+   - **Impact:** Repeated `brain_check` runs must not poison contradictions table
+
+4. **MCP output shape contract (D5)**
+   - MCP tools must return typed truth per spec, not delegated CLI side effects
+   - Current bugs: `backlinks` ignores temporal arg, `timeline --json` returns `{slug, entries}` not bare array, `tags` mutates but prints nothing
+   - **Impact:** Fry must treat output-shape tests + parameter-behaviour tests as ship-gate requirements, not polish
+
+### Coordination Notes
+
+- **Leela:** Phase 2 kickoff complete; 8 agents ready; no blockers for implementation start
+- **Scruffy:** Coverage lane ready; parallelize tests with Fry's implementation
+- **Bender:** 24 validation scenarios ready; awaiting schema gap fix before Group 8 validation
+- **Amy:** Pre-ship docs done; post-ship checklist (15 items) ready after merge
+- **Hermes:** Website docs in progress
+- **Mom:** Temporal edge cases in progress
+- **Professor:** Early review complete; blockers F1–F4 require spec clarification gates
+- **Nibbler:** Guardrails D1–D5 defined; ship gate blocked until all tested
+- **User directive:** Complete Phase 2 with frequent checkpoints; Fry must open PR + not merge (user reviews + merges)
