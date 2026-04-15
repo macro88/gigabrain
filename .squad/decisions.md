@@ -1892,3 +1892,148 @@ Phase 3 scope cut and implementation routing **APPROVED**. Final deliverables al
 
 **Why:** Accurate wording removes false implication that release already exists. Release contract unchanged (v0.1.0 cuts after Phase 1 gates pass).
 
+
+
+---
+
+## leela-graph-revision.md
+
+# Leela: Graph Slice Revision (Tasks 1.1–2.5)
+
+- **Date:** 2026-04-15
+- **Scope:** `src/core/graph.rs`, `src/commands/graph.rs`, `tests/graph.rs`, `openspec/changes/p2-intelligence-layer/tasks.md`
+- **Triggered by:** Professor rejection of Fry's graph slice. Fry locked out of this revision cycle.
+
+## What was wrong
+
+Professor rejected the graph slice for four concrete reasons:
+
+1. **Directionality contract unresolved.** `neighborhood_graph` traversed both outbound and inbound links (undirected BFS), contradicting the spec which says "all pages reachable via one active outbound link." This also broke coherence with the existing `gbrain links` (outbound) / `gbrain backlinks` (inbound) command split.
+2. **Misleading human output.** For an inbound-only edge `acme → alice`, `gbrain graph people/alice` would print `→ people/alice (employs)` — root appearing as its own neighbour.
+3. **CLI tests did not verify actual output.** `graph_cli_human_output_shows_root_and_edges` only checked `is_ok()`; `graph_cli_json_output_has_nodes_and_edges` tested the core struct, not the CLI's `--json` output.
+4. **Duplicated SQL logic.** Near-identical outbound/inbound queries made the directionality contract hard to audit.
+
+## Decisions made
+
+### D1: Outbound-only BFS (confirmed from spec)
+
+The graph traversal follows outbound links only. `neighborhood_graph` reflects the explicit spec wording: "reachable via outbound links." Inbound reachability remains the domain of `gbrain backlinks`. This aligns the two surfaces orthogonally.
+
+The `inbound_links_are_included_in_graph` unit test was removed because it directly contradicted the spec.
+
+### D2: temporal `Active` filter now also gates `valid_from`
+
+The previous clause only checked `valid_until`. The corrected clause:
+
+```sql
+(l.valid_from IS NULL OR l.valid_from <= date('now'))
+AND (l.valid_until IS NULL OR l.valid_until >= date('now'))
+```
+
+This ensures future-dated links do not appear in the active graph. Mom's edge-case note identified this gap; fixing it here is the right time.
+
+### D3: CLI output captured via `run_to<W: Write>`
+
+`commands::graph::run` was refactored to delegate to `run_to<W: Write>`, which accepts a generic writer. `run` passes `io::stdout()`. Integration tests pass a `Vec<u8>` buffer and assert on the captured text. This is the minimum change that makes the output contract testable without spawning a subprocess.
+
+### D4: tasks.md updates (1.2, 1.3, 1.5, 2.2, 2.5)
+
+Task descriptions updated to reflect: outbound-only contract, `valid_from` in temporal clause, new test coverage (future-dated links, root-not-self-neighbour), and `run_to` in 2.5 test description.
+
+## Validation
+
+- `cargo test --lib --test graph`: 163 lib tests + 6 integration tests, all pass.
+- `cargo clippy -- -D warnings`: clean.
+- `cargo fmt --check`: clean.
+
+
+---
+
+## professor-graph-review.md
+
+# Professor graph slice review
+
+- **Date:** 2026-04-15
+- **Scope:** OpenSpec `p2-intelligence-layer` tasks 1.1-2.5 (`src/core/graph.rs`, `src/commands/graph.rs`, `src/main.rs`, `tests/graph.rs`)
+- **Verdict:** **REJECT FOR LANDING (slice only)**
+
+## What is acceptable
+
+- Edge deduplication is now present via `seen_edges: HashSet<i64>` keyed by link row ID, so the earlier duplicate-edge concern is materially addressed.
+- The slice does have the basic BFS guardrails: iterative queue, visited set, depth cap, not-found handling, and graph-focused tests.
+
+## Blocking findings
+
+1. **Directionality contract is still unresolved.**
+   - The accepted graph spec and task wording describe one-hop reachability from a page via its outbound links.
+   - `src/core/graph.rs` now traverses both outbound and inbound links as an undirected neighbourhood, which changes the API contract without a matching spec/design amendment.
+   - This also breaks coherence with the already-separated `links` (outbound) vs `backlinks` (inbound) command surface.
+
+2. **Human-readable output is misleading under inbound traversal.**
+   - `src/commands/graph.rs` prints every edge as `→ <edge.to> (<relationship>)`.
+   - For an inbound-only edge like `companies/acme -> people/alice`, running `gbrain graph people/alice` will print `→ people/alice (employs)`, which makes the root appear as its own neighbour.
+
+3. **CLI output-shape tests do not actually verify CLI output.**
+   - `tests/graph.rs` checks that `commands::graph::run(...)` returns `Ok(())`, but it does not capture or assert stdout for the human-readable format.
+   - The JSON test serializes the core `GraphResult` directly instead of asserting the actual CLI `--json` output, so the outward contract remains unpinned.
+
+4. **Maintainability is weaker than it should be for a contract-sensitive slice.**
+   - `src/core/graph.rs` duplicates near-identical inbound/outbound query and row-mapping logic.
+   - That duplication makes the chosen directionality harder to audit and easier to drift again when the contract is revised.
+
+## Required follow-up before approval
+
+1. Decide and document the graph contract explicitly: outbound-only traversal, or an intentionally undirected neighbourhood with matching spec/task wording.
+2. Align CLI rendering to the chosen contract so inbound edges cannot be displayed as if they were outbound neighbours of the root.
+3. Add tests that assert the actual stdout/stderr shape for both text and JSON modes.
+4. If undirected traversal is retained, refactor the duplicated SQL/row-mapping path so the direction semantics are encoded once and remain auditable.
+
+
+---
+
+## professor-graph-rereview.md
+
+# Professor graph slice re-review
+
+- **Date:** 2026-04-15
+- **Scope:** OpenSpec `p2-intelligence-layer` graph slice only (tasks 1.1-2.5; `src/core/graph.rs`, `src/commands/graph.rs`, `src/main.rs`, `tests/graph.rs`)
+- **Verdict:** **APPROVE FOR LANDING (graph slice only)**
+
+## Decision
+
+Leela's revision resolves the three blockers from the prior rejection:
+
+1. **Directionality contract now matches the accepted spec.**
+   - `neighborhood_graph` is outbound-only again.
+   - `gbrain backlinks` remains the inbound surface, which restores command/API coherence.
+
+2. **Human-readable rendering is no longer misleading.**
+   - The CLI prints `→ <edge.to> (<relationship>)` over an outbound-only result set, so the root no longer appears as its own neighbour due to inbound traversal.
+
+3. **CLI tests now pin the real outward contract.**
+   - `run_to<W: Write>` makes the command output injectable.
+   - Integration tests now capture and assert actual text output and actual `--json` output shape.
+
+## Validation performed
+
+- `cargo test graph --quiet` ✅
+- `cargo test --quiet` ✅
+- `cargo clippy --quiet -- -D warnings` ✅
+- `cargo fmt --check` ✅
+
+## Scope caveat
+
+This approval is for the **graph slice only**. Issue #28 as a whole still includes the progressive-retrieval budget/OCC review lane, which is not re-opened or approved by this note.
+
+
+---
+
+## scruffy-assertions-coverage.md
+
+## Scruffy — Assertions/check coverage seam
+
+- **Decision:** Preserve manual assertions when `extract_assertions()` re-indexes a page; only prior `asserted_by = 'agent'` rows are replaced.
+- **Decision:** Keep `commands::check` as a thin printer over a pure `execute_check()` + render helpers so assertions/check coverage can validate behavior deterministically without stdout-capture tricks.
+
+**Why:** Nibbler's Phase 2 guardrails explicitly require contradiction reruns to stay idempotent and manual assertions to survive re-indexing. The helper seam also keeps task 4.5 coverage branch-focused: tests validate page targeting, `--all` processing, JSON shape, and existing contradiction reporting without binding to terminal plumbing.
+

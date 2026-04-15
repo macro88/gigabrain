@@ -344,3 +344,12 @@
 - **Professor:** Early review complete; blockers F1–F4 require spec clarification gates
 - **Nibbler:** Guardrails D1–D5 defined; ship gate blocked until all tested
 - **User directive:** Complete Phase 2 with frequent checkpoints; Fry must open PR + not merge (user reviews + merges)
+
+## 2026-04-15 Cross-team Phase 2 Revision Batch
+
+- **Status:** Two agent lanes completed; one in progress (Fry's own assertions slice); one in final review (Professor)
+- **Graph revision (Leela):** All three prior blockers from Professor rejection now resolved. Directionality contract confirmed outbound-only (per spec); temporal gate now includes `valid_from`; CLI test coverage now captures actual text/JSON output shape via `run_to<W>` refactor. **Landing ready.**
+- **Assertions/check coverage (Scruffy):** Pure helper seam confirmed; manual assertions preserved across re-index; coverage deterministically validates without stdout capture. **Landing ready.**
+- **Fry's own assertions slice:** Currently reconciling compilation errors in assertions/check implementation lane. No blockers reported yet.
+- **Professor's graph re-review:** Re-review completed 2026-04-15T23:15:50Z. Verdict: APPROVE FOR LANDING (graph slice tasks 1.1–2.5 only). Issue #28 scope caveat: progressive-retrieval budget/OCC review lane remains separate.
+- **Decision merger completed:** Inbox decisions merged into canonical decisions.md (4 files, 0 conflicts). Cross-agent histories updated; orchestration logs written; session log recorded; ready for git commit.

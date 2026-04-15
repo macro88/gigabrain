@@ -70,3 +70,39 @@ Scribe owns logs, orchestration records, and decision merging for GigaBrain.
 - Inference shim (T14) explicitly deferred with warnings + blocker list
 
 **Ready for git commit:** All `.squad/` changes staged. Team memory synchronized.
+
+## 2026-04-15T23:15:50Z Phase 2 Revision Batch Closure
+
+**Spawn manifest completed (2 of 4 agents):**
+- ✅ Leela | Graph slice revision (tasks 1.1–2.5) | Approved for landing; commit `37f4ca5` pushed to `phase2/p2-intelligence-layer`
+- ✅ Scruffy | Assertions/check coverage (tasks 3.1–4.5) | Approved for landing; decision inbox file written
+- 🔄 Fry | Assertions slice | Currently reconciling compilation errors in assertions/check lane
+- 🔄 Professor | Revised graph review | Re-review completed; final verdict APPROVE FOR LANDING (graph slice only)
+
+**Orchestration logs written (2):**
+- `2026-04-15T23-15-50Z-leela.md` (graph revision completion + landing ready)
+- `2026-04-15T23-15-50Z-scruffy.md` (assertions/check coverage + landing ready)
+
+**Session log written:**
+- `2026-04-15T23-15-50Z-phase2-revision-batch.md` (brief phase 2 revision status + cross-agent updates)
+
+**Inbox decisions merged (4 → canonical decisions.md):**
+1. `leela-graph-revision.md` (D1–D4: outbound-only BFS, temporal valid_from gate, run_to<W> CLI output, tasks.md updates)
+2. `professor-graph-review.md` (prior rejection findings documented)
+3. `professor-graph-rereview.md` (approval verdict for graph slice; scope caveat on issue #28)
+4. `scruffy-assertions-coverage.md` (D1–D2: preserve manual assertions, pure helper seam)
+- All 4 inbox files deleted after merge; zero deduplication conflicts
+
+**Cross-agent history updates:**
+- Fry: Phase 2 revision batch status + landing readiness summary
+- Professor: Graph re-review final verdict + temporal gate resolution
+- Mom: Temporal edge-case resolution (future-dated links now gated correctly)
+- Scribe (this log): Batch closure summary + orchestration completion
+
+**Phase 2 landing status:**
+- Graph slice (tasks 1.1–2.5): ✅ APPROVED — ready to merge `37f4ca5` to main after Fry's assertions lane completes
+- Assertions/check (tasks 3.1–4.5): ✅ APPROVED — landing ready pending Fry's assertions lane reconciliation
+- Progressive retrieval + OCC budget review (issue #28 scope): ⏳ NOT RE-OPENED (separate landing)
+
+**Ready for git commit:** `.squad/orchestration-log/`, `.squad/log/`, `.squad/decisions.md` (merged), agent histories (updated).
+
