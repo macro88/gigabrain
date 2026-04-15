@@ -1,6 +1,3 @@
-// Not yet wired into ingest pipeline — remove when migrate.rs calls check_novelty.
-#![allow(dead_code)]
-
 //! Novelty detection — deduplication check for ingestion.
 //!
 //! Phase 1 treats novelty as a conservative duplicate filter:

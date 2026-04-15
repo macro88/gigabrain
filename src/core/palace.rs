@@ -1,6 +1,3 @@
-// Consumers (search.rs, commands/) not yet wired — remove when they are.
-#![allow(dead_code)]
-
 /// Derive the wing (top-level category) from a page slug.
 ///
 /// The wing is the first path segment before the first `/`.
@@ -14,9 +11,25 @@ pub fn derive_wing(slug: &str) -> String {
 
 /// Derive the room (sub-category) from page content.
 ///
-/// Phase 1: always returns an empty string. Room-level palace filtering
-/// is deferred to Phase 2 per design decision 6.
-pub fn derive_room(_content: &str) -> String {
+/// Extracts the first `## <heading>` from `content`, lowercases it,
+/// replaces spaces with hyphens, and strips non-`[a-z0-9-]` characters.
+/// Returns `""` if no `##` heading is found.
+pub fn derive_room(content: &str) -> String {
+    for line in content.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let heading = heading.trim();
+            if heading.is_empty() {
+                continue;
+            }
+            let kebab: String = heading
+                .to_lowercase()
+                .chars()
+                .map(|c| if c == ' ' { '-' } else { c })
+                .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+                .collect();
+            return kebab;
+        }
+    }
     String::new()
 }
 
@@ -82,13 +95,39 @@ mod tests {
         use super::*;
 
         #[test]
-        fn always_returns_empty_string_in_phase_1() {
-            assert_eq!(derive_room("Any content here"), "");
+        fn h2_heading_produces_kebab_case_room() {
+            assert_eq!(
+                derive_room("# Title\n\n## Current Role\n\nContent here"),
+                "current-role"
+            );
+        }
+
+        #[test]
+        fn no_heading_returns_empty_string() {
+            assert_eq!(derive_room("Just some plain content"), "");
+        }
+
+        #[test]
+        fn heading_with_special_characters_is_cleaned() {
+            assert_eq!(derive_room("## Hello, World! (2024)"), "hello-world-2024");
+        }
+
+        #[test]
+        fn second_h2_heading_is_ignored() {
+            assert_eq!(
+                derive_room("## First Heading\n\nParagraph\n\n## Second Heading"),
+                "first-heading"
+            );
         }
 
         #[test]
         fn returns_empty_string_for_empty_input() {
             assert_eq!(derive_room(""), "");
+        }
+
+        #[test]
+        fn h3_heading_is_not_a_room() {
+            assert_eq!(derive_room("### Not a room heading"), "");
         }
     }
 

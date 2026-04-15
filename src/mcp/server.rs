@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::get::get_page;
 use crate::core::fts::search_fts;
+use crate::core::gaps;
 use crate::core::markdown;
 use crate::core::palace;
 use crate::core::progressive::progressive_retrieve;
@@ -324,6 +325,11 @@ impl GigaBrainServer {
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
         let results = hybrid_search(&input.query, input.wing.as_deref(), &db, limit)
             .map_err(map_search_error)?;
+
+        // Auto-log knowledge gap on weak results
+        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+            let _ = gaps::log_gap(&input.query, "", results.first().map(|r| r.score), &db);
+        }
 
         let results = match input.depth.as_deref() {
             Some("auto") => {

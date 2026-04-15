@@ -1,3 +1,4 @@
+use crate::core::gaps;
 use crate::core::progressive::progressive_retrieve;
 use crate::core::types::SearchResult;
 use anyhow::Result;
@@ -27,6 +28,15 @@ pub async fn run(
     json: bool,
 ) -> Result<()> {
     let results = hybrid_search(query, wing.as_deref(), db, limit as usize)?;
+
+    // Auto-log knowledge gap on weak results
+    if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+        if let Err(e) = gaps::log_gap(query, "", results.first().map(|r| r.score), db) {
+            eprintln!("Warning: failed to log knowledge gap: {e}");
+        } else {
+            eprintln!("Knowledge gap logged.");
+        }
+    }
 
     let results = if depth == "auto" {
         let budget = read_token_budget(db).max(token_budget as usize);
@@ -120,5 +130,33 @@ mod tests {
 
         assert_eq!(budgeted.len(), 1);
         assert_eq!(budgeted[0].summary, "abcde");
+    }
+
+    #[test]
+    fn low_result_query_auto_logs_gap() {
+        use crate::core::db;
+        use crate::core::gaps;
+
+        let conn = db::open(":memory:").expect("open db");
+
+        // Query with no results should log a gap
+        let results =
+            crate::core::search::hybrid_search("nonexistent quantum socks", None, &conn, 10)
+                .unwrap();
+        assert!(results.len() < 2);
+
+        // Simulate the gap logging that query::run does
+        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+            gaps::log_gap(
+                "nonexistent quantum socks",
+                "",
+                results.first().map(|r| r.score),
+                &conn,
+            )
+            .unwrap();
+        }
+
+        let gaps = gaps::list_gaps(false, 10, &conn).unwrap();
+        assert_eq!(gaps.len(), 1);
     }
 }
