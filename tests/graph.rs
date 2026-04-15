@@ -48,13 +48,14 @@ fn insert_link(
 // ── Human-readable output format ─────────────────────────────
 
 #[test]
-fn graph_cli_human_output_shows_root_and_edges() {
+fn graph_cli_human_output_nests_depth_two_edges_under_their_parent() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);
 
     insert_page(&conn, "people/alice", "person", "Alice");
     insert_page(&conn, "companies/acme", "company", "Acme");
+    insert_page(&conn, "projects/rocket", "project", "Rocket");
     insert_link(
         &conn,
         "people/alice",
@@ -63,23 +64,28 @@ fn graph_cli_human_output_shows_root_and_edges() {
         None,
         None,
     );
+    insert_link(
+        &conn,
+        "companies/acme",
+        "projects/rocket",
+        "owns",
+        None,
+        None,
+    );
 
     let mut out = Vec::<u8>::new();
     gbrain::commands::graph::run_to(&conn, "people/alice", 2, "current", false, &mut out).unwrap();
     let output = String::from_utf8(out).unwrap();
+    let lines: Vec<_> = output.lines().collect();
 
-    assert!(
-        output.contains("people/alice"),
-        "text output must contain root slug; got: {output}"
-    );
-    assert!(
-        output.contains("→ companies/acme (works_at)"),
-        "text output must show outbound edge; got: {output}"
-    );
-    // Root must not appear as its own neighbour
-    assert!(
-        !output.contains("→ people/alice"),
-        "root slug must not appear as a destination; got: {output}"
+    assert_eq!(
+        lines,
+        vec![
+            "people/alice",
+            "  → companies/acme (works_at)",
+            "    → projects/rocket (owns)",
+        ],
+        "text output must render depth-2 edges under their parent; got: {output}"
     );
 }
 
