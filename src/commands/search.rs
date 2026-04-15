@@ -10,7 +10,7 @@ pub fn run(
     limit: u32,
     json: bool,
 ) -> Result<()> {
-    let results = search_fts(query, wing.as_deref(), db)?;
+    let results = search_fts(query, wing.as_deref(), db, limit as usize)?;
     let results: Vec<_> = results.into_iter().take(limit as usize).collect();
 
     if json {

@@ -7,10 +7,14 @@ use super::inference::search_vec;
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
+///
+/// At most `limit` results are returned. The limit is pushed into the FTS5 query
+/// and applied after the merge step to cap memory usage.
 pub fn hybrid_search(
     query: &str,
     wing: Option<&str>,
     conn: &Connection,
+    limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -23,13 +27,15 @@ pub fn hybrid_search(
         }
     }
 
-    let fts_results = search_fts(trimmed, wing, conn)?;
+    let fts_results = search_fts(trimmed, wing, conn, limit)?;
     let vec_results = search_vec(trimmed, 10, wing, conn)?;
 
-    match read_merge_strategy(conn)? {
-        SearchMergeStrategy::SetUnion => Ok(merge_set_union(&fts_results, &vec_results)),
-        SearchMergeStrategy::Rrf => Ok(merge_rrf(&fts_results, &vec_results)),
-    }
+    let mut merged = match read_merge_strategy(conn)? {
+        SearchMergeStrategy::SetUnion => merge_set_union(&fts_results, &vec_results),
+        SearchMergeStrategy::Rrf => merge_rrf(&fts_results, &vec_results),
+    };
+    merged.truncate(limit);
+    Ok(merged)
 }
 
 /// Reads the configured hybrid-search merge strategy.
@@ -247,7 +253,7 @@ mod tests {
             "people",
         );
 
-        let results = hybrid_search("people/alice", None, &conn).expect("hybrid search");
+        let results = hybrid_search("people/alice", None, &conn, 1000).expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -265,7 +271,7 @@ mod tests {
             "people",
         );
 
-        let results = hybrid_search("[[people/alice]]", None, &conn).expect("hybrid search");
+        let results = hybrid_search("[[people/alice]]", None, &conn, 1000).expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -315,7 +321,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", None, &conn).expect("hybrid search");
+        let results = hybrid_search("AI founder", None, &conn, 1000).expect("hybrid search");
         let slugs: Vec<_> = results.iter().map(|result| result.slug.as_str()).collect();
 
         assert!(slugs.contains(&"people/alice"));
@@ -343,7 +349,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", Some("people"), &conn).expect("hybrid search");
+        let results = hybrid_search("AI founder", Some("people"), &conn, 1000).expect("hybrid search");
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));

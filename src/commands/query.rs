@@ -15,7 +15,7 @@ pub async fn run(
 ) -> Result<()> {
     let _ = depth;
 
-    let results = hybrid_search(query, wing.as_deref(), db)?;
+    let results = hybrid_search(query, wing.as_deref(), db, limit as usize)?;
     let results = budget_results(results, limit as usize, token_budget as usize);
 
     if json {

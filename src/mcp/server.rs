@@ -219,6 +219,15 @@ impl GigaBrainServer {
 
         match existing_version {
             None => {
+                // OCC: a client supplying expected_version on a non-existent page has stale
+                // state — the page never existed at that version. Reject as a conflict.
+                if let Some(n) = input.expected_version {
+                    return Err(rmcp::Error::new(
+                        rmcp::model::ErrorCode(-32009),
+                        format!("conflict: page does not exist at version {n}"),
+                        Some(serde_json::json!({ "current_version": null })),
+                    ));
+                }
                 db.execute(
                     "INSERT INTO pages \
                          (slug, type, title, summary, compiled_truth, timeline, \
@@ -305,11 +314,9 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut results =
-            hybrid_search(&input.query, input.wing.as_deref(), &db).map_err(map_search_error)?;
-
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        results.truncate(limit);
+        let results =
+            hybrid_search(&input.query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -323,11 +330,9 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut results =
-            search_fts(&input.query, input.wing.as_deref(), &db).map_err(map_search_error)?;
-
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        results.truncate(limit);
+        let results =
+            search_fts(&input.query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -553,5 +558,23 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32602));
+    }
+
+    #[test]
+    fn brain_put_rejects_create_with_expected_version_when_page_does_not_exist() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        // Page does not exist; supplying expected_version is a client bug — reject as OCC conflict.
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/ghost".to_string(),
+                content: "---\ntitle: Ghost\ntype: note\n---\nContent\n".to_string(),
+                expected_version: Some(3),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert_eq!(error.data, Some(json!({ "current_version": null })));
     }
 }

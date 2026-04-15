@@ -4,13 +4,14 @@ use super::types::{SearchError, SearchResult};
 
 /// FTS5 full-text search over the `page_fts` virtual table.
 ///
-/// Returns results ranked by BM25 score (most relevant first).
+/// Returns at most `limit` results ranked by BM25 score (most relevant first).
 /// When `wing_filter` is provided, only pages in that wing are returned.
 /// Returns an empty vec on no matches (not an error).
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,
     conn: &Connection,
+    limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -30,10 +31,12 @@ pub fn search_fts(
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?2");
         params.push(Box::new(wing.to_owned()));
+        sql.push_str(" ORDER BY bm25(page_fts) LIMIT ?3");
+    } else {
+        // bm25() returns negative values; ascending order = most relevant first.
+        sql.push_str(" ORDER BY bm25(page_fts) LIMIT ?2");
     }
-
-    // bm25() returns negative values; ascending order = most relevant first.
-    sql.push_str(" ORDER BY bm25(page_fts)");
+    params.push(Box::new(limit as i64));
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
@@ -91,7 +94,7 @@ mod tests {
     #[test]
     fn search_on_empty_db_returns_empty_vec() {
         let conn = open_test_db();
-        let results = search_fts("anything", None, &conn).unwrap();
+        let results = search_fts("anything", None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -99,7 +102,7 @@ mod tests {
     fn search_with_empty_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("", None, &conn).unwrap();
+        let results = search_fts("", None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -107,7 +110,7 @@ mod tests {
     fn search_with_whitespace_query_returns_empty_vec() {
         let conn = open_test_db();
         insert_page(&conn, "test/a", "Test A", "test", "summary", "content");
-        let results = search_fts("   ", None, &conn).unwrap();
+        let results = search_fts("   ", None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -125,7 +128,7 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("machine learning", None, &conn).unwrap();
+        let results = search_fts("machine learning", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "concepts/ml");
         assert_eq!(results[0].title, "Machine Learning");
@@ -144,7 +147,7 @@ mod tests {
             "Works on distributed systems.",
         );
 
-        let results = search_fts("alice", None, &conn).unwrap();
+        let results = search_fts("alice", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
     }
@@ -161,7 +164,7 @@ mod tests {
             "Machine learning is a branch of artificial intelligence.",
         );
 
-        let results = search_fts("zzzznonexistent", None, &conn).unwrap();
+        let results = search_fts("zzzznonexistent", None, &conn, 1000).unwrap();
         assert!(results.is_empty());
     }
 
@@ -187,7 +190,7 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", Some("companies"), &conn).unwrap();
+        let results = search_fts("fundraising", Some("companies"), &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "companies/acme");
     }
@@ -212,7 +215,7 @@ mod tests {
             "A startup focused on fundraising technology.",
         );
 
-        let results = search_fts("fundraising", None, &conn).unwrap();
+        let results = search_fts("fundraising", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -241,7 +244,7 @@ mod tests {
             "A brief note about intelligence in computing.",
         );
 
-        let results = search_fts("intelligence", None, &conn).unwrap();
+        let results = search_fts("intelligence", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 2);
         // Higher score should come first
         assert!(results[0].score >= results[1].score);
@@ -261,7 +264,7 @@ mod tests {
             "Bob works on quantum computing research.",
         );
 
-        let results = search_fts("quantum", None, &conn).unwrap();
+        let results = search_fts("quantum", None, &conn, 1000).unwrap();
         assert_eq!(results.len(), 1);
 
         let r = &results[0];
