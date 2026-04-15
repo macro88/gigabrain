@@ -138,7 +138,7 @@ Then start the server:
 gbrain serve
 ```
 
-The MCP server exposes tools over stdio JSON-RPC 2.0. Phase 1 ships five core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`. Later phases add the full surface — see [spec.md](spec.md#mcp-server).
+The MCP server exposes tools over stdio JSON-RPC 2.0. Phase 1 ships five core tools: `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`. Later phases add the full surface — see the [Spec](/reference/spec/).
 
 ---
 
@@ -179,8 +179,10 @@ The `original` type is for your own thinking — distinct from compiled external
 
 ---
 
-## Next steps
+## What's Next?
 
-- Read the [Roadmap](/contributing/roadmap/) to understand what is built vs. what is coming.
-- Read [Contributing](/contributing/) to start contributing.
-- Read the [Spec](/reference/spec/) for the full technical specification.
+- [Quick Start](/guides/quick-start/) — five commands to a running brain
+- [CLI Reference](/reference/cli/) — full flag and subcommand reference
+- [MCP Server](/guides/mcp-server/) — connect Claude Code or any MCP agent
+- [Architecture](/reference/architecture/) — how the internals fit together
+- [Roadmap](/contributing/roadmap/) — what is built vs. what is coming

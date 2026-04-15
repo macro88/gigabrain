@@ -55,3 +55,11 @@ MD
 GBRAIN_DB=~/brain.db ./target/release/gbrain serve
 ```
 
+
+---
+
+## What's Next?
+
+- [CLI Reference](/reference/cli/) — full flag and subcommand reference
+- [MCP Server](/guides/mcp-server/) — connect Claude Code or any MCP agent
+- [Architecture](/reference/architecture/) — how the internals fit together
