@@ -20,6 +20,7 @@
 - I start with an OpenSpec change proposal before meaningful implementation.
 - I keep changes aligned with local-first, zero-network product constraints.
 - I expect tests and review to be part of the same delivery lane.
+- **Task tracking:** After completing each task from an OpenSpec `tasks.md`, I immediately mark it `[x]`. I never batch updates to end of phase. If all tasks and ship gates are `[x]`, I flag the openspec for archival.
 
 ## Boundaries
 
