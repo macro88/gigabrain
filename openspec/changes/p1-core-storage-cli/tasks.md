@@ -509,12 +509,12 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 
 - [x] **SG-1** cargo test passes with zero failures
 - [x] **SG-2** cargo clippy -- -D warnings passes; cargo fmt --check passes
-- [ ] **SG-3** gbrain import tests/fixtures/ then gbrain export then re-import — semantic diff = 0 (Professor sign-off)
-- [ ] **SG-4** gbrain serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
-- [ ] **SG-5** musl binary has no dynamic dependencies confirmed via ldd (Professor sign-off)
+- [x] **SG-3** gbrain import tests/fixtures/ then gbrain export then re-import — semantic diff = 0 (Professor sign-off)
+- [x] **SG-4** gbrain serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
+- [x] **SG-5** musl binary has no dynamic dependencies confirmed via ldd (Professor sign-off)
 - [ ] **SG-6** Nibbler adversarial review on src/mcp/server.rs: OCC enforced on all write paths, no injection vectors (Nibbler sign-off)
-- [ ] **SG-7** roundtrip_semantic and roundtrip_raw both pass CI (Bender sign-off)
-- [ ] **SG-8** BEIR nDCG@10 baseline recorded in benchmarks/README.md (no regression gate yet — establish the number)
+- [x] **SG-7** roundtrip_semantic and roundtrip_raw both pass CI (Bender sign-off)
+- [x] **SG-8** BEIR nDCG@10 baseline recorded in benchmarks/README.md (no regression gate yet — establish the number)
 - [ ] **SG-9** PR from phase1/p1-core-storage-cli to main opened, linked to Phase 1 GitHub issue, all reviewer sign-offs collected before merge
 
 ---
