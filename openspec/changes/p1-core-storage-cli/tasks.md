@@ -516,7 +516,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
   <!-- Fry SG-6 fixes applied in commit 5886ec2: OCC bypass closed, slug/content validation, error code consistency, limit caps, mutex recovery. Awaiting Nibbler re-review. -->
 - [x] **SG-7** roundtrip_semantic and roundtrip_raw both pass CI (Bender sign-off)
 - [x] **SG-8** BEIR nDCG@10 baseline recorded in benchmarks/README.md (no regression gate yet — establish the number)
-- [ ] **SG-9** PR from phase1/p1-core-storage-cli to main opened, linked to Phase 1 GitHub issue, all reviewer sign-offs collected before merge
+- [x] **SG-9** PR from phase1/p1-core-storage-cli to main opened, linked to Phase 1 GitHub issue, all reviewer sign-offs collected before merge
 
 ---
 
