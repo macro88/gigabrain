@@ -1,83 +1,347 @@
-//! Inference — text embedding and vector search.
+//! Inference — text embedding and vector search via BGE-small-en-v1.5.
 //!
-//! **PLACEHOLDER CONTRACT (T14 incomplete):** The [`EmbeddingModel`] in this
-//! module is a SHA-256 hash-based shim, **not** the BGE-small-en-v1.5 semantic
-//! model. It produces a deterministic, L2-normalised 384-dimensional vector
-//! derived from per-token SHA-256 digests — cosine similarity reflects hash
-//! proximity, not semantic proximity.
+//! Uses Candle (pure Rust ML) to run the BAAI/bge-small-en-v1.5 BERT model on
+//! CPU. Model weights are downloaded from HuggingFace Hub on first use (when
+//! built with `--features online-model`) and cached in the HuggingFace Hub
+//! cache directory (`~/.cache/huggingface/hub/`).
 //!
-//! `candle-core`, `candle-nn`, `candle-transformers`, and `tokenizers` are
-//! declared in `Cargo.toml` but are **not yet wired** (the Candle forward-pass
-//! step in T14 is incomplete). Until T14 ships the real BGE-small loader:
-//!
-//! - `gbrain embed` stores hash vectors, not semantic vectors.
-//! - `gbrain query` ranks by hash-cosine distance, not meaning.
-//! - `gbrain search` (FTS5) is unaffected and fully keyword-accurate.
+//! If the model cannot be loaded (no network, no cache, missing feature flag),
+//! the system falls back to a SHA-256 hash-based shim that satisfies the API
+//! contract (384-dim, L2-normalised) but produces non-semantic vectors.
 //!
 //! The public API (`embed`, `search_vec`, `ensure_model`, `embedding_to_blob`)
-//! is stable. Replacing this shim with the Candle model requires no caller changes.
+//! is stable regardless of which backend is active.
 
 use std::sync::OnceLock;
 
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use rusqlite::types::ToSql;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
+use tokenizers::Tokenizer;
 
 use super::types::{InferenceError, SearchError, SearchResult};
 
 const EMBEDDING_DIMENSIONS: usize = 384;
 const HASH_CHUNK_COUNT: usize = EMBEDDING_DIMENSIONS / 32;
+#[cfg(feature = "online-model")]
+const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
 static MODEL: OnceLock<EmbeddingModel> = OnceLock::new();
 
-/// SHA-256 hash-based placeholder for BGE-small-en-v1.5.
-///
-/// Satisfies the embedding API contract (384-dim, L2-normalised `Vec<f32>`)
-/// but vectors are **not** semantically meaningful — cosine similarity scores
-/// reflect hash distance, not text similarity.
-///
-/// The API and lifecycle match the intended Candle-backed implementation so the
-/// real BGE-small loader can replace this without changing callers.
-#[derive(Debug)]
+/// BGE-small-en-v1.5 embedding model backed by Candle, with SHA-256 fallback.
 pub struct EmbeddingModel {
-    dimensions: usize,
+    backend: EmbeddingBackend,
+}
+
+enum EmbeddingBackend {
+    /// Real BGE-small-en-v1.5 BERT model via Candle.
+    Candle {
+        model: Box<BertModel>,
+        tokenizer: Box<Tokenizer>,
+        device: Device,
+    },
+    /// SHA-256 hash-based fallback (non-semantic, deterministic).
+    HashShim,
+}
+
+impl std::fmt::Debug for EmbeddingModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.backend {
+            EmbeddingBackend::Candle { .. } => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &"Candle(BGE-small-en-v1.5)")
+                .finish(),
+            EmbeddingBackend::HashShim => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &"HashShim")
+                .finish(),
+        }
+    }
 }
 
 impl EmbeddingModel {
     fn new() -> Self {
-        Self {
-            dimensions: EMBEDDING_DIMENSIONS,
+        match Self::try_load_candle() {
+            Ok(backend) => Self { backend },
+            Err(err) => {
+                eprintln!(
+                    "Warning: BGE-small model not available ({err}), \
+                     using hash-based embeddings. Build with --features online-model \
+                     and run `gbrain embed --all` to initialize semantic embeddings."
+                );
+                Self {
+                    backend: EmbeddingBackend::HashShim,
+                }
+            }
         }
+    }
+
+    fn try_load_candle() -> Result<EmbeddingBackend, String> {
+        let (config_path, tokenizer_path, model_path) =
+            download_model_files().map_err(|e| format!("model download: {e}"))?;
+
+        let config_text =
+            std::fs::read_to_string(&config_path).map_err(|e| format!("read config.json: {e}"))?;
+        let config: BertConfig =
+            serde_json::from_str(&config_text).map_err(|e| format!("parse config.json: {e}"))?;
+
+        let tokenizer =
+            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
+
+        let device = Device::Cpu;
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
+                .map_err(|e| format!("load model weights: {e}"))?
+        };
+        let model = BertModel::load(vb, &config).map_err(|e| format!("build BERT model: {e}"))?;
+
+        Ok(EmbeddingBackend::Candle {
+            model: Box::new(model),
+            tokenizer: Box::new(tokenizer),
+            device,
+        })
     }
 
     fn embed(&self, text: &str) -> Result<Vec<f32>, InferenceError> {
-        let mut embedding = vec![0.0; self.dimensions];
-
-        for (token_index, token) in text.split_whitespace().enumerate() {
-            self.accumulate_token_embedding(token, token_index, &mut embedding);
+        match &self.backend {
+            EmbeddingBackend::Candle {
+                model,
+                tokenizer,
+                device,
+            } => embed_candle(text, model, tokenizer, device),
+            EmbeddingBackend::HashShim => embed_hash_shim(text),
         }
+    }
+}
 
-        if embedding.iter().all(|value| *value == 0.0) {
-            self.accumulate_token_embedding(text, 0, &mut embedding);
+/// Run the BERT forward pass and mean-pool + L2-normalize the output.
+fn embed_candle(
+    text: &str,
+    model: &BertModel,
+    tokenizer: &Tokenizer,
+    device: &Device,
+) -> Result<Vec<f32>, InferenceError> {
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("tokenizer: {e}"),
+        })?;
+
+    let ids = encoding.get_ids();
+    let mask = encoding.get_attention_mask();
+
+    let input_ids = Tensor::new(ids, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("input_ids tensor: {e}"),
+        })?;
+
+    let token_type_ids = input_ids
+        .zeros_like()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("token_type_ids: {e}"),
+        })?;
+
+    let attention_mask = Tensor::new(mask, device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("attention_mask tensor: {e}"),
+        })?;
+
+    let output = model
+        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("BERT forward: {e}"),
+        })?;
+
+    // Mean pooling over token dimension, masked by attention_mask
+    let mask_f32 = attention_mask
+        .unsqueeze(2)
+        .and_then(|t| t.to_dtype(DType::F32))
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mask expand: {e}"),
+        })?;
+
+    let mask_broadcast =
+        mask_f32
+            .broadcast_as(output.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("mask broadcast: {e}"),
+            })?;
+
+    let masked = output
+        .mul(&mask_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mask mul: {e}"),
+        })?;
+
+    let sum = masked.sum(1).map_err(|e| InferenceError::Internal {
+        message: format!("sum: {e}"),
+    })?;
+
+    let count = mask_f32.sum(1).map_err(|e| InferenceError::Internal {
+        message: format!("count: {e}"),
+    })?;
+
+    let count_broadcast =
+        count
+            .broadcast_as(sum.shape())
+            .map_err(|e| InferenceError::Internal {
+                message: format!("count broadcast: {e}"),
+            })?;
+
+    let mean = sum
+        .div(&count_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("mean: {e}"),
+        })?;
+
+    // L2 normalize
+    let norm = mean
+        .sqr()
+        .and_then(|t| t.sum_keepdim(1))
+        .and_then(|t| t.sqrt())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("norm: {e}"),
+        })?;
+
+    let norm_broadcast = norm
+        .broadcast_as(mean.shape())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("norm broadcast: {e}"),
+        })?;
+
+    let normalized = mean
+        .div(&norm_broadcast)
+        .map_err(|e| InferenceError::Internal {
+            message: format!("normalize: {e}"),
+        })?;
+
+    let embedding = normalized
+        .squeeze(0)
+        .and_then(|t| t.to_vec1::<f32>())
+        .map_err(|e| InferenceError::Internal {
+            message: format!("to_vec: {e}"),
+        })?;
+
+    Ok(embedding)
+}
+
+/// Download BGE-small-en-v1.5 model files using hf-hub.
+#[cfg(feature = "online-model")]
+fn download_model_files(
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
+    use hf_hub::api::sync::Api;
+
+    let api = Api::new().map_err(|e| format!("HuggingFace API init: {e}"))?;
+    let repo = api.model(MODEL_ID.to_string());
+
+    let config_path = repo
+        .get("config.json")
+        .map_err(|e| format!("download config.json: {e}"))?;
+    let tokenizer_path = repo
+        .get("tokenizer.json")
+        .map_err(|e| format!("download tokenizer.json: {e}"))?;
+    let model_path = repo
+        .get("model.safetensors")
+        .map_err(|e| format!("download model.safetensors: {e}"))?;
+
+    Ok((config_path, tokenizer_path, model_path))
+}
+
+/// Without `online-model`, look for model files in the HuggingFace cache.
+#[cfg(not(feature = "online-model"))]
+fn download_model_files(
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
+    // Check HuggingFace Hub cache (standard location)
+    let cache_dir = dirs_for_model();
+
+    for dir in &cache_dir {
+        let config = dir.join("config.json");
+        let tokenizer = dir.join("tokenizer.json");
+        let model = dir.join("model.safetensors");
+        if config.exists() && tokenizer.exists() && model.exists() {
+            return Ok((config, tokenizer, model));
         }
-
-        normalize(&mut embedding)?;
-        Ok(embedding)
     }
 
-    fn accumulate_token_embedding(&self, token: &str, token_index: usize, embedding: &mut [f32]) {
-        for chunk_index in 0..HASH_CHUNK_COUNT {
-            let mut hasher = Sha256::new();
-            hasher.update(token.as_bytes());
-            hasher.update((token_index as u64).to_le_bytes());
-            hasher.update((chunk_index as u64).to_le_bytes());
-            let digest = hasher.finalize();
-            let start = chunk_index * 32;
+    Err(format!(
+        "BGE-small model files not found. Build with --features online-model \
+         to download automatically, or place model files in one of: {:?}",
+        cache_dir
+    ))
+}
 
-            for (offset, byte) in digest.iter().enumerate() {
-                let centered = (*byte as f32 / 127.5) - 1.0;
-                embedding[start + offset] += centered;
+/// Return candidate directories where model files might be cached.
+#[cfg(not(feature = "online-model"))]
+fn dirs_for_model() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    // ~/.gbrain/models/bge-small-en-v1.5/
+    if let Some(home) = home_dir() {
+        dirs.push(
+            home.join(".gbrain")
+                .join("models")
+                .join("bge-small-en-v1.5"),
+        );
+    }
+
+    // HuggingFace Hub cache — look for snapshot dirs
+    if let Some(home) = home_dir() {
+        let hub_model = home
+            .join(".cache")
+            .join("huggingface")
+            .join("hub")
+            .join("models--BAAI--bge-small-en-v1.5")
+            .join("snapshots");
+        if let Ok(entries) = std::fs::read_dir(&hub_model) {
+            for entry in entries.flatten() {
+                dirs.push(entry.path());
             }
+        }
+    }
+
+    dirs
+}
+
+#[cfg(not(feature = "online-model"))]
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// SHA-256 hash-based fallback for when the real model is unavailable.
+fn embed_hash_shim(text: &str) -> Result<Vec<f32>, InferenceError> {
+    let mut embedding = vec![0.0; EMBEDDING_DIMENSIONS];
+
+    for (token_index, token) in text.split_whitespace().enumerate() {
+        accumulate_token_hash(token, token_index, &mut embedding);
+    }
+
+    if embedding.iter().all(|value| *value == 0.0) {
+        accumulate_token_hash(text, 0, &mut embedding);
+    }
+
+    normalize(&mut embedding)?;
+    Ok(embedding)
+}
+
+fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32]) {
+    for chunk_index in 0..HASH_CHUNK_COUNT {
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        hasher.update((token_index as u64).to_le_bytes());
+        hasher.update((chunk_index as u64).to_le_bytes());
+        let digest = hasher.finalize();
+        let start = chunk_index * 32;
+
+        for (offset, byte) in digest.iter().enumerate() {
+            let centered = (*byte as f32 / 127.5) - 1.0;
+            embedding[start + offset] += centered;
         }
     }
 }
@@ -87,11 +351,10 @@ pub fn ensure_model() -> &'static EmbeddingModel {
     MODEL.get_or_init(EmbeddingModel::new)
 }
 
-/// Returns a deterministic, L2-normalized 384-dimensional embedding.
+/// Returns an L2-normalized 384-dimensional embedding vector.
 ///
-/// **PLACEHOLDER:** In the current build this returns a SHA-256 hash
-/// projection, **not** a semantic BGE-small-en-v1.5 embedding. See the
-/// module-level doc for the full placeholder contract.
+/// When the BGE-small-en-v1.5 model is loaded, this produces a real semantic
+/// embedding. Otherwise falls back to a deterministic SHA-256 hash projection.
 pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {

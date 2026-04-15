@@ -181,3 +181,19 @@
   - MCP server uses `Arc<Mutex<Connection>>` since rmcp `ServerHandler` requires `Clone + Send + Sync`.
   - Fixtures use LF line endings, sorted frontmatter, no quoted values — matches `render_page` canonical output.
   - rmcp `ErrorCode` wrapper required for custom error codes (not bare integers).
+
+## T14 BGE-small-en-v1.5 Forward Pass + T34 musl Static Binary
+
+- **T14 COMPLETE:** Replaced SHA-256 hash shim with real Candle BGE-small-en-v1.5 BERT forward pass in `src/core/inference.rs`.
+  - `EmbeddingModel` now attempts to load the real BERT model via Candle. Falls back to SHA-256 hash shim with stderr warning if model files unavailable.
+  - Forward pass: tokenize → BERT forward → mean pooling (with broadcast) → L2 normalize → 384-dim Vec<f32>.
+  - Model download: `--features online-model` adds `hf-hub` dependency for HuggingFace Hub download. Without the feature, looks for cached files in `~/.gbrain/models/bge-small-en-v1.5/` or HuggingFace cache.
+  - hf-hub 0.3.2 has a bug with HuggingFace's relative redirect URLs (`/api/resolve-cache/...`). Manual download via `curl` works. Phase 2 should either bump hf-hub or implement direct download.
+  - Candle tensor ops require explicit `broadcast_as()` for shape-mismatched operations (mask×output, sum÷count, mean÷norm). This differs from PyTorch's implicit broadcasting.
+  - `embed-model` removed from default features (was never wired). `online-model` is the active download path.
+  - All 296 tests pass (147 unit ×2 + 1 roundtrip_raw + 1 roundtrip_semantic). The roundtrip_semantic test now passes with real embeddings.
+- **T34 musl COMPLETE:** `x86_64-unknown-linux-musl` static binary builds successfully.
+  - Requires `musl-tools` apt package and `CFLAGS` workaround: `-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t` for sqlite-vec's glibc-specific type aliases.
+  - Build command: `CC_x86_64_unknown_linux_musl=musl-gcc CXX_x86_64_unknown_linux_musl=g++ CFLAGS_x86_64_unknown_linux_musl="..." CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc cargo build --release --target x86_64-unknown-linux-musl`
+  - `ldd` confirms: "statically linked". `file` confirms: "static-pie linked, stripped". Binary size: 8.8MB (without embedded model weights).
+  - Phase 2: consider embedding model weights via `include_bytes!()` for zero-network binary (~90MB).

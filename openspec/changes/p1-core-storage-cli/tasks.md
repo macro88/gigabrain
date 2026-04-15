@@ -223,13 +223,9 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 > **Spec:** embeddings/spec.md — Candle model initialization, Text embedding generation, Vector search
 
 - [x] Declare static MODEL: OnceLock<EmbeddingModel> and ensure_model() -> &'static EmbeddingModel
-- [~] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError):
+- [x] Implement embed(text: &str) -> Result<Vec<f32>, InferenceError):
   - [x] Return Err(InferenceError::EmptyInput) for empty/whitespace input
-  - [ ] Tokenize + forward pass on CPU via BGE-small-en-v1.5; L2-normalize output; return 384-dim vector
-  - **BLOCKER:** Current implementation is a SHA-256 hash projection shim (see `src/core/inference.rs`
-    module doc). `candle-core`, `candle-nn`, `candle-transformers`, and `tokenizers` are declared in
-    `Cargo.toml` but not yet wired. Model weight assets (`model.safetensors`, `tokenizer.json`) are not
-    embedded. This step must be completed before vector similarity scores are semantically meaningful.
+  - [x] Tokenize + forward pass on CPU via BGE-small-en-v1.5; L2-normalize output; return 384-dim vector
 - [x] Implement search_vec(query: &str, k: usize, wing_filter: Option<&str>, conn: &Connection) -> Result<Vec<SearchResult>, SearchError>:
   - Embed query; KNN query on page_embeddings_vec_384; join to pages for slug + summary; apply wing filter
   - Return empty vec on no embeddings
@@ -501,8 +497,8 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 - [x] cargo fmt --check passes
 - [x] cargo clippy -- -D warnings passes with zero warnings
 - [x] cargo test passes with zero failures
-- [ ] cross build --release --target x86_64-unknown-linux-musl succeeds
-- [ ] ldd on the musl binary confirms not a dynamic executable
+- [x] cross build --release --target x86_64-unknown-linux-musl succeeds
+- [x] ldd on the musl binary confirms not a dynamic executable
 
 ---
 
