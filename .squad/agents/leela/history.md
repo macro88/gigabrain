@@ -199,6 +199,34 @@
 
 **Learning:** Mixed-mode CLI flag validation belongs at function entry, not threaded through downstream conditionals. When a spec sweep flag says "skip if unchanged", --all and --stale should behave identically on the skip check — the flag distinction is user-intent signal, not a behavioral fork.
 
+## 2026-04-15 Phase 2 OpenSpec Package Completion
+
+**What was done:**
+- Assessed the complete current-state of the codebase against the P2 proposal.
+- Created all four required OpenSpec artifacts for `p2-intelligence-layer`; `openspec status` now shows 4/4 complete.
+- Artifacts created:
+  1. `design.md` — 8 key design decisions, risk table, migration plan, open questions
+  2. `specs/graph/spec.md` — N-hop BFS, temporal filtering, graph CLI
+  3. `specs/assertions/spec.md` — triple extraction, contradiction detection, check CLI
+  4. `specs/progressive-retrieval/spec.md` — token-budget gating, depth flag, palace room
+  5. `specs/novelty-gaps/spec.md` — novelty wiring into ingest, knowledge gaps log/list/resolve
+  6. `specs/mcp-phase2/spec.md` — 7 new MCP tools (brain_link, brain_link_close, brain_backlinks, brain_graph, brain_check, brain_timeline, brain_tags)
+  7. `tasks.md` — 10 groups, 49 tasks, assigned to Fry on branch `phase2/p2-intelligence-layer`
+
+**Key scope findings from codebase audit:**
+- OCC on `brain_put` is ALREADY fully implemented (SG-6 fix). Excluded from P2 tasks.
+- `src/commands/link.rs` is ALREADY fully implemented (create, close, backlinks, unlink + 12 tests). MCP wiring only needed.
+- `src/core/novelty.rs` logic is complete but NOT wired into ingest — wiring is a Group 6 task.
+- `src/core/palace.rs::derive_room` is a stub returning `""` — real implementation is a Group 7 task.
+- Groups 1–4 (graph + assertions) are pure net-new implementation.
+- Groups 5, 8 (progressive retrieval + gaps) are pure net-new implementation.
+
+**Decision file:** `.squad/decisions/inbox/leela-p2-openspec.md`
+
+**Patterns learned:**
+- When a proposal says "Full MCP write surface", always audit what's already implemented vs. stub before scoping. Several P2 items (link.rs, OCC) were done in Phase 1 and needed removal from P2 scope.
+- `openspec status` is the canonical check. 4/4 is the only acceptable state before handing to Fry.
+
 ## 2026-04-15 SG-6 Final Blockers — Direct Fix (Nibbler 2nd Rejection)
 
 **What was done:**
