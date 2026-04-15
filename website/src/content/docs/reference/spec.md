@@ -18,7 +18,7 @@ description: The authoritative design document for schema, CLI, algorithms, and 
 Inspired by Garry Tan's GBrain work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
 
 - **Status:** Spec complete v4 — ready to build core (see [Phased Delivery](#phased-delivery))
-- **Repo (planned):** GitHub.com/[owner]/gbrain
+- **Repo:** GitHub.com/macro88/gigabrain
 - **License (planned):** MIT
 - **Origin:** Inspired by Garry Tan's GBrain spec (2026-04-05), then extended with architecture improvements (2026-04-06) and memory research integration (2026-04-08)
 - **v1 differentiator over Garry's spec:** Local embeddings, Rust binary instead of TypeScript/Bun, true zero-dependency single binary
@@ -2004,19 +2004,20 @@ description: |
    ```bash
    TARGET_VERSION="v0.2.0"  # always pin an explicit version, never use 'latest' unverified
    PLATFORM="$(uname -s | tr A-Z a-z)-$(uname -m)"
-   STAGING="/tmp/gbrain-${TARGET_VERSION}"
+   STAGING_DIR="/tmp/gbrain-${TARGET_VERSION}"
+   mkdir -p "${STAGING_DIR}"
 
-   # Download binary and checksum file
-   curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}" \
-     -o "${STAGING}"
-   curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}.sha256" \
-     -o "${STAGING}.sha256"
+   # Download binary and checksum file using the release artifact filename
+   curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}" \
+     -o "${STAGING_DIR}/gbrain-${PLATFORM}"
+   curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${TARGET_VERSION}/gbrain-${PLATFORM}.sha256" \
+     -o "${STAGING_DIR}/gbrain-${PLATFORM}.sha256"
    ```
 
 2. **Verify integrity before installing:**
    ```bash
-   # Verify SHA-256 checksum matches published hash
-   echo "$(cat ${STAGING}.sha256)  ${STAGING}" | shasum -a 256 --check
+   # .sha256 files use standard 'hash  filename' format — use --check directly
+   (cd "${STAGING_DIR}" && shasum -a 256 --check "gbrain-${PLATFORM}.sha256")
    # If check fails: STOP. Do not install. Report the mismatch.
    ```
 
@@ -2024,7 +2025,7 @@ description: |
    ```bash
    INSTALL_PATH="$(which gbrain)"
    cp "${INSTALL_PATH}" "${INSTALL_PATH}.rollback"
-   cp "${STAGING}" "${INSTALL_PATH}" && chmod +x "${INSTALL_PATH}"
+   cp "${STAGING_DIR}/gbrain-${PLATFORM}" "${INSTALL_PATH}" && chmod +x "${INSTALL_PATH}"
    ```
 
 4. **Run migrations:** `gbrain version` — the binary auto-migrates on startup if needed.
@@ -2045,7 +2046,7 @@ description: |
 
 8. **Clean up:** Remove staging file and rollback binary if everything passed.
    ```bash
-   rm -f "${STAGING}" "${STAGING}.sha256"
+   rm -rf "${STAGING_DIR}"
    # Keep rollback binary for 7 days, then clean: rm "${INSTALL_PATH}.rollback"
    ```
 
@@ -2088,7 +2089,7 @@ If anything goes wrong:
 Every GitHub release MUST publish:
 - Platform binaries: `gbrain-linux-x86_64`, `gbrain-darwin-arm64`, etc.
 - SHA-256 checksums: `gbrain-linux-x86_64.sha256`, `gbrain-darwin-arm64.sha256`, etc.
-- Each `.sha256` file contains the hex digest only (no filename), one line.
+- Each `.sha256` file contains standard `shasum -a 256` output: `<hex-digest>  <filename>`, one line.
 - The release workflow generates checksums in CI, not locally, to prevent tampering.
 ```
 
@@ -2358,19 +2359,19 @@ strategy:
 # - run: otool -L target/${{ matrix.target }}/release/gbrain | grep -qv "\.dylib" || true           # macOS (system libs OK)
 
 # Post-build: generate SHA-256 checksums for integrity verification
-# - run: shasum -a 256 target/${{ matrix.target }}/release/gbrain | awk '{print $1}' > gbrain-${{ matrix.target }}.sha256
-# Publish both binary and .sha256 file as release assets
+# - run: shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+# Publish both binary and .sha256 file as release assets (format: 'hash  filename', one line)
 ```
 
 Release artifacts published to GitHub Releases on tag push. Each release includes platform binaries and SHA-256 checksum files (generated in CI, not locally). Install via the upgrade skill (see `skills/upgrade/SKILL.md`) which handles version pinning and checksum verification. Quick install for first-time users:
 
 ```bash
 VERSION="v0.1.0"
-PLATFORM="darwin-arm64"
-curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o /tmp/gbrain
-curl -fsSL "https://github.com/[owner]/gbrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o /tmp/gbrain.sha256
-echo "$(cat /tmp/gbrain.sha256)  /tmp/gbrain" | shasum -a 256 --check
-cp /tmp/gbrain /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
+PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
+shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+mv "gbrain-${PLATFORM}" /usr/local/bin/gbrain && chmod +x /usr/local/bin/gbrain
 ```
 
 ---
