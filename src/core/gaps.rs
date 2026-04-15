@@ -12,6 +12,7 @@ pub enum GapsError {
     Sqlite(#[from] rusqlite::Error),
 
     #[error("gap not found: id {id}")]
+    #[allow(dead_code)] // Constructed by resolve_gap, wired in Phase 2 Group 9
     NotFound { id: i64 },
 }
 
@@ -69,6 +70,7 @@ pub fn list_gaps(
 }
 
 /// Mark a gap as resolved by linking it to the page that answered the query.
+#[allow(dead_code)] // Wired in Phase 2 Group 9 (MCP brain_gap_resolve)
 pub fn resolve_gap(id: i64, resolved_by_slug: &str, conn: &Connection) -> Result<(), GapsError> {
     let rows = conn.execute(
         "UPDATE knowledge_gaps SET \
