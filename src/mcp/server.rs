@@ -7,9 +7,12 @@ use rmcp::{ServerHandler, ServiceExt};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+use crate::commands::{check, link, tags, timeline};
 use crate::commands::get::get_page;
+use crate::core::assertions::AssertionError;
 use crate::core::fts::search_fts;
 use crate::core::gaps;
+use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::markdown;
 use crate::core::palace;
 use crate::core::progressive::progressive_retrieve;
@@ -99,6 +102,49 @@ fn map_search_error(e: SearchError) -> rmcp::Error {
     }
 }
 
+fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
+    let msg = e.to_string();
+    if msg.contains("page not found") || msg.contains("link not found") {
+        rmcp::Error::new(ErrorCode(-32001), msg, None)
+    } else {
+        rmcp::Error::new(ErrorCode(-32003), msg, None)
+    }
+}
+
+fn map_graph_error(e: GraphError) -> rmcp::Error {
+    match e {
+        GraphError::PageNotFound { slug } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("page not found: {slug}"),
+            None,
+        ),
+        GraphError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+    }
+}
+
+fn map_assertion_error(e: AssertionError) -> rmcp::Error {
+    match e {
+        AssertionError::PageNotFound { slug } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("page not found: {slug}"),
+            None,
+        ),
+        AssertionError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+    }
+}
+
+fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
+    match temporal.unwrap_or("active") {
+        "active" => Ok(TemporalFilter::Active),
+        "all" => Ok(TemporalFilter::All),
+        other => Err(rmcp::Error::new(
+            ErrorCode(-32602),
+            format!("invalid temporal filter: {other}"),
+            None,
+        )),
+    }
+}
+
 #[derive(Clone)]
 pub struct GigaBrainServer {
     db: DbRef,
@@ -158,6 +204,52 @@ pub struct BrainListInput {
     pub page_type: Option<String>,
     /// Maximum results to return
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainLinkInput {
+    pub from_slug: String,
+    pub to_slug: String,
+    pub relationship: String,
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainLinkCloseInput {
+    pub link_id: u64,
+    pub valid_until: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainBacklinksInput {
+    pub slug: String,
+    pub temporal: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainGraphInput {
+    pub slug: String,
+    pub depth: Option<u32>,
+    pub temporal: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainCheckInput {
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainTimelineInput {
+    pub slug: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainTagsInput {
+    pub slug: String,
+    pub add: Option<Vec<String>>,
+    pub remove: Option<Vec<String>>,
 }
 
 #[tool(tool_box)]
@@ -605,5 +697,399 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32009));
         assert_eq!(error.data, Some(json!({ "current_version": null })));
+    }
+
+    // ── Phase 2 MCP tests ────────────────────────────────────
+
+    fn create_page(server: &GigaBrainServer, slug: &str, content: &str) {
+        server
+            .brain_put(BrainPutInput {
+                slug: slug.to_string(),
+                content: content.to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+    }
+
+    // ── brain_link ───────────────────────────────────────────
+
+    #[test]
+    fn brain_link_with_unknown_from_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme Corp\n",
+        );
+
+        let error = server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/ghost".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_link_creates_link_between_existing_pages() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        let result = server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: Some("2024-01".to_string()),
+                valid_until: None,
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        assert!(text.contains("Linked"));
+        assert!(text.contains("people/alice"));
+    }
+
+    // ── brain_link_close ─────────────────────────────────────
+
+    #[test]
+    fn brain_link_close_with_unknown_id_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_link_close(BrainLinkCloseInput {
+                link_id: 99999,
+                valid_until: "2025-06".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_link_close_sets_valid_until_on_existing_link() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: Some("2024-01".to_string()),
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_link_close(BrainLinkCloseInput {
+                link_id: 1,
+                valid_until: "2025-06".to_string(),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        assert!(text.contains("Closed link 1"));
+    }
+
+    // ── brain_backlinks ──────────────────────────────────────
+
+    #[test]
+    fn brain_backlinks_returns_link_array() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_backlinks(BrainBacklinksInput {
+                slug: "companies/acme".to_string(),
+                temporal: None,
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["from_slug"], "people/alice");
+        assert_eq!(arr[0]["relationship"], "works_at");
+    }
+
+    #[test]
+    fn brain_backlinks_unknown_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_backlinks(BrainBacklinksInput {
+                slug: "nobody/ghost".to_string(),
+                temporal: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    // ── brain_graph ──────────────────────────────────────────
+
+    #[test]
+    fn brain_graph_returns_nodes_and_edges_json() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_graph(BrainGraphInput {
+                slug: "people/alice".to_string(),
+                depth: Some(2),
+                temporal: None,
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(parsed["nodes"].as_array().unwrap().len() >= 2);
+        assert!(!parsed["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn brain_graph_unknown_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_graph(BrainGraphInput {
+                slug: "people/ghost".to_string(),
+                depth: None,
+                temporal: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    // ── brain_check ──────────────────────────────────────────
+
+    #[test]
+    fn brain_check_on_clean_page_returns_empty_array() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice is a person.\n",
+        );
+
+        let result = server
+            .brain_check(BrainCheckInput {
+                slug: Some("people/alice".to_string()),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn brain_check_detects_contradiction_on_page() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+        );
+
+        let result = server
+            .brain_check(BrainCheckInput {
+                slug: Some("people/alice".to_string()),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(!parsed.as_array().unwrap().is_empty());
+    }
+
+    // ── brain_timeline ───────────────────────────────────────
+
+    #[test]
+    fn brain_timeline_on_unknown_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_timeline(BrainTimelineInput {
+                slug: "nobody/ghost".to_string(),
+                limit: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_timeline_returns_entries_for_page_with_timeline() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice bio\n\n## Timeline\n\n2024-01: Joined Acme\n---\n2024-06: Promoted\n",
+        );
+
+        let result = server
+            .brain_timeline(BrainTimelineInput {
+                slug: "people/alice".to_string(),
+                limit: Some(10),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["slug"], "people/alice");
+    }
+
+    // ── brain_tags ───────────────────────────────────────────
+
+    #[test]
+    fn brain_tags_list_add_remove_round_trip() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        // List tags — should be empty
+        let result = server
+            .brain_tags(BrainTagsInput {
+                slug: "people/alice".to_string(),
+                add: None,
+                remove: None,
+            })
+            .unwrap();
+        let text = extract_text(&result);
+        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
+        assert!(tags.is_empty());
+
+        // Add tags
+        let result = server
+            .brain_tags(BrainTagsInput {
+                slug: "people/alice".to_string(),
+                add: Some(vec!["investor".to_string(), "founder".to_string()]),
+                remove: None,
+            })
+            .unwrap();
+        let text = extract_text(&result);
+        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
+        assert_eq!(tags, vec!["founder", "investor"]);
+
+        // Remove a tag
+        let result = server
+            .brain_tags(BrainTagsInput {
+                slug: "people/alice".to_string(),
+                add: None,
+                remove: Some(vec!["investor".to_string()]),
+            })
+            .unwrap();
+        let text = extract_text(&result);
+        let tags: Vec<String> = serde_json::from_str(&text).unwrap();
+        assert_eq!(tags, vec!["founder"]);
+    }
+
+    #[test]
+    fn brain_tags_unknown_slug_returns_not_found() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_tags(BrainTagsInput {
+                slug: "nobody/ghost".to_string(),
+                add: Some(vec!["tag".to_string()]),
+                remove: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    fn extract_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|c| match &c.raw {
+                RawContent::Text(tc) => Some(tc.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
     }
 }

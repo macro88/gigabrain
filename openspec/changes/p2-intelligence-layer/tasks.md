@@ -82,15 +82,15 @@ OCC on `brain_put` is already complete — do not re-implement.
 
 ## Group 9 — MCP Phase 2 Write Surface (`src/mcp/server.rs`)
 
-- [ ] 9.1  Add `BrainLinkInput` struct and `brain_link` tool method. Delegate to `commands::link::run`. Map anyhow errors to `ErrorCode(-32001)` for page-not-found, `-32003` for other db errors.
-- [ ] 9.2  Add `BrainLinkCloseInput` struct and `brain_link_close` tool method. Delegate to `commands::link::close`. Return `-32001` if link not found.
-- [ ] 9.3  Add `BrainBacklinksInput` struct and `brain_backlinks` tool method. Delegate to `commands::link::backlinks`. Return JSON array. Validate slug with `validate_slug`.
-- [ ] 9.4  Add `BrainGraphInput` struct and `brain_graph` tool method. Delegate to `core::graph::neighborhood_graph`. Validate slug. Return JSON `{"nodes": [...], "edges": [...]}`. Cap depth at 10.
-- [ ] 9.5  Add `BrainCheckInput` struct and `brain_check` tool method. Delegate to `core::assertions::check_assertions` (single slug) or iterate all pages (no slug). Return JSON array of contradictions.
-- [ ] 9.6  Add `BrainTimelineInput` struct and `brain_timeline` tool method. Delegate to `commands::timeline::run` (JSON mode). Validate slug. Default limit 20, max 1000.
-- [ ] 9.7  Add `BrainTagsInput` struct and `brain_tags` tool method. Delegate to `commands::tags`. If both `add` and `remove` are absent, list tags. Return JSON array of current tags after operation.
-- [ ] 9.8  Update `get_info_enables_tools_capability` test (or add a new test) to reference the 7 new Phase 2 tool method signatures, confirming they compile and are accessible.
-- [ ] 9.9  Write MCP tests: `brain_link` with unknown from_slug returns -32001; `brain_link_close` with unknown id returns -32001; `brain_backlinks` returns link array; `brain_graph` returns nodes+edges JSON; `brain_check` on clean page returns `[]`; `brain_timeline` on unknown slug returns -32001; `brain_tags` list/add/remove round-trip.
+- [x] 9.1  Add `BrainLinkInput` struct and `brain_link` tool method. Delegate to `commands::link::run`. Map anyhow errors to `ErrorCode(-32001)` for page-not-found, `-32003` for other db errors.
+- [x] 9.2  Add `BrainLinkCloseInput` struct and `brain_link_close` tool method. Delegate to `commands::link::close`. Return `-32001` if link not found.
+- [x] 9.3  Add `BrainBacklinksInput` struct and `brain_backlinks` tool method. Delegate to `commands::link::backlinks`. Return JSON array. Validate slug with `validate_slug`.
+- [x] 9.4  Add `BrainGraphInput` struct and `brain_graph` tool method. Delegate to `core::graph::neighborhood_graph`. Validate slug. Return JSON `{"nodes": [...], "edges": [...]}`. Cap depth at 10.
+- [x] 9.5  Add `BrainCheckInput` struct and `brain_check` tool method. Delegate to `core::assertions::check_assertions` (single slug) or iterate all pages (no slug). Return JSON array of contradictions.
+- [x] 9.6  Add `BrainTimelineInput` struct and `brain_timeline` tool method. Delegate to `commands::timeline::run` (JSON mode). Validate slug. Default limit 20, max 1000.
+- [x] 9.7  Add `BrainTagsInput` struct and `brain_tags` tool method. Delegate to `commands::tags`. If both `add` and `remove` are absent, list tags. Return JSON array of current tags after operation.
+- [x] 9.8  Update `get_info_enables_tools_capability` test (or add a new test) to reference the 7 new Phase 2 tool method signatures, confirming they compile and are accessible.
+- [x] 9.9  Write MCP tests: `brain_link` with unknown from_slug returns -32001; `brain_link_close` with unknown id returns -32001; `brain_backlinks` returns link array; `brain_graph` returns nodes+edges JSON; `brain_check` on clean page returns `[]`; `brain_timeline` on unknown slug returns -32001; `brain_tags` list/add/remove round-trip.
 
 ## Group 10 — Phase 2 Ship Gate
 
