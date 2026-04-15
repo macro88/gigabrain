@@ -22,6 +22,8 @@
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
 - Phase 3 release-readiness work ships via branch `p3/release-readiness-docs-coverage` → draft PR #15. Includes CI coverage job, release workflow hardening, release checklist, docs-site polish, and README accuracy fixes. All P3 tasks marked complete in `openspec/changes/p3-polish-benchmarks/tasks.md`.
 - PR #15 review fix (2026-04-15): Addressed all 9 Copilot review comments. Install snippets across README, install.md, quick-start.md, spec.md, and release.yml now offer both `~/.local/bin` (user-local) and `sudo` (system-wide) install options. Removed inaccurate "embedded model weights" claims; install.md now documents the actual cached-HF / online-model / hash-shim behavior. Fixed typo and consolidated duplicate `## Learnings` headings in zapp history. All 9 threads replied to and resolved.
+- Graph BFS (Phase 2): bidirectional traversal (outbound + inbound links) with link-ID edge dedup via `HashSet<i64>` prevents duplicate edges in the result. The `prepare_cached()` API reuses compiled SQL across BFS iterations. Graph types live in `src/core/graph.rs` (not types.rs) because they're graph-specific. The CLI `--temporal` flag defaults to `"current"` which maps to `TemporalFilter::Active`.
+- Integration tests use `gbrain::` crate path via `src/lib.rs` (which re-exports `pub mod commands; pub mod core; pub mod mcp;`). Test helper pattern: `open_test_db()` returns a Connection with `std::mem::forget(dir)` to prevent TempDir cleanup during test.
 
 ## Core Context
 
