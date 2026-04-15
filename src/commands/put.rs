@@ -35,10 +35,14 @@ pub fn run(db: &Connection, slug: &str, expected_version: Option<i64>) -> Result
     let frontmatter_json = serde_json::to_string(&frontmatter)?;
 
     let now = now_iso_from(db);
-    let existing_version: Option<i64> = db
+    let existing_version: Option<i64> = match db
         .prepare("SELECT version FROM pages WHERE slug = ?1")?
         .query_row([slug], |row| row.get(0))
-        .ok();
+    {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(e.into()),
+    };
 
     match existing_version {
         None => {
@@ -194,10 +198,14 @@ mod tests {
         let frontmatter_json = serde_json::to_string(&frontmatter)?;
         let now = now_iso_from(db);
 
-        let existing_version: Option<i64> = db
+        let existing_version: Option<i64> = match db
             .prepare("SELECT version FROM pages WHERE slug = ?1")?
             .query_row([slug], |row| row.get(0))
-            .ok();
+        {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
 
         match existing_version {
             None => {

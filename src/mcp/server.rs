@@ -211,11 +211,15 @@ impl GigaBrainServer {
             })
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
 
-        let existing_version: Option<i64> = db
+        let existing_version: Option<i64> = match db
             .prepare("SELECT version FROM pages WHERE slug = ?1")
             .map_err(map_db_error)?
             .query_row([&input.slug], |row| row.get(0))
-            .ok();
+        {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(map_db_error(e)),
+        };
 
         match existing_version {
             None => {
@@ -314,9 +318,9 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let results =
-            hybrid_search(&input.query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
+        let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
+        let results = hybrid_search(&input.query, input.wing.as_deref(), &db, limit)
+            .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -331,8 +335,8 @@ impl GigaBrainServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let results =
-            search_fts(&input.query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
+        let results = search_fts(&input.query, input.wing.as_deref(), &db, limit)
+            .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;

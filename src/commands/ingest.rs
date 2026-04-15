@@ -9,11 +9,11 @@ use crate::core::{markdown, palace};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let file = Path::new(path);
-    let raw = fs::read_to_string(file)?;
-    let hash = sha256_hex(raw.as_bytes());
+    let raw_bytes = fs::read(file)?;
+    let hash = sha256_hex(&raw_bytes);
+    let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
 
-    // Check ingest_log for existing ingestion
-    ensure_ingest_table(db)?;
+    // Check ingest_log for existing ingestion (uses canonical ingest_log table from schema.sql)
     if !force && is_already_ingested(db, &hash)? {
         println!("Already ingested (SHA-256 match), use --force to re-ingest");
         return Ok(());
@@ -43,11 +43,21 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let frontmatter_json = serde_json::to_string(&frontmatter)?;
 
     db.execute(
-        "INSERT OR REPLACE INTO pages \
+        "INSERT INTO pages \
              (slug, type, title, summary, compiled_truth, timeline, \
               frontmatter, wing, room, version) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, \
-                 COALESCE((SELECT version + 1 FROM pages WHERE slug = ?1), 1))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1) \
+         ON CONFLICT(slug) DO UPDATE SET \
+             type = excluded.type, \
+             title = excluded.title, \
+             summary = excluded.summary, \
+             compiled_truth = excluded.compiled_truth, \
+             timeline = excluded.timeline, \
+             frontmatter = excluded.frontmatter, \
+             wing = excluded.wing, \
+             room = excluded.room, \
+             version = pages.version + 1, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
         rusqlite::params![
             slug,
             page_type,
@@ -67,20 +77,9 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn ensure_ingest_table(db: &Connection) -> Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS import_hashes (\
-             source_hash TEXT PRIMARY KEY, \
-             source_path TEXT NOT NULL, \
-             ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\
-         )",
-    )?;
-    Ok(())
-}
-
 fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
     let count: i64 = db.query_row(
-        "SELECT COUNT(*) FROM import_hashes WHERE source_hash = ?1",
+        "SELECT COUNT(*) FROM ingest_log WHERE ingest_key = ?1",
         [hash],
         |row| row.get(0),
     )?;
@@ -89,7 +88,8 @@ fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
 
 fn record_ingest(db: &Connection, hash: &str, path: &str) -> Result<()> {
     db.execute(
-        "INSERT OR REPLACE INTO import_hashes (source_hash, source_path) VALUES (?1, ?2)",
+        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref) \
+         VALUES (?1, 'file', ?2)",
         rusqlite::params![hash, path],
     )?;
     Ok(())

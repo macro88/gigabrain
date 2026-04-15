@@ -8,12 +8,58 @@ struct TimelineOutput {
     entries: Vec<String>,
 }
 
-/// Show timeline entries for a page, parsed from the timeline markdown section.
+/// Show timeline entries for a page from the `timeline_entries` table,
+/// with legacy fallback to the page's `timeline` markdown field.
 pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
+    // Verify page exists
     let page = crate::commands::get::get_page(db, slug)?;
 
-    let timeline = page.timeline.trim();
-    if timeline.is_empty() {
+    let page_id: i64 = db
+        .query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => anyhow::anyhow!("page not found: {slug}"),
+            other => other.into(),
+        })?;
+
+    // Query structured timeline_entries table
+    let mut stmt = db.prepare(
+        "SELECT date, summary, source, detail FROM timeline_entries \
+         WHERE page_id = ?1 ORDER BY date DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![page_id, limit], |row| {
+        let date: String = row.get(0)?;
+        let summary: String = row.get(1)?;
+        let source: String = row.get(2)?;
+        let detail: String = row.get(3)?;
+        let mut entry = format!("{date}: {summary}");
+        if !source.is_empty() {
+            entry.push_str(&format!(" [source: {source}]"));
+        }
+        if !detail.is_empty() {
+            entry.push_str(&format!("\n{detail}"));
+        }
+        Ok(entry)
+    })?;
+
+    let mut entries: Vec<String> = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+
+    // Fall back to legacy timeline markdown field if no structured entries exist
+    if entries.is_empty() {
+        let timeline = page.timeline.trim();
+        if !timeline.is_empty() {
+            entries = split_timeline(timeline)
+                .into_iter()
+                .take(limit as usize)
+                .collect();
+        }
+    }
+
+    if entries.is_empty() {
         if json {
             let output = TimelineOutput {
                 slug: slug.to_string(),
@@ -25,11 +71,6 @@ pub fn run(db: &Connection, slug: &str, limit: u32, json: bool) -> Result<()> {
         }
         return Ok(());
     }
-
-    let entries: Vec<String> = split_timeline(timeline)
-        .into_iter()
-        .take(limit as usize)
-        .collect();
 
     if json {
         let output = TimelineOutput {

@@ -18,7 +18,8 @@ pub fn run(db: &Connection, action: ConfigAction) -> Result<()> {
                 });
             match value {
                 Ok(v) => println!("{v}"),
-                Err(_) => println!("Not set"),
+                Err(rusqlite::Error::QueryReturnedNoRows) => println!("Not set"),
+                Err(e) => return Err(e.into()),
             }
         }
         ConfigAction::Set { key, value } => {

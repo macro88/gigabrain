@@ -349,7 +349,8 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", Some("people"), &conn, 1000).expect("hybrid search");
+        let results =
+            hybrid_search("AI founder", Some("people"), &conn, 1000).expect("hybrid search");
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));
