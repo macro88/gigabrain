@@ -9,6 +9,16 @@
 
 - `docs\spec.md` is the primary product spec.
 
+## Core Context
+
+**Sprint 0 Foundation (2026-04-13):** Leela created 4 OpenSpec proposals (`sprint-0-repo-scaffold`, `p1-core-storage-cli`, `p2-intelligence-layer`, `p3-polish-benchmarks`) and full repo scaffold (24 CLI commands, 15 core modules, MCP stub, full schema DDL, 8 skill stubs, GitHub Actions CI/release workflows). Four sequential phases with hard gates: Phase 1 gate = round-trip test + MCP + static binary. Architecture: Fry owns implementation; Professor + Nibbler gate approval. Constraints: no pwsh.exe on machine; manual git/PR required.
+
+**Phase 1 OpenSpec Unblock (2026-04-14):** Created all missing OpenSpec artifacts (design.md, 6 capability specs, tasks.md with 57 tasks in 12 groups). Architecture decisions locked: single rusqlite conn + WAL for concurrency, lazy Candle init via OnceLock, offline model weights (include_bytes), hybrid search (SMS shortcut → FTS5+vec → RRF merge), OCC with `-32009` error code, wing-level palace (room deferred to Phase 2), error split (thiserror in core, anyhow in commands).
+
+**Links & Tags Contracts (2026-04-14):** Clarified two gate-blocking contracts: (1) Links use integer IDs in DB, slugs in app layer — resolver in db layer on insert/read. (2) Tags live exclusively in tags table (no OCC, idempotent via INSERT OR IGNORE, no page version bump). Unblocked Fry T10 and T11 implementation.
+
+---
+
 ## 2026-04-14 Search/Embed/Query Revision — T14/T18/T19 Honesty Pass
 
 **What was done:**

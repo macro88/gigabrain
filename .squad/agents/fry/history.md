@@ -21,6 +21,16 @@
 - Reviewed and proposed adoption of `rust-best-practices` skill (Apollo GraphQL handbook, 9 chapters) at `.agents/skills/rust-best-practices/`. Decision note at `.squad/decisions/inbox/fry-rust-skill-adoption.md`. Key caveats: `#[expect]` needs MSRV ≥1.81, `rustfmt` import grouping needs nightly, snapshot testing (`insta`) deferred to Phase 1 test work.
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
 
+## Core Context
+
+**Phase 1 Foundation (2026-04-14):** Fry implemented `src/core/types.rs` (Page, Link, Tag, TimelineEntry, SearchResult, KnowledgeGap, IngestRecord structs; SearchMergeStrategy enum; OccError/DbError errors via thiserror). Key design: Link stores slugs at app layer, IDs at DB layer (resolver in db). Page.page_type uses serde(rename) for Rust keyword `type`. All integer IDs/versions are i64 to match SQLite. Module-level #![allow(dead_code)] temporary until db.rs wires.
+
+**Database Layer (2026-04-14):** Implemented `src/core/db.rs` (open, compact, set_version tasks 3.1–3.5). sqlite-vec loaded via sqlite3_auto_extension + std::sync::Once guard for idempotency. Schema DDL via include_str! from src/schema.sql. vec0 virtual table and embedding_models seed separate from schema (depend on extension loading first). OccError/DbError split (thiserror). 7 unit tests: table creation, user_version, WAL, foreign keys, path validation, idempotency, compact. All gates pass.
+
+**Markdown Layer (2026-04-14):** Implemented `src/core/markdown.rs` (parse_frontmatter, split_content, extract_summary, render_page; tasks 4.1–4.10). Design: byte-offset search for \n---\n to preserve fidelity. Frontmatter sorted alphabetically for determinism. Timeline separator only emitted when timeline non-empty. Summary = first paragraph or first non-empty line (max 200 chars). Graceful YAML degradation (non-scalar values skipped, malformed → empty map). 21 unit tests per rust-best-practices nested mod pattern. All gates pass.
+
+---
+
 ## 2026-04-14 Update
 
 - Rust skill adoption recommendation delivered and accepted by team. Fry's work product captured in `.squad/orchestration-log/2026-04-14T01-53-00Z-fry.md` and merged into team decisions ledger.
