@@ -9,6 +9,16 @@
 
 - `docs\spec.md` is the primary product spec.
 
+## Core Context
+
+**Sprint 0 Foundation (2026-04-13):** Leela created 4 OpenSpec proposals (`sprint-0-repo-scaffold`, `p1-core-storage-cli`, `p2-intelligence-layer`, `p3-polish-benchmarks`) and full repo scaffold (24 CLI commands, 15 core modules, MCP stub, full schema DDL, 8 skill stubs, GitHub Actions CI/release workflows). Four sequential phases with hard gates: Phase 1 gate = round-trip test + MCP + static binary. Architecture: Fry owns implementation; Professor + Nibbler gate approval. Constraints: no pwsh.exe on machine; manual git/PR required.
+
+**Phase 1 OpenSpec Unblock (2026-04-14):** Created all missing OpenSpec artifacts (design.md, 6 capability specs, tasks.md with 57 tasks in 12 groups). Architecture decisions locked: single rusqlite conn + WAL for concurrency, lazy Candle init via OnceLock, offline model weights (include_bytes), hybrid search (SMS shortcut → FTS5+vec → RRF merge), OCC with `-32009` error code, wing-level palace (room deferred to Phase 2), error split (thiserror in core, anyhow in commands).
+
+**Links & Tags Contracts (2026-04-14):** Clarified two gate-blocking contracts: (1) Links use integer IDs in DB, slugs in app layer — resolver in db layer on insert/read. (2) Tags live exclusively in tags table (no OCC, idempotent via INSERT OR IGNORE, no page version bump). Unblocked Fry T10 and T11 implementation.
+
+---
+
 ## 2026-04-14 Search/Embed/Query Revision — T14/T18/T19 Honesty Pass
 
 **What was done:**
@@ -189,6 +199,34 @@
 
 **Learning:** Mixed-mode CLI flag validation belongs at function entry, not threaded through downstream conditionals. When a spec sweep flag says "skip if unchanged", --all and --stale should behave identically on the skip check — the flag distinction is user-intent signal, not a behavioral fork.
 
+## 2026-04-15 Phase 2 OpenSpec Package Completion
+
+**What was done:**
+- Assessed the complete current-state of the codebase against the P2 proposal.
+- Created all four required OpenSpec artifacts for `p2-intelligence-layer`; `openspec status` now shows 4/4 complete.
+- Artifacts created:
+  1. `design.md` — 8 key design decisions, risk table, migration plan, open questions
+  2. `specs/graph/spec.md` — N-hop BFS, temporal filtering, graph CLI
+  3. `specs/assertions/spec.md` — triple extraction, contradiction detection, check CLI
+  4. `specs/progressive-retrieval/spec.md` — token-budget gating, depth flag, palace room
+  5. `specs/novelty-gaps/spec.md` — novelty wiring into ingest, knowledge gaps log/list/resolve
+  6. `specs/mcp-phase2/spec.md` — 7 new MCP tools (brain_link, brain_link_close, brain_backlinks, brain_graph, brain_check, brain_timeline, brain_tags)
+  7. `tasks.md` — 10 groups, 49 tasks, assigned to Fry on branch `phase2/p2-intelligence-layer`
+
+**Key scope findings from codebase audit:**
+- OCC on `brain_put` is ALREADY fully implemented (SG-6 fix). Excluded from P2 tasks.
+- `src/commands/link.rs` is ALREADY fully implemented (create, close, backlinks, unlink + 12 tests). MCP wiring only needed.
+- `src/core/novelty.rs` logic is complete but NOT wired into ingest — wiring is a Group 6 task.
+- `src/core/palace.rs::derive_room` is a stub returning `""` — real implementation is a Group 7 task.
+- Groups 1–4 (graph + assertions) are pure net-new implementation.
+- Groups 5, 8 (progressive retrieval + gaps) are pure net-new implementation.
+
+**Decision file:** `.squad/decisions/inbox/leela-p2-openspec.md`
+
+**Patterns learned:**
+- When a proposal says "Full MCP write surface", always audit what's already implemented vs. stub before scoping. Several P2 items (link.rs, OCC) were done in Phase 1 and needed removal from P2 scope.
+- `openspec status` is the canonical check. 4/4 is the only acceptable state before handing to Fry.
+
 ## 2026-04-15 SG-6 Final Blockers — Direct Fix (Nibbler 2nd Rejection)
 
 **What was done:**
@@ -202,3 +240,70 @@
 
 **Learning:** "Truncate after materialization" is never sufficient for resource exhaustion protection. The limit must be pushed into the DB query (SQL LIMIT) to prevent full scans on large corpora. Always trace the result cardinality back to the SQL layer, not just the handler layer.
 
+## 2026-04-15 Task 5.3 Review — REJECTED (documentation-accuracy violations)
+
+**What was done:**
+- Reviewed task 5.3 against all four p3-polish-benchmarks spec files:
+  - `specs/coverage-reporting/spec.md`
+  - `specs/documentation-accuracy/spec.md`
+  - `specs/docs-site/spec.md`
+  - `specs/release-readiness/spec.md`
+- Workflow implementation (ci.yml, docs.yml, release.yml): CLEAN. Coverage job, docs build/deploy split, release artifact matrix + checksum re-verification all match specs.
+- RELEASE_CHECKLIST.md: CLEAN. All deferred channels named explicitly.
+- README install/status copy: CLEAN. Phase 1 "In progress", deferred channels labeled.
+- Docs site structure and nav (astro.config.mjs, index.mdx): CLEAN. Install, status, roadmap, contribution paths all surfaced.
+
+**Two violations found — both in Amy's docs work:**
+1. **Phase 1 status inconsistency:** README says "🔨 In progress"; `install.md` and `roadmap.md` say "Not started." Violates the shared-status requirement in documentation-accuracy spec.
+2. **Stale coverage docs:** `install.md` says coverage is "planned as part of Phase 3 polish." But ci.yml has a live coverage job with lcov artifact, GITHUB_STEP_SUMMARY, and optional Codecov upload. Violates coverage-reporting spec requirement that docs must point to the supported coverage surface.
+
+**Deferred scope check passed:** npm, Homebrew, curl-installer, and benchmarks are absent from all four surfaces. No scope creep.
+
+**Verdict:** REJECTED. Task 5.3 not marked done. Amy to revise `install.md` (phase status + coverage section) and `roadmap.md` (phase status). No workflow or README changes needed.
+
+**Decision file:** `.squad/decisions/inbox/leela-p3-review.md`
+
+**Key lessons:**
+- When implementation work (coverage CI) lands before or alongside doc work, the doc author must audit the workflow files — not just the README — before finalizing copy. Calling a live feature "planned" is a documentation-accuracy violation even if the doc was originally written before the feature.
+- Status tables must be updated in all doc surfaces atomically. A single canonical status row written once and symlinked/imported would prevent drift. Until that pattern exists, reviewers must check every table independently.
+
+## 2026-04-15 P3 Doc Fix — Rejected Artifacts Revision Pass (Amy locked out)
+
+**What was done:**
+- Revised `install.md` and `roadmap.md` after Amy's rejection on Phase 1 status mismatch and stale coverage docs.
+- Fixed Phase 1 status in both docs-site pages to match README: "🔨 In progress".
+- Rewrote `install.md` coverage section to describe the live CI surface: `cargo-llvm-cov`, `lcov.info` artifact, job summary, optional Codecov upload. Explicitly stated coverage is informational (not gating).
+- Fixed `reference/spec.md` checksum documentation: corrected `.sha256` format description from "hex digest only" to "standard shasum output: `hash  filename`", removed `awk '{print $1}'` from pseudocode, updated upgrade skill staging to use `STAGING_DIR` + platform filename + `shasum --check` directly, updated quick-install snippet to match README pattern.
+- README and workflow files left unchanged — they were already correct.
+- Reviewer re-review gates (5.1 Kif, 5.2 Scruffy) not marked complete.
+- Decision note written to `.squad/decisions/inbox/leela-p3-doc-fix.md`.
+
+**Key lessons:**
+- Doc authors must audit CI workflow files directly before calling any feature "planned." Calling a live CI job "planned" is a documentation-accuracy violation even when the doc predates the implementation.
+- The `.sha256` format matters: `shasum -a 256 file > file.sha256` produces `hash  filename` format (two spaces). If you stage a binary to a different path than the artifact name in the `.sha256`, `--check` won't find the file. Solution: preserve the artifact filename in the staging directory so `--check` works directly.
+
+
+
+**What was done:**
+- Re-scoped `openspec/changes/p3-polish-benchmarks` away from an all-remaining-Phase-3 catch-all and toward the work that is actually ready now: release readiness, stale-doc fixes, free coverage on `main`, and docs-site polish.
+- Updated the proposal frontmatter and body so the change now depends on `p1-core-storage-cli`, not `p2-intelligence-layer`, and names four concrete capabilities: `release-readiness`, `coverage-reporting`, `documentation-accuracy`, and `docs-site`.
+- Created the missing apply-blocking artifacts: `design.md`, four capability specs, and `tasks.md` with explicit routing for Fry, Amy, Hermes, and Zapp.
+- Wrote a decision note to `.squad/decisions/inbox/leela-p3-unblock.md` recording the scope cut: npm global distribution and simple installer UX stay documented as deferred follow-on work instead of being smuggled into this slice.
+
+**Learning:**
+- A phase proposal that tries to carry every remaining “someday” item becomes un-implementable. The fix is to cut to the smallest reviewable public surface that is truly ready now, then document the deferrals explicitly.
+- Docs honesty needs an explicit supported-now / planned-later split. Otherwise README, website, and workflow polish drift independently and reviewers end up arguing about implied promises instead of concrete deliverables.
+
+## 2026-04-15 P3 Release — Completion
+
+**Role:** OpenSpec unblock architect, spec/scope conformance reviewer
+
+**What happened:**
+- Leela's P3 unblock proposal successfully narrowed `p3-polish-benchmarks` to ready-now scope: release readiness, README/docs fixes, coverage on `main`, and docs-site polish.
+- Fry implemented coverage job (`cargo-llvm-cov` + standard checksum format), Zapp hardened release copy, Amy refreshed docs, Hermes improved docs-site UX.
+- Kif's review (task 5.1) and Scruffy's review (task 5.2) both rejected twice on doc-drift issues. Both teams applied fixes and re-passed review gates.
+- Final spec/scope conformance check completed and approved.
+
+**Outcome:** P3 Release project **COMPLETE**. Coverage visible in GitHub UI, release workflow hardened, README/website/workflow docs all aligned, all gates passed. Project ready for release.
+
+**Decision note:** `.squad/decisions.md` (merged from inbox) — P3 Release section documents all routing, decisions, gate feedback, and final approvals.

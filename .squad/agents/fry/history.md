@@ -10,6 +10,7 @@
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.
 - Every meaningful implementation starts with an OpenSpec proposal.
+- Doc parity requires matching artifact names exactly: CI produces a `coverage-report` artifact (not `lcov.info`); spec URLs must use `macro88/gigabrain`, not `[owner]`; checksum verify must use `shasum --check` directly against the `.sha256` file, not `echo ... | shasum --check`.
 - Always run `cargo fmt --all` before committing Rust code — CI enforces `cargo fmt --check` as the first gate and will skip all subsequent steps (clippy, check, test) if formatting fails.
 - Local Windows dev environment lacks MSVC SDK libs (`msvcrt.lib`), so clippy/build/test cannot run locally. Use CI (Linux) for full validation. Only `cargo fmt` works locally.
 - CI runs `cargo clippy -- -D warnings` which treats all warnings as errors. Stub functions with `todo!()` bodies must prefix all params with `_` to avoid unused variable errors.
@@ -19,6 +20,18 @@
 - `init` and `version` commands don't require a database connection; dispatch them before `db::open()` in main.
 - Reviewed and proposed adoption of `rust-best-practices` skill (Apollo GraphQL handbook, 9 chapters) at `.agents/skills/rust-best-practices/`. Decision note at `.squad/decisions/inbox/fry-rust-skill-adoption.md`. Key caveats: `#[expect]` needs MSRV ≥1.81, `rustfmt` import grouping needs nightly, snapshot testing (`insta`) deferred to Phase 1 test work.
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
+- Phase 3 release-readiness work ships via branch `p3/release-readiness-docs-coverage` → draft PR #15. Includes CI coverage job, release workflow hardening, release checklist, docs-site polish, and README accuracy fixes. All P3 tasks marked complete in `openspec/changes/p3-polish-benchmarks/tasks.md`.
+- PR #15 review fix (2026-04-15): Addressed all 9 Copilot review comments. Install snippets across README, install.md, quick-start.md, spec.md, and release.yml now offer both `~/.local/bin` (user-local) and `sudo` (system-wide) install options. Removed inaccurate "embedded model weights" claims; install.md now documents the actual cached-HF / online-model / hash-shim behavior. Fixed typo and consolidated duplicate `## Learnings` headings in zapp history. All 9 threads replied to and resolved.
+
+## Core Context
+
+**Phase 1 Foundation (2026-04-14):** Fry implemented `src/core/types.rs` (Page, Link, Tag, TimelineEntry, SearchResult, KnowledgeGap, IngestRecord structs; SearchMergeStrategy enum; OccError/DbError errors via thiserror). Key design: Link stores slugs at app layer, IDs at DB layer (resolver in db). Page.page_type uses serde(rename) for Rust keyword `type`. All integer IDs/versions are i64 to match SQLite. Module-level #![allow(dead_code)] temporary until db.rs wires.
+
+**Database Layer (2026-04-14):** Implemented `src/core/db.rs` (open, compact, set_version tasks 3.1–3.5). sqlite-vec loaded via sqlite3_auto_extension + std::sync::Once guard for idempotency. Schema DDL via include_str! from src/schema.sql. vec0 virtual table and embedding_models seed separate from schema (depend on extension loading first). OccError/DbError split (thiserror). 7 unit tests: table creation, user_version, WAL, foreign keys, path validation, idempotency, compact. All gates pass.
+
+**Markdown Layer (2026-04-14):** Implemented `src/core/markdown.rs` (parse_frontmatter, split_content, extract_summary, render_page; tasks 4.1–4.10). Design: byte-offset search for \n---\n to preserve fidelity. Frontmatter sorted alphabetically for determinism. Timeline separator only emitted when timeline non-empty. Summary = first paragraph or first non-empty line (max 200 chars). Graceful YAML degradation (non-scalar values skipped, malformed → empty map). 21 unit tests per rust-best-practices nested mod pattern. All gates pass.
+
+---
 
 ## 2026-04-14 Update
 
@@ -210,3 +223,41 @@
 - `cargo fmt`, `cargo clippy -- -D warnings` clean.
 - Commit `5886ec2` on `phase1/p1-core-storage-cli`. SG-6 checkbox NOT marked — requires Nibbler re-approval.
 - Decision note: `.squad/decisions/inbox/fry-sg6-fixes.md`.
+
+## Phase 3 Coverage + Release Workflow Hardening (Tasks 1.1–1.4)
+
+- **Task 1.1 Audit:** ci.yml had no coverage job; release.yml checksum format was hash-only (fragile, non-standard); release job had no artifact verification before publishing.
+- **Task 1.2 Coverage job:** Added `coverage` job to ci.yml using `cargo-llvm-cov` with `llvm-tools-preview`. Runs in parallel with `test` after `check` gate. Uses same `cargo test` path under the hood — no separate unreviewed test path.
+- **Task 1.3 Coverage outputs:**
+  - Machine-readable: `lcov.info` uploaded as GitHub Actions artifact.
+  - Human-readable: text summary posted to GitHub Job Summary (visible on every PR/push).
+  - Optional third-party: Codecov upload with `continue-on-error: true` — never blocks CI. Guarded to skip on fork PRs.
+- **Task 1.4 Release hardening:**
+  - Switched `.sha256` files from hash-only to standard `hash  filename` format. Enables direct `shasum -a 256 --check` verification.
+  - Added artifact existence verification step: all 8 files (4 binaries + 4 checksums) must be present before release creation.
+  - Added post-download checksum re-verification in release job.
+  - Updated release body template, README, docs-site quick-start, and install page to match the new standard checksum format.
+  - Updated Zapp's `RELEASE_CHECKLIST.md` to reflect the new checksum format.
+- **Spec reference:** All changes satisfy `specs/coverage-reporting/spec.md` and `specs/release-readiness/spec.md`.
+- All four tasks marked `[x]` in `openspec/changes/p3-polish-benchmarks/tasks.md`.
+
+### Learnings
+
+- `cargo llvm-cov report` reuses profraw data from the previous `cargo llvm-cov --lcov` run — no test re-execution needed for the text summary.
+- Standard `.sha256` format (`hash  filename`) is strictly better than hash-only: enables `shasum --check` directly, matches conventions from Go, Terraform, kubectl, etc.
+- Codecov v4 requires a token even for public repos. Making it `continue-on-error: true` with an optional `CODECOV_TOKEN` secret satisfies the "additive and non-blocking" spec requirement.
+- Release artifact verification should always happen as a separate step before `softprops/action-gh-release` — the action doesn't validate completeness itself.
+
+## 2026-04-15 P3 Release — Completion
+
+**Role:** CI/Release workflow implementation, artifact verification
+
+**What happened:**
+- Fry implemented `cargo-llvm-cov` coverage job and hardened release.yml with standard checksum format (`hash  filename`).
+- Kif's first review (task 5.1) rejected on two doc-drift issues: coverage artifact name mismatch, checksum format mismatch. Fry applied targeted fixes to spec.md and install.md.
+- After fixes, task 5.1 passed Kif's re-review. All four implementation tasks marked complete in tasks.md.
+- Coverage now visible in GitHub UI. Release workflow verified end-to-end.
+
+**Outcome:** P3 Release CI/Release component **COMPLETE**. Coverage job running, release workflow tested, artifact verification validated, all gates passed.
+
+**Decision notes:** `.squad/decisions.md` (merged from inbox) — documents coverage tool selection, checksum format standardization, informational (non-gating) coverage policy, and optional Codecov handling.
