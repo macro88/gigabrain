@@ -197,3 +197,16 @@
   - Build command: `CC_x86_64_unknown_linux_musl=musl-gcc CXX_x86_64_unknown_linux_musl=g++ CFLAGS_x86_64_unknown_linux_musl="..." CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc cargo build --release --target x86_64-unknown-linux-musl`
   - `ldd` confirms: "statically linked". `file` confirms: "static-pie linked, stripped". Binary size: 8.8MB (without embedded model weights).
   - Phase 2: consider embedding model weights via `include_bytes!()` for zero-network binary (~90MB).
+
+## SG-6 Security Fixes (Nibbler Rejection Response)
+
+- Addressed all 5 categories from Nibbler's SG-6 adversarial review rejection of `src/mcp/server.rs`:
+  1. **OCC bypass closed:** `brain_put` now requires `expected_version` for updates to existing pages. Returns `-32009` with `current_version` data when omitted. New page creation still allows `None`.
+  2. **Input validation:** `validate_slug()` enforces `[a-z0-9/_-]` + 512-char max. `validate_content()` caps at 1 MB. Both return `-32602`.
+  3. **Error code consistency:** Centralized `map_db_error()` routes UNIQUE→`-32009`, FTS5→`-32602`, other→`-32003`. `map_search_error()` wraps for SearchError.
+  4. **Resource exhaustion:** `limit` capped at `MAX_LIMIT = 1000` for list/query/search. Added missing `limit` field to `BrainQueryInput`/`BrainSearchInput`.
+  5. **Mutex recovery:** `unwrap_or_else(|e| e.into_inner())` replaces `map_err(internal_error)` — server recovers from poisoned mutex instead of permanently wedging.
+- 4 new tests (OCC bypass rejection, invalid slug, oversized content, empty slug). Total: 304 pass.
+- `cargo fmt`, `cargo clippy -- -D warnings` clean.
+- Commit `5886ec2` on `phase1/p1-core-storage-cli`. SG-6 checkbox NOT marked — requires Nibbler re-approval.
+- Decision note: `.squad/decisions/inbox/fry-sg6-fixes.md`.
