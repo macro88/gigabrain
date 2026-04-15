@@ -89,6 +89,48 @@ fn graph_cli_human_output_nests_depth_two_edges_under_their_parent() {
     );
 }
 
+#[test]
+fn graph_cli_human_output_skips_self_link_back_to_root() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "people/alice", "person", "Alice");
+    insert_link(&conn, "people/alice", "people/alice", "knows", None, None);
+
+    let mut out = Vec::<u8>::new();
+    gbrain::commands::graph::run_to(&conn, "people/alice", 1, "current", false, &mut out).unwrap();
+    let output = String::from_utf8(out).unwrap();
+
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        vec!["people/alice"],
+        "self-links must not render the root back into the tree; got: {output}"
+    );
+}
+
+#[test]
+fn graph_cli_human_output_skips_cycle_back_to_root() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let conn = open_test_db(&db_path);
+
+    insert_page(&conn, "a", "concept", "A");
+    insert_page(&conn, "b", "concept", "B");
+    insert_link(&conn, "a", "b", "related", None, None);
+    insert_link(&conn, "b", "a", "related", None, None);
+
+    let mut out = Vec::<u8>::new();
+    gbrain::commands::graph::run_to(&conn, "a", 2, "all", false, &mut out).unwrap();
+    let output = String::from_utf8(out).unwrap();
+
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        vec!["a", "  → b (related)"],
+        "cycles must not render an already-on-path node back into the tree; got: {output}"
+    );
+}
+
 // ── JSON output is valid JSON with nodes and edges keys ──────
 
 #[test]

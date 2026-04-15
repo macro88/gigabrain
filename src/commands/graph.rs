@@ -77,6 +77,11 @@ fn write_children<'a, W: Write>(
     };
 
     for edge in edges {
+        let child_slug = edge.to.as_str();
+        if active_path.contains(&child_slug) {
+            continue;
+        }
+
         writeln!(
             out,
             "{}→ {} ({})",
@@ -84,11 +89,6 @@ fn write_children<'a, W: Write>(
             edge.to,
             edge.relationship
         )?;
-
-        let child_slug = edge.to.as_str();
-        if active_path.contains(&child_slug) {
-            continue;
-        }
 
         active_path.push(child_slug);
         write_children(out, child_slug, edges_by_from, depth + 1, active_path)?;
