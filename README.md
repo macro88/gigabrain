@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Phase 1 in progress` — Sprint 0 (scaffold) is complete. Phase 1 (Core storage, CLI, search, MCP) is in active development. No release yet. [See the roadmap →](#roadmap)
+**Status:** `Phase 1 complete` — all ship gates passed. `v0.1.0` release pending tag push. [See the roadmap →](#roadmap)
 
 ---
 
@@ -15,7 +15,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
-| **Phase 1** — Core storage + CLI | 🔨 In progress | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
+| **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | 🔜 Not started | `link`, `graph`, `stats`, `check`, `gaps` |
 | **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
 
@@ -48,7 +48,7 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Planned features
 
-> These are the target features for v0.1. None are implemented yet. The spec and OpenSpec proposals define exactly how each will work.
+> These features ship with v0.1.0. Phase 1 implementation is complete — build from source or wait for the GitHub Release binary.
 
 - **Single static binary** — ~90MB including embedded BGE-small-en-v1.5 model weights. Zero runtime dependencies.
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
@@ -74,14 +74,14 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> **Not yet available.** Phase 1 (Core) is in active development — Sprint 0 (scaffold) is complete. The install options below show the full matrix: what works today, what ships with v0.1.0, and what is explicitly deferred.
+> Phase 1 is complete. Build from source today or download a pre-built binary once the v0.1.0 GitHub Release is published.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Scaffold compiles today; full implementation ships with Phase 1 |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Ships when v0.1.0 releases |
+| Build from source (`cargo build --release`) | ✅ Available now — Phase 1 complete |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
@@ -119,7 +119,7 @@ cargo build --release
 
 ## Usage
 
-> **Planned API.** These commands are the target surface for Phase 1 and Phase 2. They reflect the spec exactly but are not yet implemented. See [`docs/spec.md`](docs/spec.md) for full command signatures.
+> Phase 1 commands are implemented. Phase 2 commands (`link`, `graph`, `check`, `gaps`) are planned. See [`docs/spec.md`](docs/spec.md) for full command signatures.
 
 ```bash
 # Create a new brain
