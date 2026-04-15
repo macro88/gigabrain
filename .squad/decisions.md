@@ -1341,6 +1341,79 @@ cargo build --release --target x86_64-unknown-linux-musl
 - `file`: "ELF 64-bit LSB pie executable, x86-64, static-pie linked, stripped"
 - Size: 8.8MB (without embedded model weights)
 
+### 2026-04-15: Graph CLI parent-aware rendering (Professor)
+
+**By:** Professor
+
+**What:** Human-readable `gbrain graph` output now renders each edge beneath its actual `from` parent instead of flattening every edge under the root slug. Multi-hop depth-2 edges no longer read as direct root edges.
+
+**Why:** The graph result is a breadth-first slice, not a star. Flattened text output made valid depth-2 edges read misleadingly for review and operator trust.
+
+**How verified:**
+- Strengthened CLI integration test asserts exact depth-2 text shape
+- Root line, direct child edge, grandchild edge indented beneath child
+- Commit: `44ad720`
+
+**Guardrails kept:**
+- Outbound-only traversal unchanged
+- Edge deduping unchanged
+- Active filtering unchanged
+- Text rendering short-circuit only applied to output path
+
+### 2026-04-15: Graph cycle/self-loop render suppression (Scruffy)
+
+**By:** Scruffy
+
+**What:** Self-loop edges and cycles that return to the root no longer print the root as its own neighbour in human output. Edge check for cycle membership now happens before printing the line, not only before recursing.
+
+**Why:** The operator-facing contract requires the root never to appear as its own neighbour, even in edge-case cycles. Traversal safety (via visited set) is separate from output legibility.
+
+**How verified:**
+- Self-edge on root no longer appears as `→ <root> (self)`
+- Cycles `a → b → a` no longer print root back into the tree
+- Regression tests cover both edge cases
+- Commit: `acd03ac`
+- `cargo test --quiet`, `cargo clippy --quiet -- -D warnings`, `cargo fmt --check` all pass
+
+### 2026-04-15: Progressive Retrieval Slice (Fry)
+
+**By:** Fry
+
+**What:** Tasks 5.1–5.6 implement progressive retrieval — the token-budget-gated BFS expansion powering `--depth auto` on `brain_query`. This separates GigaBrain's context-aware retrieval from plain FTS5.
+
+**Decisions:**
+1. Token approximation uses `len(compiled_truth) / 4` — industry standard proxy
+2. Budget is primary brake, depth is safety cap (hard-capped at 3 per MAX_DEPTH)
+3. Outbound-only expansion with active temporal filter (same as graph.rs)
+4. Config table `default_token_budget` authoritative; CLI `--token-budget` acts as floor, not override
+5. MCP `depth` field optional string; `"auto"` triggers expansion; absent/other preserves Phase 1 behavior
+
+**Reviewers:**
+- Professor: Verify budget logic doesn't over-count/under-count tokens
+- Nibbler: Confirm `depth: "auto"` can't abuse unbounded expansion
+
+### 2026-04-15: Assertions/Check Slice (Fry)
+
+**By:** Fry
+
+**What:** Tasks 3.1–4.5 implement triple extraction (`extract_assertions`) and contradiction detection (`check_assertions`). Three regex patterns (works_at, is_a, founded) with OnceLock-cached compilation. Temporal overlap checking with canonical pair ordering prevents duplicates.
+
+**How shipped:**
+- `src/core/assertions.rs`: Full implementation, 14 unit tests
+- `src/commands/check.rs`: CLI with `--all` / slug modes, human-readable and JSON output
+- `tests/assertions.rs`: 8 integration tests
+- All 193 tests pass (up from 185)
+
+**Key design choices:**
+1. Agent-only deletion on re-index: preserves manual assertions across re-indexing (improvement over spec's "DELETE all")
+2. OnceLock for regex caching: compiled once per process
+3. Canonical pair ordering: deterministic insertion, prevents duplicate detection from both directions
+4. Dedup includes resolved: existing contradictions (resolved or unresolved) block re-insertion
+
+**Validation:**
+- Clippy clean, fmt clean
+- Phase 1 roundtrip tests unaffected
+
 
 # Verdict: SG-8 — BEIR nDCG@10 Baseline Established
 

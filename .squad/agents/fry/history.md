@@ -353,3 +353,11 @@
 - **Fry's own assertions slice:** Currently reconciling compilation errors in assertions/check implementation lane. No blockers reported yet.
 - **Professor's graph re-review:** Re-review completed 2026-04-15T23:15:50Z. Verdict: APPROVE FOR LANDING (graph slice tasks 1.1–2.5 only). Issue #28 scope caveat: progressive-retrieval budget/OCC review lane remains separate.
 - **Decision merger completed:** Inbox decisions merged into canonical decisions.md (4 files, 0 conflicts). Cross-agent histories updated; orchestration logs written; session log recorded; ready for git commit.
+
+## 2026-04-15 Phase 2 Graph Fix Batch Complete
+
+- **Professor (completed):** Parent-aware tree rendering of `gbrain graph` output (commit `44ad720`). Multi-hop edges render beneath actual parent, not flattened under root. Depth-2 integration test strengthened with exact text shape assertions. All validation gates pass.
+- **Scruffy (completed):** Self-loop and cycle render suppression (commit `acd03ac`). Root no longer appears as its own neighbour in human output, even in edge-case cycles. Traversal safety unchanged (visited set). Regression tests cover both states. All validation gates pass.
+- **Nibbler (in progress):** Final adversarial re-review of graph slice (tasks 1.1–2.5) after both fixes. Awaiting completion before Phase 2 sign-off.
+- **Fry (in progress):** Progressive retrieval slice (tasks 5.1–5.6) and assertions/check slice (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Decisions merged into canonical ledger.
+

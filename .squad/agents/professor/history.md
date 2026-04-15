@@ -66,3 +66,9 @@
 - **Scope caveat:** This approval is for graph slice tasks 1.1–2.5 only. Issue #28 progressive-retrieval budget/OCC review lane remains separate and not re-opened.
 - **Validation:** `cargo test graph --quiet` ✅, `cargo test --quiet` ✅, `cargo clippy --quiet -- -D warnings` ✅, `cargo fmt --check` ✅
 - **Decision:** APPROVE FOR LANDING to `phase2/p2-intelligence-layer`.
+
+## 2026-04-15 Cross-team Update
+
+- **Scruffy completed graph cycle/self-loop render suppression** (commit `acd03ac`). Self-edges and cycles no longer print root back into human output. Traversal termination unchanged; human-facing contract now matches spec. All validation gates pass.
+- **Fry advancing slices:** Progressive retrieval (tasks 5.1–5.6) and assertions/check (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Awaiting Nibbler's final graph re-review before Phase 2 sign-off.
+
