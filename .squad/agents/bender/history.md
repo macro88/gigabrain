@@ -61,3 +61,13 @@
 - **Validation coverage:** FTS5 (T13) contract ✅, embed command contract ✅, query command contract ✅, inference API shape ✅, integration paths ✅. All 115 tests pass. No production code breakage.
 - **Orchestration log written:** `2026-04-14T04-56-03Z-bender-validation-closeout.md`
 - **Outcome:** Phase 1 search/embed/query lane cleared for ship gate. All findings resolved or documented for Phase 2. Validation complete; clearance issued for Professor final approval.
+
+## 2026-04-15 SG-7 Roundtrip Sign-off
+
+- **Verdict:** CONDITIONAL APPROVE
+- **roundtrip_semantic:** Validates normalized idempotency (import→export→reimport→export produces identical SHA-256 hashes). Tests page count AND content hashes — not superficial. Does NOT test source→export fidelity (YAML array tags silently dropped — known Phase 2 concern).
+- **roundtrip_raw:** Validates byte-exact output against canonical inline fixture. Strongest possible assertion. Fixture is genuinely canonical.
+- **Both tests pass.** Deterministic, zero flap risk.
+- **Coverage gap:** No test checks that original fixture frontmatter keys survive import. Acceptable for Phase 1 since structured YAML support is Phase 2.
+- **CI note:** `cargo test roundtrip` is a misleading filter — doesn't match integration test function names. Use `cargo test --test roundtrip_raw --test roundtrip_semantic` explicitly.
+- SG-7 marked `[x]` in tasks.md. Decision written to `.squad/decisions/inbox/bender-sg7.md`.

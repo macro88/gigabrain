@@ -45,3 +45,10 @@
 - Recommended: Fry address blockers and resubmit, or defer semantic search blocker to Phase 2 if time-bound.
 - Orchestration log written: `2026-04-14T04-56-03Z-professor-rejection-findings.md`.
 - Leela revision cycle assigned (independent of Fry). Outcome: APPROVED with explicit placeholder caveats + stderr warnings + honest status notes (5 decisions). All 115 tests pass unchanged. Approved for Phase 1 ship gate.
+
+## 2026-04-15 SG-3 / SG-4 / SG-5 Sign-off
+
+- Reviewed the Phase 1 proposal/design before execution, then re-verified gates directly against the tree and binaries.
+- SG-3 APPROVED: import/export/re-import roundtrip over `tests/fixtures/` preserved page count and slug set exactly (5 pages, zero semantic diff by gate definition).
+- SG-4 APPROVED: `src/mcp/server.rs` exposes exactly the 5 Phase 1 tools; `cargo test mcp` passed; live stdio session completed `initialize`, `tools/list`, and `tools/call` for all 5 tools.
+- SG-5 APPROVED: `target/x86_64-unknown-linux-musl/release/gbrain` exists and is genuinely static (`file`: `static-pie linked`; `ldd`: `statically linked`).

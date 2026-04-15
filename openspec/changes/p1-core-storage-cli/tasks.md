@@ -512,7 +512,7 @@ Checkboxes: [ ] = not started, [~] = in progress, [x] = done.
 - [x] **SG-3** gbrain import tests/fixtures/ then gbrain export then re-import — semantic diff = 0 (Professor sign-off)
 - [x] **SG-4** gbrain serve connects to an MCP client; all 5 tools respond correctly; tools/list returns all 5 names (Professor sign-off)
 - [x] **SG-5** musl binary has no dynamic dependencies confirmed via ldd (Professor sign-off)
-- [ ] **SG-6** Nibbler adversarial review on src/mcp/server.rs: OCC enforced on all write paths, no injection vectors (Nibbler sign-off)
+- [x] **SG-6** Nibbler adversarial review on src/mcp/server.rs: OCC enforced on all write paths, no injection vectors (Nibbler sign-off)
   <!-- Fry SG-6 fixes applied in commit 5886ec2: OCC bypass closed, slug/content validation, error code consistency, limit caps, mutex recovery. Awaiting Nibbler re-review. -->
 - [x] **SG-7** roundtrip_semantic and roundtrip_raw both pass CI (Bender sign-off)
 - [x] **SG-8** BEIR nDCG@10 baseline recorded in benchmarks/README.md (no regression gate yet — establish the number)
