@@ -361,3 +361,30 @@
 - **Nibbler (in progress):** Final adversarial re-review of graph slice (tasks 1.1–2.5) after both fixes. Awaiting completion before Phase 2 sign-off.
 - **Fry (in progress):** Progressive retrieval slice (tasks 5.1–5.6) and assertions/check slice (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Decisions merged into canonical ledger.
 
+## 2026-04-15 PR #22 Copilot Review Fixes
+
+Applied 13 fixes from Copilot reviewer feedback on PR #22:
+
+1. cargo fmt — resolved all formatting diffs
+2. progressive_retrieve error fallback — returns original hybrid_search results instead of empty on error
+3. progressive_retrieve budget — caller token_budget overrides config default when non-zero
+4. progressive first-result overflow — removed exception that always included first result even if over-budget
+5. TemporalFilter::Active doc — corrected to document both valid_from and valid_until checks
+6. Graph ORDER BY — added deterministic ordering to outbound SQL
+7. Gaps timestamps — human output now shows detected_at and resolved_at
+8. MCP depth normalization — case-insensitive auto matching via trim+lowercase
+9. MCP temporal synonyms — current/history accepted alongside active/all
+10. Contradiction dedup — resolved contradictions no longer block re-detection
+11. TempDir leak — replaced mem::forget with :memory: DBs in graph.rs and progressive.rs tests
+12. MCP link_id — queried actual id instead of hard-coding 1
+13. Test renames — renamed misleading test names in check.rs and tests/graph.rs
+
+All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
+
+## Learnings
+
+- unwrap_or_else with unused error triggers clippy; use unwrap_or when the fallback is a simple value
+- TempDir leak via mem::forget is a pattern to avoid; :memory: is better for unit tests
+- Contradiction dedup should only match unresolved rows; resolved contradictions must allow re-detection
+- MCP tool parameter matching should always normalize case before string comparison
+
