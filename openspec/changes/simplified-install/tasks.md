@@ -21,13 +21,13 @@
 ## Phase B — npm package
 
 - [x] B.1 Create `packages/gbrain-npm/` directory structure:
-  - `packages/gbrain-npm/package.json` — name `gbrain`, version `0.9.0`, bin entry `bin/gbrain`, postinstall hook, engines `node>=16`, os `[darwin, linux]`, cpu `[x64, arm64]`, files list
-  - `packages/gbrain-npm/bin/.gitkeep` — placeholder (binary written here at install time)
+  - `packages/gbrain-npm/package.json` — name `gbrain`, version `0.9.0`, bin entry `bin/gbrain`, postinstall hook, engines `node>=18`, os `[darwin, linux]`, cpu `[x64, arm64]`, files list
+  - `packages/gbrain-npm/bin/gbrain` — committed shell wrapper that execs `gbrain.bin` (downloaded by postinstall) or prints manual-install guidance
   - `packages/gbrain-npm/README.md` — brief description + `npm install -g gbrain` + `gbrain init` quick start
 
-- [x] B.2 Create `packages/gbrain-npm/scripts/postinstall.js`: pure Node.js built-ins only. Map `process.platform` + `process.arch` → platform string; derive version from `package.json`; construct GitHub Releases download URL; download binary with `https.get` following redirects; download checksum; verify SHA-256 with `crypto.createHash('sha256')`; write to `bin/gbrain`; `fs.chmodSync` 0o755. After success, print the `GBRAIN_DB` tip (same wording as the sh installer). On unsupported platform or network failure: print helpful message pointing to manual install URL and exit 0 (do not fail the overall `npm install`).
+- [x] B.2 Create `packages/gbrain-npm/scripts/postinstall.js`: pure Node.js built-ins only. Map `process.platform` + `process.arch` → platform string; derive version from `package.json`; construct GitHub Releases download URL; download binary with `https.get` following redirects (60s timeout); download checksum; verify SHA-256 with `crypto.createHash('sha256')`; write to `bin/gbrain.bin`; `fs.chmodSync` 0o755. After success, print the `GBRAIN_DB` tip (same wording as the sh installer). On unsupported platform or network failure: print helpful message pointing to manual install URL and exit 0 (do not fail the overall `npm install`).
 
-- [x] B.3 Add `packages/gbrain-npm/bin/gbrain` to `.gitignore` (the installed binary must not be committed).
+- [x] B.3 Add `packages/gbrain-npm/bin/gbrain.bin` and `gbrain.download` to `.gitignore` (downloaded binary must not be committed; the wrapper script is tracked).
 
 - [x] B.4 Create `.github/workflows/publish-npm.yml`: trigger on `push` with `tags: ['v[0-9]*.[0-9]*.[0-9]*']` (matching `release.yml`). Steps: checkout, setup-node with `registry-url: https://registry.npmjs.org`, sync version from git tag via `npm version $TAG --no-git-tag-version --allow-same-version`, validate with `npm pack --dry-run`, and only run `npm publish --access public` when `NPM_TOKEN` is present; otherwise emit a notice and succeed.
 

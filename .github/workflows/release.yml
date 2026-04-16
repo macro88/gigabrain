@@ -145,7 +145,7 @@ jobs:
             One-command installer:
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+            curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/${{ github.ref_name }}/scripts/install.sh | sh
             ```
 
             Download the pre-built binary for your platform from the assets below and verify the checksum:

@@ -130,9 +130,21 @@ if ! verify_checksum "$checksum_name" "$asset_name"; then
   fail "SHA-256 verification failed for ${asset_name}"
 fi
 
-mkdir -p "$INSTALL_DIR"
+if [ -d "$INSTALL_DIR" ] && [ ! -w "$INSTALL_DIR" ]; then
+  fail "Install directory is not writable: ${INSTALL_DIR}
+  Either use the default (~/.local/bin) or re-run with appropriate privileges:
+    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh
+    sudo sh -c 'GBRAIN_INSTALL_DIR=/usr/local/bin sh' < install.sh"
+fi
+
+if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+  fail "Cannot create install directory: ${INSTALL_DIR}
+  Try a user-writable path or run with appropriate privileges:
+    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh"
+fi
+
 install_path="${INSTALL_DIR}/gbrain"
-mv "$tmp_dir/$asset_name" "$install_path"
+mv "$tmp_dir/$asset_name" "$install_path" || fail "Cannot write to ${install_path} — is the directory writable?"
 chmod +x "$install_path"
 
 if ! "$install_path" version; then

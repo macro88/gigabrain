@@ -1,7 +1,7 @@
 ---
 id: simplified-install
 title: "Simplified Install: npm global + curl one-liner"
-status: proposed
+status: in-progress
 type: feature
 owner: fry
 reviewers: [leela, kif]
@@ -57,7 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 Or with version and directory overrides:
 
 ```sh
-GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR=/usr/local/bin sh install.sh
+GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
+  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
 After installing, the script prints a tip suggesting the user set `GBRAIN_DB` in their

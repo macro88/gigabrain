@@ -9,7 +9,7 @@
     "postinstall": "node scripts/postinstall.js"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
   },
   "os": [
     "darwin",
@@ -20,7 +20,7 @@
     "arm64"
   ],
   "files": [
-    "bin/.gitkeep",
+    "bin/gbrain",
     "scripts/postinstall.js",
     "README.md"
   ],

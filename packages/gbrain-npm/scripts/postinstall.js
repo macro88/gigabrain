@@ -37,12 +37,14 @@ function gracefulSkip(reason) {
 
 function request(url, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    const timeoutMs = 60_000;
     const req = https.get(
       url,
       {
         headers: {
           "user-agent": "gbrain-npm-postinstall"
-        }
+        },
+        timeout: timeoutMs
       },
       (res) => {
         const status = res.statusCode || 0;
@@ -68,10 +70,17 @@ function request(url, redirectCount = 0) {
           return;
         }
 
+        res.setTimeout(timeoutMs, () => {
+          res.destroy(new Error(`Socket timeout after ${timeoutMs / 1000}s reading ${url}`));
+        });
+
         resolve(res);
       }
     );
 
+    req.on("timeout", () => {
+      req.destroy(new Error(`Connection timeout after ${timeoutMs / 1000}s for ${url}`));
+    });
     req.on("error", reject);
   });
 }
@@ -132,7 +141,7 @@ async function main() {
   const binaryUrl = `https://github.com/macro88/gigabrain/releases/download/${tag}/${assetName}`;
   const checksumUrl = `${binaryUrl}.sha256`;
   const binDir = path.join(__dirname, "..", "bin");
-  const binaryPath = path.join(binDir, "gbrain");
+  const binaryPath = path.join(binDir, "gbrain.bin");
   const tempBinaryPath = path.join(binDir, "gbrain.download");
 
   try {
@@ -160,7 +169,7 @@ async function main() {
     await fs.promises.rm(tempBinaryPath, { force: true }).catch(() => {});
     const message = error instanceof Error ? error.message : String(error);
 
-    if (/Unsupported platform|HTTP \d+ fetching|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|getaddrinfo|network/i.test(message)) {
+    if (/Unsupported platform|HTTP \d+ fetching|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|getaddrinfo|network|timeout/i.test(message)) {
       gracefulSkip(`Could not download the platform binary (${message}).`);
       return;
     }

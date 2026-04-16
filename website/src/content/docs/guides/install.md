@@ -72,12 +72,18 @@ The `v0.9.0` test release makes the shell installer the simplest supported path:
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
 
-You can pin a version or change the install directory if you need a reproducible test setup:
+You can pin a version or change the install directory:
 
 ```bash
-GBRAIN_VERSION=v0.9.0 sh install.sh
-GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR=/usr/local/bin sh install.sh
+GBRAIN_VERSION=v0.9.0 \
+  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+
+GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
+  curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 ```
+
+> **Note:** The default install directory is `~/.local/bin`. System-wide paths like `/usr/local/bin`
+> require `sudo` — the installer does not escalate privileges automatically.
 
 The installer auto-detects your platform, downloads the matching GitHub Release binary, verifies
 the SHA-256 checksum, runs `gbrain version`, and prints a `GBRAIN_DB` shell-profile tip.
