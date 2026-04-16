@@ -1,11 +1,11 @@
 //! Concurrency stress tests — validates OCC and WAL invariants under parallel load.
 //!
 //! Scenarios:
-//!   1. Parallel OCC       — 4 threads writing same slug with stale version →
-//!                           exactly 1 success + 3 ConflictError
-//!   2. Duplicate ingest   — 2 threads ingesting same source → exactly 1 success
-//!   3. WAL compact safety — compact during open reader → both succeed
-//!   4. Read isolation     — concurrent readers see consistent data
+//! 1. Parallel OCC — 4 threads writing same slug with stale version →
+//!    exactly 1 success + 3 ConflictError
+//! 2. Duplicate ingest — 2 threads ingesting same source → exactly 1 success
+//! 3. WAL compact safety — compact during open reader → both succeed
+//! 4. Read isolation — concurrent readers see consistent data
 //!
 //! NOTE: Each test opens multiple Connections to the same on-disk DB.
 //! `:memory:` databases cannot be shared across connections, so all concurrency
@@ -211,7 +211,10 @@ fn duplicate_ingest_from_two_threads_produces_one_row() {
     let log_count: i64 = verify_conn
         .query_row("SELECT COUNT(*) FROM ingest_log", [], |row| row.get(0))
         .expect("count ingest_log");
-    assert!(log_count <= 1, "ingest_log should have at most 1 record, got {log_count}");
+    assert!(
+        log_count <= 1,
+        "ingest_log should have at most 1 record, got {log_count}"
+    );
 }
 
 // ── 3. WAL compact safety ─────────────────────────────────────────────────────
@@ -256,8 +259,7 @@ fn wal_compact_during_open_reader_both_succeed() {
 
         let conn = open_conn(&db_path_compact);
         // TRUNCATE checkpoint flushes WAL — should coexist with reader
-        let result = db::compact(&conn);
-        result
+        db::compact(&conn)
     });
 
     let reader_count = reader_handle.join().expect("reader thread panicked");

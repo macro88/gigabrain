@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
-**Status:** `Phase 2 complete` — intelligence layer shipped. `v0.2.0` release pending tag push. [See the roadmap →](#roadmap)
+**Status:** `Phase 3 in progress` — skills, benchmarks, and CLI polish substantially complete. CI gates and final review pending. `v1.0.0` release pending Phase 3 ship gate. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Polish + release | 🔜 Not started | Benchmarks, cross-compiled binaries, fat skill finalization |
+| **Phase 3** — Skills, Benchmarks + Polish | 🔄 In progress | 5 production-ready agent skills, 16 MCP tools, BEIR/LoCoMo/LongMemEval harnesses, `validate`/`call`/`pipe`/`skills` CLI — CI gates pending |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -80,19 +80,19 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — Phase 1 complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v0.1.0 tag push |
+| Build from source (`cargo build --release`) | ✅ Available now — Phases 1–3 implementation complete |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | 🔜 Pending v1.0.0 tag push |
 | `npm install -g gbrain` | ⏳ Deferred — planned follow-on, not in this release |
 | One-command curl installer | ⏳ Deferred — planned follow-on, not in this release |
 
-**Build from source** is the only supported installation channel today. **GitHub Releases** (pre-built binaries) will ship when v0.1.0 is cut — that happens after Phase 1 gates pass and the tag is pushed.
+**Build from source** is the only supported installation channel today. **GitHub Releases** (pre-built binaries) will ship when v1.0.0 is cut — that happens after Phase 3 gates pass and the tag is pushed.
 
-> **Not yet available.** The commands below will work once v0.1.0 is published on GitHub Releases. They are shown here so you know exactly what to run when the release lands.
+> **Not yet available.** The commands below will work once v1.0.0 is published on GitHub Releases. They are shown here so you know exactly what to run when the release lands.
 
-Download a pre-built binary from a GitHub Release (available once v0.1.0 ships):
+Download a pre-built binary from a GitHub Release (available once v1.0.0 ships):
 
 ```bash
-VERSION="v0.1.0"
+VERSION="v1.0.0"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
@@ -106,7 +106,7 @@ chmod +x "${HOME}/.local/bin/gbrain"
 sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
-Or build from source (available now — scaffold compiles; full features land with Phase 1):
+Or build from source (all Phase 1–3 features available now):
 
 ```bash
 git clone https://github.com/macro88/gigabrain

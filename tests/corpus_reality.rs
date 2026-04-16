@@ -114,15 +114,12 @@ fn timeline_retrieval_known_fact_appears_in_top_5() {
 
     // Known facts from fixture timelines — should surface correct pages
     let cases = [
+        ("Henrique Dubugras Brex founder", "people/henrique-dubugras"),
         (
-            "Henrique Dubugras Brex founder",
-            "people/henrique-dubugras",
+            "corporate card financial infrastructure startups",
+            "companies/brex",
         ),
-        ("corporate card financial infrastructure startups", "companies/brex"),
-        (
-            "knowledge brain SQLite embeddings",
-            "projects/gigabrain",
-        ),
+        ("knowledge brain SQLite embeddings", "projects/gigabrain"),
     ];
 
     for (query, expected_slug) in &cases {

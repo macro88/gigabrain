@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Phase 3 CI integration (2026-04-17): Offline benchmarks (corpus_reality, concurrency_stress, embedding_migration) run as a named `benchmarks` job in ci.yml, separate from the general `cargo test` job. BEIR regression lives in its own workflow file (`beir-regression.yml`) to avoid blocking PRs with ~500MB dataset downloads. Formatting fixed before commit — always run `cargo fmt --all` before pushing.
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.
 - Every meaningful implementation starts with an OpenSpec proposal.
