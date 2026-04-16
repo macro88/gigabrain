@@ -439,3 +439,11 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
   4. Install surfaces documentation updated
 - **Status:** ✅ COMPLETE. Publish workflow now succeeds for v0.9.0 tag. CI confirmed.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-fry.md`
+
+## Learnings
+
+- v0.9.1 dual-release implementation (2026-04-18): Resumed after crash. Key fix: Cargo.toml default features were `["bundled", "online-model"]` but all docs/CLAUDE.md/release notes said `cargo build --release` produces the airgapped binary. Changed default to `["bundled", "embedded-model"]`. Normalized "slim" → "online" in all contract positions (Cargo comments, inference.rs doc comments, tasks.md scope). Descriptive "slim"/"slimmer" in prose (release notes, docs) is acceptable English, not a contract violation.
+- The `build.rs` build-time model download is 3-file (~90MB total): config.json, tokenizer.json, model.safetensors from HuggingFace. `GBRAIN_EMBEDDED_MODEL_DIR` env var allows CI to pre-stage the model files and skip the download.
+- `compile_error!` macro in inference.rs prevents both `embedded-model` and `online-model` features being enabled simultaneously — enforces the mutual exclusivity at compile time.
+- Release workflow uses `--no-default-features --features ${{ matrix.features }}` so it doesn't depend on Cargo.toml defaults. The default features only affect `cargo build` developer experience.
+- stale OpenSpec directories (superseded by a renamed/re-scoped change) should be deleted or archived to prevent naming drift from old contract terms leaking into implementation work.
