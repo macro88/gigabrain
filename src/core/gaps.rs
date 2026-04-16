@@ -96,6 +96,8 @@ fn sha256_hex(data: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::core::db;
 
@@ -194,6 +196,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(slug, "people/alice");
+    }
+
+    #[test]
+    fn list_gaps_with_resolved_true_includes_resolved_rows() {
+        let conn = open_test_db();
+        log_gap("resolved query", "", None, &conn).unwrap();
+        let id: i64 = conn
+            .query_row("SELECT id FROM knowledge_gaps LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        resolve_gap(id, "people/alice", &conn).unwrap();
+
+        let gaps = list_gaps(true, 10, &conn).unwrap();
+
+        assert!(gaps[0].resolved_at.is_some());
     }
 
     #[test]

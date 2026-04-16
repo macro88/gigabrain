@@ -52,6 +52,8 @@ pub fn classify_intent(query: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     // ── derive_wing ───────────────────────────────────────────

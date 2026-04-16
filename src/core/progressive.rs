@@ -120,6 +120,8 @@ fn outbound_neighbours(slug: &str, conn: &Connection) -> Result<Vec<SearchResult
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::core::db;
 

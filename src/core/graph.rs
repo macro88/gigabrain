@@ -196,6 +196,8 @@ pub fn neighborhood_graph(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::core::db;
 
@@ -412,6 +414,16 @@ mod tests {
         // Request depth 999 — should not panic, effectively capped at MAX_DEPTH
         let result = neighborhood_graph("root", 999, TemporalFilter::Active, &conn).unwrap();
         assert_eq!(result.nodes.len(), 1);
+    }
+
+    #[test]
+    fn leaf_node_with_positive_depth_returns_root_only() {
+        let conn = open_test_db();
+        insert_page(&conn, "root", "concept", "Root");
+
+        let result = neighborhood_graph("root", 3, TemporalFilter::Active, &conn).unwrap();
+
+        assert!(result.edges.is_empty());
     }
 
     #[test]

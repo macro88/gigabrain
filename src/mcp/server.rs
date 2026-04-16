@@ -997,6 +997,8 @@ pub async fn run(conn: Connection) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::core::db;
     use serde_json::json;
@@ -1159,6 +1161,116 @@ mod tests {
         assert_eq!(error.data, Some(json!({ "current_version": null })));
     }
 
+    #[test]
+    fn brain_query_logs_gap_for_weak_results() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "who runs the moon colony".to_string(),
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        let gap_count: i64 = server
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM knowledge_gaps", [], |row| row.get(0))
+            .unwrap();
+        assert!(rows.is_empty() && gap_count == 1);
+    }
+
+    #[test]
+    fn brain_query_auto_depth_expands_linked_results() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "concepts/root",
+            "---\ntitle: Root\ntype: concept\n---\nalpha anchor\n",
+        );
+        create_page(
+            &server,
+            "concepts/child",
+            "---\ntitle: Child\ntype: concept\n---\nlinked expansion result\n",
+        );
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "concepts/root".to_string(),
+                to_slug: "concepts/child".to_string(),
+                relationship: "related".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "alpha".to_string(),
+                wing: None,
+                limit: Some(1),
+                depth: Some("auto".to_string()),
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(rows.iter().any(|row| row["slug"] == "concepts/child"));
+    }
+
+    #[test]
+    fn brain_search_returns_matching_pages() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme builds fundraising software.\n",
+        );
+
+        let result = server
+            .brain_search(BrainSearchInput {
+                query: "fundraising".to_string(),
+                wing: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows[0]["slug"], "companies/acme");
+    }
+
+    #[test]
+    fn brain_list_applies_wing_and_type_filters() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        let result = server
+            .brain_list(BrainListInput {
+                wing: Some("people".to_string()),
+                page_type: Some("person".to_string()),
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
     // ── Phase 2 MCP tests ────────────────────────────────────
 
     fn create_page(server: &GigaBrainServer, slug: &str, content: &str) {
@@ -1169,6 +1281,137 @@ mod tests {
                 expected_version: None,
             })
             .unwrap();
+    }
+
+    fn page_id(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn insert_timeline_entry(
+        conn: &Connection,
+        slug: &str,
+        date: &str,
+        summary: &str,
+        source: &str,
+        detail: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO timeline_entries (page_id, date, source, summary, summary_hash, detail) \
+             VALUES (?1, ?2, ?3, ?4, 'hash', ?5)",
+            rusqlite::params![page_id(conn, slug), date, source, summary, detail],
+        )
+        .unwrap();
+    }
+
+    mod validate_slug {
+        use super::*;
+
+        #[test]
+        fn accepts_lowercase_slug_tokens() {
+            assert!(validate_slug("people/alice_1").is_ok());
+        }
+
+        #[test]
+        fn rejects_slug_with_invalid_characters() {
+            assert_eq!(validate_slug("People/Alice!").unwrap_err().code, ErrorCode(-32602));
+        }
+
+        #[test]
+        fn rejects_slug_longer_than_limit() {
+            let slug = format!("people/{}", "a".repeat(MAX_SLUG_LEN));
+            assert_eq!(validate_slug(&slug).unwrap_err().code, ErrorCode(-32602));
+        }
+    }
+
+    mod validate_relationship {
+        use super::*;
+
+        #[test]
+        fn accepts_snake_case_relationship() {
+            assert!(validate_relationship("works_at").is_ok());
+        }
+
+        #[test]
+        fn rejects_relationship_with_spaces() {
+            assert_eq!(
+                validate_relationship("works at").unwrap_err().code,
+                ErrorCode(-32602)
+            );
+        }
+    }
+
+    mod validate_tag_list {
+        use super::*;
+
+        #[test]
+        fn rejects_more_than_maximum_tags() {
+            let tags = vec!["tag".to_string(); MAX_TAGS_PER_REQUEST + 1];
+            assert_eq!(validate_tag_list(&tags, "add").unwrap_err().code, ErrorCode(-32602));
+        }
+    }
+
+    mod validate_temporal_value {
+        use super::*;
+
+        #[test]
+        fn accepts_supported_temporal_formats() {
+            assert!(validate_temporal_value("2024-06", "valid_from").is_ok());
+            assert!(validate_temporal_value("2024-06-30", "valid_from").is_ok());
+            assert!(validate_temporal_value("2024-06-30T12:34:56Z", "valid_from").is_ok());
+        }
+
+        #[test]
+        fn rejects_invalid_temporal_values() {
+            assert_eq!(
+                validate_temporal_value("2024-13", "valid_from")
+                    .unwrap_err()
+                    .code,
+                ErrorCode(-32602)
+            );
+        }
+    }
+
+    mod parse_temporal_filter {
+        use super::*;
+
+        #[test]
+        fn defaults_to_active_when_absent() {
+            assert_eq!(super::parse_temporal_filter(None).unwrap(), TemporalFilter::Active);
+        }
+
+        #[test]
+        fn accepts_all_filter() {
+            assert_eq!(
+                super::parse_temporal_filter(Some("all")).unwrap(),
+                TemporalFilter::All
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_filter() {
+            assert_eq!(
+                super::parse_temporal_filter(Some("future"))
+                    .unwrap_err()
+                    .code,
+                ErrorCode(-32602)
+            );
+        }
+    }
+
+    mod map_graph_error {
+        use super::*;
+
+        #[test]
+        fn maps_page_not_found_to_not_found_code() {
+            assert_eq!(
+                super::map_graph_error(GraphError::PageNotFound {
+                    slug: "people/ghost".to_string()
+                })
+                .code,
+                ErrorCode(-32001)
+            );
+        }
     }
 
     // ── brain_link ───────────────────────────────────────────
@@ -1421,6 +1664,59 @@ mod tests {
         assert_eq!(arr.len(), 2);
     }
 
+    #[test]
+    fn brain_backlinks_temporal_all_includes_closed_links() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: Some("2020-01-01".to_string()),
+                valid_until: Some("2020-12-31".to_string()),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_backlinks(BrainBacklinksInput {
+                slug: "companies/acme".to_string(),
+                limit: None,
+                temporal: Some("all".to_string()),
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn brain_backlinks_rejects_invalid_temporal_filter() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_backlinks(BrainBacklinksInput {
+                slug: "people/alice".to_string(),
+                limit: None,
+                temporal: Some("future".to_string()),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
     // ── brain_graph ──────────────────────────────────────────
 
     #[test]
@@ -1476,6 +1772,43 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_graph_temporal_all_includes_closed_links() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: Some("2020-01-01".to_string()),
+                valid_until: Some("2020-12-31".to_string()),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_graph(BrainGraphInput {
+                slug: "people/alice".to_string(),
+                depth: None,
+                temporal: Some("all".to_string()),
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed["edges"].as_array().unwrap().len(), 1);
     }
 
     // ── brain_check ──────────────────────────────────────────
@@ -1557,6 +1890,27 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn brain_check_without_slug_returns_all_unresolved_contradictions() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+        );
+        create_page(
+            &server,
+            "people/bob",
+            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+        );
+
+        let result = server.brain_check(BrainCheckInput { slug: None }).unwrap();
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed.len(), 2);
+    }
+
     // ── brain_timeline ───────────────────────────────────────
 
     #[test]
@@ -1594,6 +1948,60 @@ mod tests {
         let text = extract_text(&result);
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["slug"], "people/alice");
+    }
+
+    #[test]
+    fn brain_timeline_prefers_structured_entries_and_applies_limit() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice bio\n\n## Timeline\n\nlegacy entry\n",
+        );
+        {
+            let db = server.db.lock().unwrap();
+            insert_timeline_entry(
+                &db,
+                "people/alice",
+                "2024-06-01",
+                "Promoted",
+                "memo",
+                "to staff engineer",
+            );
+            insert_timeline_entry(&db, "people/alice", "2024-01-01", "Joined", "", "");
+        }
+
+        let result = server
+            .brain_timeline(BrainTimelineInput {
+                slug: "people/alice".to_string(),
+                limit: Some(1),
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn brain_timeline_returns_empty_entries_for_page_without_timeline_data() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice bio\n",
+        );
+
+        let result = server
+            .brain_timeline(BrainTimelineInput {
+                slug: "people/alice".to_string(),
+                limit: None,
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(parsed["entries"].as_array().unwrap().is_empty());
     }
 
     // ── brain_tags ───────────────────────────────────────────

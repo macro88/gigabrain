@@ -387,6 +387,8 @@ fn founded_regex() -> &'static Regex {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::commands::get::get_page;
     use crate::core::db;
@@ -559,6 +561,21 @@ mod tests {
 
             assert_eq!(inserted, 0);
             assert_eq!(row_count, 0);
+        }
+
+        #[test]
+        fn duplicate_matches_in_content_insert_one_row() {
+            let conn = open_test_db();
+            insert_page(
+                &conn,
+                "people/alice",
+                "Alice works at Acme Corp. Alice works at Acme Corp.",
+            );
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+
+            assert_eq!(inserted, 1);
         }
 
         #[test]
@@ -774,6 +791,27 @@ mod tests {
 
             assert!(contradictions.is_empty());
             assert_eq!(contradiction_count(&conn), 0);
+        }
+
+        #[test]
+        fn clean_page_returns_no_contradictions() {
+            let conn = open_test_db();
+            insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
+            let page = get_page(&conn, "people/alice").unwrap();
+            extract_assertions(&page, &conn).unwrap();
+
+            let contradictions = check_assertions("people/alice", &conn).unwrap();
+
+            assert!(contradictions.is_empty());
+        }
+
+        #[test]
+        fn unknown_slug_returns_page_not_found() {
+            let conn = open_test_db();
+
+            let error = check_assertions("people/ghost", &conn).unwrap_err();
+
+            assert!(matches!(error, AssertionError::PageNotFound { .. }));
         }
     }
 }
