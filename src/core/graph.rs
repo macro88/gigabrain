@@ -9,7 +9,8 @@ use thiserror::Error;
 /// Controls whether the graph traversal includes closed (past) links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemporalFilter {
-    /// Only links that are currently active (valid_until IS NULL or >= today).
+    /// Only links that are currently active: valid_from <= today AND
+    /// (valid_until IS NULL OR valid_until >= today).
     Active,
     /// All links regardless of temporal validity.
     All,
@@ -124,7 +125,8 @@ pub fn neighborhood_graph(
                 l.relationship, l.valid_from, l.valid_until \
          FROM links l \
          JOIN pages p ON l.to_page_id = p.id \
-         WHERE l.from_page_id = ?1{temporal_clause}"
+         WHERE l.from_page_id = ?1{temporal_clause} \
+         ORDER BY p.slug, l.relationship"
     );
 
     let mut seen_edges: HashSet<i64> = HashSet::new();
@@ -202,11 +204,7 @@ mod tests {
     use crate::core::db;
 
     fn open_test_db() -> Connection {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
-        let conn = db::open(db_path.to_str().unwrap()).unwrap();
-        std::mem::forget(dir);
-        conn
+        db::open(":memory:").expect("open in-memory db")
     }
 
     fn insert_page(conn: &Connection, slug: &str, page_type: &str, title: &str) {

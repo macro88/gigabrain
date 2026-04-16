@@ -237,8 +237,8 @@ fn map_graph_error(e: GraphError) -> rmcp::Error {
 
 fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
     match temporal.unwrap_or("active") {
-        "active" => Ok(TemporalFilter::Active),
-        "all" => Ok(TemporalFilter::All),
+        "active" | "current" => Ok(TemporalFilter::Active),
+        "all" | "history" => Ok(TemporalFilter::All),
         other => Err(rmcp::Error::new(
             ErrorCode(-32602),
             format!("invalid temporal filter: {other}"),
@@ -526,7 +526,8 @@ impl GigaBrainServer {
             let _ = gaps::log_gap(&input.query, "", results.first().map(|r| r.score), &db);
         }
 
-        let results = match input.depth.as_deref() {
+        let depth_normalized = input.depth.as_deref().map(|d| d.trim().to_lowercase());
+        let results = match depth_normalized.as_deref() {
             Some("auto") => {
                 let budget: usize = db
                     .query_row(
@@ -537,7 +538,7 @@ impl GigaBrainServer {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(4000);
-                progressive_retrieve(results, budget, 3, &db).map_err(map_search_error)?
+                progressive_retrieve(results.clone(), budget, 3, &db).unwrap_or(results)
             }
             _ => results,
         };
@@ -1284,8 +1285,10 @@ mod tests {
     }
 
     fn page_id(conn: &Connection, slug: &str) -> i64 {
-        conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| row.get(0))
-            .unwrap()
+        conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
+        .unwrap()
     }
 
     fn insert_timeline_entry(
@@ -1314,7 +1317,10 @@ mod tests {
 
         #[test]
         fn rejects_slug_with_invalid_characters() {
-            assert_eq!(validate_slug("People/Alice!").unwrap_err().code, ErrorCode(-32602));
+            assert_eq!(
+                validate_slug("People/Alice!").unwrap_err().code,
+                ErrorCode(-32602)
+            );
         }
 
         #[test]
@@ -1347,7 +1353,10 @@ mod tests {
         #[test]
         fn rejects_more_than_maximum_tags() {
             let tags = vec!["tag".to_string(); MAX_TAGS_PER_REQUEST + 1];
-            assert_eq!(validate_tag_list(&tags, "add").unwrap_err().code, ErrorCode(-32602));
+            assert_eq!(
+                validate_tag_list(&tags, "add").unwrap_err().code,
+                ErrorCode(-32602)
+            );
         }
     }
 
@@ -1377,7 +1386,10 @@ mod tests {
 
         #[test]
         fn defaults_to_active_when_absent() {
-            assert_eq!(super::parse_temporal_filter(None).unwrap(), TemporalFilter::Active);
+            assert_eq!(
+                super::parse_temporal_filter(None).unwrap(),
+                TemporalFilter::Active
+            );
         }
 
         #[test]
@@ -1395,6 +1407,22 @@ mod tests {
                     .unwrap_err()
                     .code,
                 ErrorCode(-32602)
+            );
+        }
+
+        #[test]
+        fn accepts_current_as_synonym_for_active() {
+            assert_eq!(
+                super::parse_temporal_filter(Some("current")).unwrap(),
+                TemporalFilter::Active
+            );
+        }
+
+        #[test]
+        fn accepts_history_as_synonym_for_all() {
+            assert_eq!(
+                super::parse_temporal_filter(Some("history")).unwrap(),
+                TemporalFilter::All
             );
         }
     }
@@ -1539,15 +1567,23 @@ mod tests {
             })
             .unwrap();
 
+        let link_id: i64 = {
+            let db = server.db.lock().unwrap();
+            db.query_row("SELECT id FROM links ORDER BY id DESC LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+        };
+
         let result = server
             .brain_link_close(BrainLinkCloseInput {
-                link_id: 1,
+                link_id: link_id as u64,
                 valid_until: "2025-06".to_string(),
             })
             .unwrap();
 
         let text = extract_text(&result);
-        assert!(text.contains("Closed link 1"));
+        assert!(text.contains(&format!("Closed link {link_id}")));
     }
 
     #[test]

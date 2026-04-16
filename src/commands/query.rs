@@ -39,8 +39,12 @@ pub async fn run(
     }
 
     let results = if depth == "auto" {
-        let budget = read_token_budget(db).max(token_budget as usize);
-        progressive_retrieve(results, budget, 3, db).unwrap_or_else(|_| Vec::new())
+        let budget = if token_budget > 0 {
+            token_budget as usize
+        } else {
+            read_token_budget(db)
+        };
+        progressive_retrieve(results.clone(), budget, 3, db).unwrap_or(results)
     } else {
         results
     };

@@ -37,19 +37,19 @@ pub fn run(db: &Connection, limit: u32, resolved: bool, json: bool) -> Result<()
         println!("No knowledge gaps found.");
     } else {
         for gap in &gaps {
-            let status = if gap.resolved_at.is_some() {
-                "resolved"
-            } else {
-                "unresolved"
+            let resolved_info = match &gap.resolved_at {
+                Some(ts) => format!(" resolved {ts}"),
+                None => String::new(),
             };
             println!(
-                "[{}] {} (confidence: {}, {})",
-                gap.id,
-                gap.query_hash,
-                gap.confidence_score
+                "[{detected_at}] {hash} ({sensitivity}, confidence: {conf}{resolved_info})",
+                detected_at = gap.detected_at,
+                hash = gap.query_hash,
+                sensitivity = gap.sensitivity,
+                conf = gap
+                    .confidence_score
                     .map(|s| format!("{s:.2}"))
                     .unwrap_or_else(|| "n/a".to_string()),
-                status
             );
         }
         println!("{} gap(s) found.", gaps.len());

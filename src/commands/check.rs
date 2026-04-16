@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn human_output_includes_page_summary_for_all_mode() {
+    fn human_output_includes_contradiction_summary_for_all_mode() {
         let conn = open_test_db();
         insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
         insert_page(&conn, "sources/alice-profile", "Alice works at Beta Corp.");

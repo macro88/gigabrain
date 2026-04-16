@@ -302,7 +302,7 @@ fn graph_json_edges_have_from_to_relationship() {
 // ── Temporal filter mapping in CLI ───────────────────────────
 
 #[test]
-fn graph_cli_all_temporal_includes_closed_links() {
+fn graph_core_temporal_filter_active_excludes_closed_links() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let conn = open_test_db(&db_path);

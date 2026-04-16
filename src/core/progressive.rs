@@ -32,7 +32,7 @@ pub fn progressive_retrieve(
     // Consume initial results, tracking budget
     for r in &initial {
         let cost = token_cost(&r.slug, conn);
-        if tokens_used + cost > budget && !results.is_empty() {
+        if tokens_used + cost > budget {
             break;
         }
         seen.insert(r.slug.clone());
@@ -126,11 +126,7 @@ mod tests {
     use crate::core::db;
 
     fn open_test_db() -> Connection {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test_brain.db");
-        let conn = db::open(db_path.to_str().unwrap()).unwrap();
-        std::mem::forget(dir);
-        conn
+        db::open(":memory:").expect("open in-memory db")
     }
 
     fn insert_page(conn: &Connection, slug: &str, truth: &str) {

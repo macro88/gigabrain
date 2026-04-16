@@ -214,7 +214,8 @@ fn contradiction_exists(
          WHERE page_id = ?1
            AND other_page_id = ?2
            AND type = ?3
-           AND description = ?4",
+           AND description = ?4
+           AND resolved_at IS NULL",
         rusqlite::params![page_id, other_page_id, CONTRADICTION_TYPE, description],
         |row| row.get(0),
     )?;
@@ -687,7 +688,7 @@ mod tests {
         }
 
         #[test]
-        fn resolved_conflict_is_not_duplicated() {
+        fn resolved_conflict_is_redetected() {
             let conn = open_test_db();
             insert_page(&conn, "people/alice", "Alice timeline.");
             insert_assertion(
@@ -722,8 +723,16 @@ mod tests {
 
             let contradictions = check_assertions("people/alice", &conn).unwrap();
 
-            assert!(contradictions.is_empty());
-            assert_eq!(contradiction_count(&conn), 1);
+            assert_eq!(
+                contradictions.len(),
+                1,
+                "resolved contradiction should be re-detected"
+            );
+            assert_eq!(
+                contradiction_count(&conn),
+                2,
+                "old resolved + new unresolved"
+            );
         }
 
         #[test]

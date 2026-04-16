@@ -203,7 +203,9 @@ mod tests {
         let conn = open_test_db();
         log_gap("resolved query", "", None, &conn).unwrap();
         let id: i64 = conn
-            .query_row("SELECT id FROM knowledge_gaps LIMIT 1", [], |row| row.get(0))
+            .query_row("SELECT id FROM knowledge_gaps LIMIT 1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         resolve_gap(id, "people/alice", &conn).unwrap();
 
