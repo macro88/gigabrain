@@ -46,3 +46,25 @@
 **Outcome:** P3 Release docs component **COMPLETE**. README/docs aligned on status, install, coverage, and phase/version messaging. All gates passed.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — Amy's three-file decision (getting-started, roadmap, contributing split) + final doc fix decisions.
+
+
+## 2026-04-17 Phase 3 Skills Authoring
+
+**Role:** Skills author for Phase 3 — tasks 1.1 through 1.5
+
+**What happened:**
+- Rewrote all five stub SKILL.md files into production-ready documents: briefing, alerts, research, upgrade, enrich.
+- Each skill follows the "thin harness, fat skills" principle — full workflows, command sequences, failure modes, and configurable parameters; no Rust code changes.
+- Documented `brain_gap_approve` as an approval workflow dependency only (not a binary command), per the design doc's explicit deferral decision.
+- Added `min_binary_version: "0.3.0"` to all five skill frontmatters so the upgrade skill can enforce compatibility.
+- Stale alert threshold: used 30-day delta (timeline vs. truth) from the spec scenario rather than the 90-day raw age in the task description — logged this as a team decision for Fry to confirm.
+- Marked tasks 1.1–1.5 as `[x]` in `openspec/changes/p3-skills-benchmarks/tasks.md`.
+- Wrote decisions to `.squad/decisions/inbox/amy-phase3-skills.md`.
+
+**Outcome:** Tasks 1.1–1.5 COMPLETE. Five skill files are production-ready with no stub markers.
+
+**Learnings:**
+- Production SKILL.md files need four things that stubs always omit: (1) configurable parameters table, (2) failure modes table, (3) exact command sequences an agent can follow without ambiguity, and (4) explicit statements about what the skill does NOT do automatically (e.g., no auto-accept of external data into compiled_truth).
+- When spec and task description give different numbers for the same threshold (30 days vs 90 days), pick the one from the spec scenario and flag the discrepancy for the implementer — don't silently pick one.
+- The two-phase store-then-extract pattern (raw_data first, compiled_truth second) should be consistent across all enrichment sources. Establish this as a doc convention early so it doesn't drift per-source.
+- `brain_gap_approve` as a workflow dependency (vs. a real tool) is a subtle but important distinction that must be stated explicitly in the skill — agents will try to call it otherwise.

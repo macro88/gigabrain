@@ -409,3 +409,43 @@
 6. **No CI wait:** Did not wait for CI binary builds before creating the release — per task spec, the workflow picks up the tag automatically.
 
 **Outcome:** v0.2.0 live at https://github.com/macro88/gigabrain/releases/tag/v0.2.0. Release is marked Latest. Tag v0.2.0 pushed. Version bump committed to main.
+
+## 2026-04-17 Phase 3 Task 8.3 — Skills Review
+
+**Role:** Reviewer (task 8.3)
+
+**What happened:**
+- Reviewed all five Phase 3 SKILL.md files for completeness, clarity, and agent-executability.
+- All five approved: briefing, alerts, research, upgrade, enrich.
+- Resolved the 30-day vs. 90-day stale threshold discrepancy Amy flagged.
+
+**Stale threshold ruling:**
+- Spec scenario (`specs/skills/spec.md` line 28) says **30 days** — this is the BDD scenario and governs.
+- Task 1.2 description text said "90 days" — this was an authoring error in the task summary, not the spec.
+- `alerts/SKILL.md` uses 30 days → **correct**. No change to skill file required.
+- Corrected task 1.2 description text in `tasks.md` from ">90 days" to ">30 days (timeline_updated_at > truth_updated_at by 30+ days)".
+
+**Task 8.3 marked `[x]` in tasks.md.**
+
+**Decision note written to:** `.squad/decisions/inbox/leela-phase3-skills-review.md`
+
+**Learnings:**
+- When a spec has both BDD scenarios and task description summaries, the BDD scenario is the governing contract. Task descriptions are prose summaries that can drift. Always resolve conflicts by reading the scenario block directly.
+- A "thin harness, fat skills" SKILL.md needs exactly four elements to be agent-executable: (1) exact command sequences, (2) configurable parameters table, (3) failure modes table, and (4) explicit statements on what the skill does NOT do automatically. All five Phase 3 skills contain all four.
+- Approval workflow dependencies (like `brain_gap_approve`) that are not yet binary commands must be explicitly documented as such in the skill — without that note, an agent will try to shell-exec them and fail silently.
+
+---
+
+## 2026-04-16 Phase 3 Skills Review Complete — Task 8.3
+
+**Session:** leela-phase3-skills-review (176s, claude-sonnet-4.6)  
+**Timestamp:** 2026-04-16T06:02:45Z
+
+**What happened:**
+- Task 8.3 APPROVED: All five Phase 3 SKILL.md files pass completeness, clarity, and agent-executability review.
+- Stale threshold: **30 days (per spec scenario line 28, not 90 days).**
+- Task 1.2 corrected in `tasks.md` from >90 days to >30 days.
+- Decision merged to `decisions.md`. Orchestration log written.
+
+**Phase 3 progression:** Unblocked. Can proceed to cross-checks (8.1, 8.2, 8.4–8.7) and implementation (Groups 2–7).
+

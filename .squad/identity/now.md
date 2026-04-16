@@ -1,41 +1,38 @@
----
-updated_at: 2026-04-15T00:00:00Z
-focus_area: Phase 2 — Intelligence Layer (p2-intelligence-layer)
-active_issues: [6]
-active_branch: phase2/p2-intelligence-layer
+updated_at: 2026-04-16T05:49:01Z
+focus_area: Phase 3 — Skills, Benchmarks, and CLI Polish (p3-skills-benchmarks)
+active_issues: []
+active_branch: phase3/p3-skills-benchmarks
 ---
 
 # What We're Focused On
 
-**Phase 2 is live.** Phase 1 shipped as v0.1.0. The team is now executing the Intelligence Layer on branch `phase2/p2-intelligence-layer`.
+**Phase 3 is now in execution.** Phase 2 shipped in v0.2.0. The team is now executing skills completion, benchmark harnesses, and CLI/MCP polish on branch `phase3/p3-skills-benchmarks`.
 
-**Phase 2 scope:**
-- Graph core: N-hop BFS over `links` table with temporal filtering (`src/core/graph.rs`)
-- Assertions + contradiction detection (`src/core/assertions.rs`, `src/commands/check.rs`)
-- Progressive retrieval with token-budget gating (`src/core/progressive.rs`)
-- Novelty check wiring into ingest (`src/commands/ingest.rs`)
-- Palace room classification (`src/core/palace.rs::derive_room`)
-- Knowledge gaps CLI (`src/core/gaps.rs`, `src/commands/gaps.rs`)
-- MCP Phase 2 write surface: `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
+**Phase 3 scope:**
+- Skill completion: `skills/briefing`, `alerts`, `research`, `upgrade`, `enrich`
+- CLI completion: `validate`, `call`, `pipe`, `skills doctor`, and remaining `--json` coverage
+- MCP Phase 3 surface: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
+- Benchmark harnesses: BEIR, corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
+- CI integration for offline benchmark gates and release regression checks
 
 **Team lanes:**
-- **Fry**: Groups 1–9 implementation (all core + command + MCP wiring)
-- **Scruffy**: 90%+ test coverage — exhaustive unit tests alongside every group
-- **Bender**: Integration tests — ingest-conflict → contradiction round-trip, parallel writer OCC
-- **Amy**: Update all project docs (README, docs/, spec references)
-- **Hermes**: Update website documentation to reflect Phase 2 features
-- **Professor**: Gate review — graph BFS correctness, progressive budget logic, OCC protocol
-- **Nibbler**: Adversarial review — MCP write surface (link injection, graph depth abuse, contradiction poisoning)
-- **Mom**: Temporal edge cases — valid_from/valid_until schema CHECK, zero-hop graph, null valid_from
+- **Amy**: Production-ready SKILL.md authoring for the five remaining agent skills
+- **Fry**: Core CLI/MCP implementation, tests, and CI wiring
+- **Kif**: Benchmark datasets, harnesses, and measurement methodology
+- **Professor**: Validate/MCP correctness review once the first code wave lands
+- **Nibbler**: Adversarial review of new MCP inputs and raw-data storage
+- **Scruffy**: Reproducibility and regression verification for benchmark harnesses
+- **Leela**: Skills executability review and scope control
 
-**Coverage target:** 90%+ (≥200 unit tests, ship gate requires all pass)
+**Quality target:** zero command stubs, 16 MCP tools fully registered, and offline benchmarks enforced in CI.
 
 **Phase gate requirements:**
 - `cargo test` all pass
 - `cargo clippy -- -D warnings` clean
 - `cargo fmt --check` clean
 - Professor + Nibbler sign-off before merge
-- Phase 1 round-trip tests (`roundtrip_semantic.rs`, `roundtrip_raw.rs`) show no regression
+- Skill files reviewed for executability and clarity
+- Benchmark baselines established and reproducible
 
 **Phase sequence:**
-- ✅ Sprint 0 → ✅ Phase 1 (v0.1.0 shipped) → 🚀 **Phase 2 (now)** → Phase 3 (Polish + Release)
+- ✅ Sprint 0 → ✅ Phase 1 (v0.1.0) → ✅ Phase 2 (v0.2.0) → 🚀 **Phase 3 (now)**

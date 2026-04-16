@@ -2314,3 +2314,99 @@ All commands ran without panic or crash. Not-found errors were clean and expecte
 No bugs found. No fixes needed. Phase 2 integration scenarios all pass cleanly.
 
 —Bender
+
+# Decision: Phase 3 Skills Review — Task 8.3
+
+**Date:** 2026-04-17
+**Author:** Leela
+**Scope:** Task 8.3 — Leela review of all five Phase 3 SKILL.md files
+
+---
+
+## Verdict: APPROVED
+
+All five SKILL.md files (`briefing`, `alerts`, `research`, `upgrade`, `enrich`) pass
+completeness, clarity, and agent-executability review. Task 8.3 marked `[x]`.
+
+---
+
+## Per-Skill Findings
+
+### briefing/SKILL.md — APPROVED
+- Five report sections fully defined (What Shifted, New Pages, Contradictions, Gaps, Upcoming)
+- Step-by-step agent invocation sequence with exact commands and jq filters
+- Configurable parameters table (`--days`, `--wing`, `--limit`, `--gaps-limit`, `--json`)
+- Failure modes table covering all meaningful error conditions
+- Prioritisation heuristics for over-limit pages
+- Matches spec scenarios: lookback window configurable, default 1 day ✓
+
+### alerts/SKILL.md — APPROVED
+- All four alert types from spec are present: `contradiction_new`, `gap_resolved`, `page_stale`, `embedding_drift`
+- Priority ladder defined; `critical` reserved for future use
+- JSON alert object schema fully specified
+- Detection workflows with exact command sequences for each alert type
+- Deduplication rules with key construction patterns per type
+- Suppression window configurable per alert type (YAML block)
+- Failure modes table covers check failure, missing suppression log, empty brain
+- **Stale threshold: 30 days (see discrepancy ruling below)**
+
+### research/SKILL.md — APPROVED
+- Sensitivity levels fully defined: `internal` / `external` / `redacted`
+- Step-by-step workflow (Steps 1–5) with branch paths per sensitivity level
+- `brain_gap_approve` correctly documented as an approval workflow dependency, not a CLI
+  command — this is an important distinction; agents that try to call it as a CLI will fail
+- Exa integration pattern with endpoint, request format, and caching rule
+- Redacted query generation: explicit placeholder substitution rules
+- Rate limiting guidance table
+- Gap prioritisation heuristics
+- Failure modes table
+
+### upgrade/SKILL.md — APPROVED
+- Nine-step workflow with clear entry/exit conditions per step
+- GitHub Releases API fetch with platform asset naming table
+- Checksum verification (`sha256sum -c`) before binary replacement
+- Backup (`.bak`) and rollback procedure fully specified
+- Post-upgrade validation with `gbrain validate --all`; automatic rollback on failure
+- Version pinning: skills declare `min_binary_version`; upgrade skill checks after install
+- Failure modes table covers all meaningful cases including missing `.bak` at rollback
+
+### enrich/SKILL.md — APPROVED
+- Three sources (Crustdata, Exa, Partiful) with distinct patterns per source
+- Two-phase storage flow: `brain_raw` first, extract second — idempotency anchor stated explicitly
+- Crustdata: company and person enrichment patterns with fact-extraction lists
+- Exa: web search pattern with full-page content retrieval and source citation rule
+- Partiful: file-based pattern with attendee stub creation + link creation
+- Conflict resolution: 5-step process; never auto-overwrite `compiled_truth`
+- OCC: `--expected-version` used throughout; ConflictError recovery procedure specified
+- Rate limiting table
+
+---
+
+## Stale Threshold Discrepancy — Ruling
+
+**Amy flagged:** The `alerts/SKILL.md` uses a **30-day** stale threshold
+(`timeline_updated_at > truth_updated_at by 30+ days`) while task 1.2 description
+in `tasks.md` reads **>90 days**.
+
+**Analysis:**
+- `openspec/changes/p3-skills-benchmarks/specs/skills/spec.md` line 28 (BDD scenario):
+  `"page has timeline_updated_at > truth_updated_at by 30+ days AND has > 5 inbound links"`
+- `tasks.md` task 1.2 description: "page stale >90 days" — summary text, not a BDD scenario
+
+**Ruling:** The **spec scenario governs**. The 30-day figure in `alerts/SKILL.md` is
+**correct**. Amy made the right call. The 90-day figure in task 1.2 was an authoring
+error in the task description text.
+
+**Action taken:** Task 1.2 description in `tasks.md` corrected from ">90 days" to
+">30 days (timeline_updated_at > truth_updated_at by 30+ days)" to eliminate the
+contradiction. No change to `alerts/SKILL.md` required.
+
+---
+
+## Next Steps
+
+- Task 8.3 complete. Phase 3 can proceed to remaining cross-checks (8.1, 8.2, 8.4–8.7)
+  and implementation tasks (Groups 2–7).
+- Fry should be aware: the canonical stale threshold is 30 days (spec scenario), not 90.
+  If any implementation in `alerts` detection uses 90 days, it must be corrected to 30.
+
