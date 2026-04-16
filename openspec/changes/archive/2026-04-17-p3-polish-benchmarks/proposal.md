@@ -1,12 +1,13 @@
 ---
 id: p3-polish-benchmarks
 title: "Phase 3: Release Readiness, Coverage, and Docs Polish"
-status: complete
+status: shipped
 type: feature
 phase: 3
 owner: leela
 reviewers: [fry, amy, hermes, zapp, kif, scruffy]
 created: 2026-04-13
+archived: 2026-04-17
 depends_on: p1-core-storage-cli
 ---
 
