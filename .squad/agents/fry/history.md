@@ -388,3 +388,8 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - Contradiction dedup should only match unresolved rows; resolved contradictions must allow re-detection
 - MCP tool parameter matching should always normalize case before string comparison
 
+- Phase 3 OpenSpec (p3-skills-benchmarks) scoped and authored: 5 skill completions, 4 CLI stubs, 4 MCP tools, benchmark harnesses
+- p3-polish-benchmarks covers release/docs/coverage only — separate from this feature work
+- 4 MCP tools remain unimplemented: brain_gap, brain_gaps, brain_stats, brain_raw (all Phase 3)
+- validate.rs uses modular checks (--links, --assertions, --embeddings, --all) for targeted integrity verification
+- Benchmark strategy: Rust for offline CI gates, Python for advisory API-dependent benchmarks (LongMemEval, LoCoMo, Ragas)

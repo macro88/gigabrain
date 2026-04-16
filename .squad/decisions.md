@@ -2110,3 +2110,207 @@ This approval is for the **graph slice only**. Issue #28 as a whole still includ
 
 **Why:** Nibbler's Phase 2 guardrails explicitly require contradiction reruns to stay idempotent and manual assertions to survive re-indexing. The helper seam also keeps task 4.5 coverage branch-focused: tests validate page targeting, `--all` processing, JSON shape, and existing contradiction reporting without binding to terminal plumbing.
 
+---
+
+## leela-v020-release.md
+
+# Decision: v0.2.0 Release Process
+
+## Context
+
+PR #22 (Phase 2 — Intelligence Layer) merged to main at commit `6e9b2e1`. Task: create v0.2.0 release.
+
+## Decisions
+
+### D1: Version bump validation via `cargo check`, not full build
+
+`cargo check --quiet` is sufficient to confirm the version string compiles. Full `cargo build` is not required for a version bump commit. The release.yml workflow handles cross-platform binary builds on tag push.
+
+**Rationale:** Keeps release process fast. Binary build is the CI's responsibility, not the release author's.
+
+### D2: Release notes written directly from OpenSpec + commit log, no LLM summarisation pass
+
+Release notes for v0.2.0 were authored by Leela directly from:
+- `openspec/changes/archive/2026-04-16-p2-intelligence-layer/proposal.md`
+- `openspec/changes/archive/2026-04-16-p2-intelligence-layer/tasks.md` (58 completed tasks)
+- `git show 6e9b2e1 --stat`
+- `phase2_progress.md`
+
+**Rationale:** OpenSpec is the authoritative source of truth for what shipped. This keeps release notes accurate and avoids hallucination drift.
+
+### D3: Temporary release-notes.md at repo root, deleted after use
+
+The `gh release create --notes-file` pattern requires a file. Created `release-notes.md` at repo root, used it, deleted it. Not committed.
+
+**Rationale:** Avoids polluting repo history with ephemeral release artifacts. GitHub stores the notes on the release itself.
+
+### D4: No wait for CI binary builds before marking release Latest
+
+Per task spec and release.yml trigger design (`on: push: tags: ['v*']`), binary builds are handled automatically. The GitHub release was created immediately after tagging with `--latest`.
+
+**Rationale:** Users can see the release and read notes immediately. Binary assets attach asynchronously without blocking the release event.
+
+## Outcome
+
+- v0.2.0 released: https://github.com/macro88/gigabrain/releases/tag/v0.2.0
+- Tag `v0.2.0` pushed to origin
+- Version bump committed to main (`04362d5`)
+- release.yml triggered automatically
+
+---
+
+## fry-phase3-openspec.md
+
+# Decision: Phase 3 OpenSpec Scoping (p3-skills-benchmarks)
+
+**Author:** Fry
+**Date:** 2026-04-16
+**Context:** Phase 2 merged, p3-polish-benchmarks (release/docs) complete but unarchived
+
+## Key Scoping Decisions
+
+### 1. Separated from p3-polish-benchmarks
+p3-polish-benchmarks covers release readiness, coverage, and docs polish only.
+This new p3-skills-benchmarks covers feature work: skills, benchmarks, CLI stubs, MCP tools.
+No overlap. p3-polish-benchmarks should be archived independently.
+
+### 2. Five stub skills → production
+briefing, alerts, research, upgrade, enrich are all stubs. ingest, query, maintain
+are already production-ready. Only the 5 stubs need authoring.
+
+### 3. Four CLI stubs remain
+validate.rs, call.rs, pipe.rs, skills.rs all have `todo!()`. version.rs works.
+All four need implementation. validate gets modular check architecture (--links/--assertions/--embeddings/--all).
+
+### 4. Four MCP tools missing from spec
+brain_gap, brain_gaps, brain_stats, brain_raw are not in server.rs. This brings the
+total from 12 to 16 tools. brain_gap_approve deferred (not needed until research skill
+is actively used).
+
+### 5. Benchmark split: offline vs advisory
+Offline gates (BEIR, corpus-reality, concurrency, embedding migration) are Rust tests
+that block releases. Advisory benchmarks (LongMemEval, LoCoMo, Ragas) are Python scripts
+requiring API keys, run manually before major releases.
+
+### 6. Dataset pinning mandatory
+All benchmark datasets pinned to commit hashes in datasets.lock. No floating references.
+Reproducibility is non-negotiable for regression gates.
+
+### 7. --json audit before completion
+Rather than assuming --json works everywhere, task 4.1 audits all commands first,
+then 4.2 fixes gaps. Systematic, not assumptions.
+
+---
+
+## bender-graph-selflink-fix.md
+
+# Bender: Graph self-link suppression fix
+
+- **Date:** 2026-04-16
+- **Scope:** `src/core/graph.rs`, `src/commands/graph.rs`, `tests/graph.rs`
+- **Commit:** a1d1593
+- **Trigger:** Nibbler graph slice rejection (`nibbler-graph-final.md`)
+
+## Decision
+
+Self-links (`from_page_id == to_page_id`) are suppressed at two layers:
+
+1. **Core BFS**: skip edges where target equals current source during traversal. Self-link edges never enter `GraphResult`.
+2. **Text renderer**: defense-in-depth filter drops any edge where `from == to` before tree rendering.
+
+## Rationale
+
+- The `active_path` cycle check happened to suppress self-links in text output, but this was accidental — not an intentional contract enforcement.
+- Nibbler correctly identified that this left the task 2.2 invariant ("root can never appear as its own neighbour") enforced by coincidence, not by design.
+- Two-layer defense ensures the contract holds even if future refactors change the cycle suppression mechanism.
+
+## Reviewer lockout
+
+- Scruffy is locked out of the graph artifact per Nibbler's rejection. Bender took ownership.
+- This fix is scoped to the self-link issue only; all other approved behaviors (outbound-only traversal, parent-aware tree, cycle suppression, edge deduping, temporal filtering) are preserved.
+
+## Test evidence
+
+- 3 new unit tests + 1 new integration test + 1 strengthened integration test
+- All 14 unit + 9 integration graph tests pass
+
+---
+
+## bender-integration.md
+
+# Bender Integration Sign-Off — Phase 2
+
+**Date:** 2026-04-16
+**Branch:** `phase2/p2-intelligence-layer`
+**Tasks:** 10.4, 10.5, 10.9
+
+---
+
+## Scenario A: Ingest Novelty-Skip (Task 10.9 part 1)
+
+| Step | Expected | Actual | Result |
+|------|----------|--------|--------|
+| First ingest of `test_page.md` | "Ingested test_page" | "Ingested test_page" | ✅ |
+| Re-ingest same file (byte-identical) | SHA-256 idempotency skip | "Already ingested (SHA-256 match), use --force to re-ingest" | ✅ |
+| Ingest near-duplicate (one word changed, same slug) | Novelty skip | "Skipping ingest: content not novel (slug: test_page)" on stderr | ✅ |
+| Ingest near-duplicate with `--force` | Bypass novelty | "Ingested test_page" | ✅ |
+
+**Verdict: PASS**
+
+---
+
+## Scenario B: Contradiction Round-Trip (Task 10.9 part 2)
+
+| Step | Expected | Actual | Result |
+|------|----------|--------|--------|
+| Ingest page1.md ("Alice works at AcmeCorp") | Ingested | "Ingested page1" | ✅ |
+| Ingest page2.md ("Alice works at MomCorp") | Ingested | "Ingested page2" | ✅ |
+| `gbrain check --all` | Detects works_at contradiction | `[page1] ↔ [page2]: Alice has conflicting works_at assertions: AcmeCorp vs MomCorp` | ✅ |
+
+Also detected cross-page contradictions with test_page (4 total). All correct.
+
+**Verdict: PASS**
+
+---
+
+## Scenario C: Phase 1 Roundtrip Regression (Task 10.5)
+
+| Test | Result |
+|------|--------|
+| `cargo test --test roundtrip_semantic` | 1 passed, 0 failed | ✅ |
+| `cargo test --test roundtrip_raw` | 1 passed, 0 failed | ✅ |
+
+No regressions from Phase 2 changes.
+
+**Verdict: PASS**
+
+---
+
+## Scenario D: Manual Smoke Tests (Task 10.4)
+
+| Command | Exit Code | Behaviour | Result |
+|---------|-----------|-----------|--------|
+| `gbrain graph people/alice --depth 2` | 1 | Clean error: "page not found: people/alice" (no panic) | ✅ |
+| `gbrain check --all` | 0 | Printed 4 contradictions, clean summary | ✅ |
+| `gbrain gaps` | 0 | "No knowledge gaps found." | ✅ |
+| `gbrain query "test" --depth auto` | 0 | Returned 2 matching pages with summaries | ✅ |
+
+All commands ran without panic or crash. Not-found errors were clean and expected.
+
+**Verdict: PASS**
+
+---
+
+## Overall
+
+| Task | Status |
+|------|--------|
+| 10.4 Manual smoke tests | ✅ PASS |
+| 10.5 Phase 1 roundtrip regression | ✅ PASS |
+| 10.9 Bender sign-off (novelty + contradictions) | ✅ PASS |
+
+## **APPROVED** ✅
+
+No bugs found. No fixes needed. Phase 2 integration scenarios all pass cleanly.
+
+—Bender
