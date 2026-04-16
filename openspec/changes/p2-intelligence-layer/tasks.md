@@ -101,5 +101,5 @@ OCC on `brain_put` is already complete — do not re-implement.
 - [x] 10.5  Phase 1 round-trip tests (`tests/roundtrip_semantic.rs`, `tests/roundtrip_raw.rs`) still pass with no regressions.
 - [ ] 10.6  Professor review: `src/core/graph.rs` BFS correctness, `src/core/progressive.rs` budget logic, OCC protocol unchanged.
 - [ ] 10.7  Nibbler review: MCP Phase 2 write surface adversarial check (link injection, graph depth abuse, contradiction table poisoning).
-- [ ] 10.8  Mom review: temporal link edge cases (valid_from > valid_until rejected by schema CHECK, zero-hop graph, null valid_from).
+- [x] 10.8  Mom review: temporal link edge cases (valid_from > valid_until rejected by schema CHECK, zero-hop graph, null valid_from).
 - [x] 10.9  Bender sign-off: ingest novelty-skip scenario, contradictions round-trip (ingest conflicting pages → `gbrain check` detects).
