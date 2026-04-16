@@ -1,0 +1,63 @@
+# benchmarks/datasets.lock
+#
+# Pinned dataset references for reproducible benchmark runs.
+# ALL datasets MUST be pinned here — never use HEAD or floating refs in CI.
+#
+# Usage:
+#   ./benchmarks/prep_datasets.sh        # downloads & verifies
+#   ./benchmarks/prep_datasets.sh --verify-only  # check existing archives
+#
+# To update pins: download new archives, compute sha256, update here.
+
+[beir]
+# BEIR evaluation framework
+# https://github.com/beir-cellar/beir
+repo = "beir-cellar/beir"
+commit = "1.0.1"                    # release tag (treated as version pin)
+
+  [beir.nq]
+  # NQ (Natural Questions) BEIR subset
+  # ~50k query set, 2.6M corpus — we use the dev split (3610 queries)
+  url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nq.zip"
+  sha256   = "1e0ad51568a47e48c4d81c64a5d2562b8dc3d3e8c4f2d5e0e3e9d0b6f4c8a7b3"  # UPDATE: run prep_datasets.sh --compute-hashes
+  size_mb  = 490
+  split    = "test"
+
+  [beir.fiqa]
+  # FiQA (Financial QA) BEIR subset
+  # 57k corpus, 6648 train + 648 test queries
+  url      = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip"
+  sha256   = "9e2d4a3c6f1b5e8d0c7a4f2b9e6d3a0c7e4f2b9d6a3e0f7b4e1c8d5a2f9b6e3"  # UPDATE: run prep_datasets.sh --compute-hashes
+  size_mb  = 17
+  split    = "test"
+
+[longmemeval]
+# LongMemEval — multi-session memory benchmark
+# https://github.com/xiaowu0162/LongMemEval
+repo     = "xiaowu0162/LongMemEval"
+commit   = "a3f7c2e1d4b8f5a9c6e0d2b7f4a1e8c5d9b3f6a2"  # UPDATE: pin to latest stable commit
+ref      = "main"
+data_dir = "data"
+
+[locomo]
+# LoCoMo — conversational memory benchmark (long-term, multi-session)
+# https://github.com/snap-research/locomo
+repo     = "snap-research/locomo"
+commit   = "b8d4f2a7c1e9f3b5d8a2e7c4f1b9d6a3e0c7f4b2"  # UPDATE: pin to latest stable commit
+ref      = "main"
+data_dir = "locomo10"
+
+[ragas]
+# Ragas evaluation framework — installed via requirements.txt
+# Pinned via benchmarks/requirements.txt (pip), NOT a git clone
+version = "0.1.21"
+
+# ── Verification Notes ───────────────────────────────────────────────────────
+#
+# SHA-256 hashes marked "UPDATE" are placeholders.
+# Run the following to compute real hashes after first download:
+#
+#   ./benchmarks/prep_datasets.sh --compute-hashes
+#
+# Commit hashes for LongMemEval and LoCoMo should be updated to the latest
+# stable commits before each major release evaluation cycle.
