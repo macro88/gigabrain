@@ -2225,7 +2225,7 @@ Skills (skills/) are fat markdown files - all intelligence lives there.
 
 ```bash
 cargo build --release
-# Output: target/release/gbrain (online channel, default)
+# Output: target/release/gbrain (airgapped channel, default)
 
 # Cross-compile
 cargo install cross
@@ -2308,9 +2308,9 @@ anyhow = "1"
 thiserror = "1"
 
 [features]
-default = ["bundled", "online-model"]
+default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
-embedded-model = []                      # include_bytes!() model weights into binary
+embedded-model = []                      # airgapped channel (default): include_bytes!() model weights into binary
 online-model = ["hf-hub"]                # online channel; download weights on first run
 ```
 
@@ -2320,11 +2320,11 @@ online-model = ["hf-hub"]                # online channel; download weights on f
 # Development
 cargo build
 
-# Release — online channel (default; downloads BGE-small weights on first semantic use)
+# Release — airgapped channel (default; embeds BGE-small weights into the binary)
 cargo build --release
 
-# Release — airgapped channel (embeds BGE-small weights into the binary)
-cargo build --release --no-default-features --features bundled,embedded-model
+# Release — online channel (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test

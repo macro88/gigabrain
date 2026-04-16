@@ -26,7 +26,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — online default |
+| Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
 | GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; `GBRAIN_CHANNEL=online` switches channels |
@@ -41,15 +41,15 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 
-# Online channel — default (downloads BGE-small weights on first semantic use)
+# Airgapped channel — default (embeds BGE-small weights into the binary)
 cargo build --release
 # Binary at: target/release/gbrain
 
-# Airgapped channel — embeds BGE-small weights into the binary
-cargo build --release --no-default-features --features bundled,embedded-model
+# Online channel — downloads/caches BGE-small on first semantic use
+cargo build --release --no-default-features --features bundled,online-model
 ```
 
-Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the **online** channel (downloads/caches BGE-small on first semantic use); use `embedded-model` for the airgapped variant that embeds BGE-small at compile time.
+Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the **airgapped** channel (embeds BGE-small-en-v1.5 at compile time); use `online-model` for the online variant that downloads/caches BGE-small on first semantic use.
 
 ### Cross-compile for static Linux binary
 

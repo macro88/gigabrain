@@ -2234,7 +2234,7 @@ Skills (skills/) are fat markdown files - all intelligence lives there.
 
 ```bash
 cargo build --release
-# Output: target/release/gbrain (online channel — default)
+# Output: target/release/gbrain (airgapped channel — default)
 
 # Cross-compile
 cargo install cross
@@ -2254,8 +2254,8 @@ cargo test
 BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.1` ships two
 compile-time channels:
 
-- `online-model` — online channel (default): downloads/caches BGE-small on first semantic use
-- `embedded-model` — airgapped channel: `include_bytes!()` model assets embedded at build time
+- `embedded-model` — airgapped channel (default): `include_bytes!()` model assets embedded at build time
+- `online-model` — online channel: downloads/caches BGE-small on first semantic use
 
 ## Skills
 
@@ -2317,10 +2317,10 @@ anyhow = "1"
 thiserror = "1"
 
 [features]
-default = ["bundled", "online-model"]
+default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
-embedded-model = []                      # airgapped channel: include_bytes!() model weights into binary
-online-model = ["dep:reqwest"]           # online channel (default): download/cache BGE-small on first use
+embedded-model = []                      # airgapped channel (default): include_bytes!() model weights into binary
+online-model = ["dep:reqwest"]           # online channel: download/cache BGE-small on first use
 ```
 
 ### Build commands
@@ -2332,11 +2332,11 @@ cargo build
 # Release (optimized)
 cargo build --release
 
-# Release (online channel — default)
+# Release (airgapped channel — default; embeds BGE-small for offline use)
 cargo build --release
 
-# Release with embedded-model (airgapped channel — embeds BGE-small for offline use)
-cargo build --release --no-default-features --features bundled,embedded-model
+# Release — online channel (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test

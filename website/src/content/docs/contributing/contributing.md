@@ -80,11 +80,11 @@ cargo check
 # Debug build
 cargo build
 
-# Release build — online channel (default)
+# Release build — airgapped channel (default; embeds BGE-small-en-v1.5)
 cargo build --release
 
-# Airgapped release build (embeds BGE-small weights)
-cargo build --release --no-default-features --features bundled,embedded-model
+# Online release build (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test

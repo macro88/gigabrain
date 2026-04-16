@@ -24,18 +24,18 @@ See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
 The full Phase 3 binary compiles today. Build from source for all features.
 
-**Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. The default source build is the **online** channel (downloads/caches BGE-small on first semantic use); build with `embedded-model` to produce the airgapped variant.
+**Requirements:** Rust stable toolchain. No other system dependencies — SQLite and sqlite-vec are bundled. The default source build is the **airgapped** channel (embeds BGE-small-en-v1.5 at compile time); build with `online-model` to produce the online variant that downloads/caches BGE-small on first semantic use.
 
 ```bash
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 
-# Online channel — default (downloads BGE-small weights on first semantic use)
+# Airgapped channel — default (embeds BGE-small weights into the binary)
 cargo build --release
 # Binary at: target/release/gbrain
 
-# Airgapped channel — embeds BGE-small weights into the binary
-cargo build --release --no-default-features --features bundled,embedded-model
+# Online channel — downloads/caches BGE-small on first semantic use
+cargo build --release --no-default-features --features bundled,online-model
 ```
 
 #### Cross-compile for a fully static Linux binary

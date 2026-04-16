@@ -80,12 +80,12 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — online default |
+| Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
 | GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.1` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the online channel. **GitHub Releases** and the **shell installer** expose both BGE-small channels for `v0.9.1`. The npm package remains a single wrapper package and targets the `online` channel by default.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both BGE-small channels for `v0.9.1`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
@@ -121,10 +121,10 @@ Or build from source:
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Online channel (default)
+# Airgapped channel (default) — embeds BGE-small-en-v1.5 for offline use
 
-cargo build --release --no-default-features --features bundled,embedded-model
-# Airgapped channel
+cargo build --release --no-default-features --features bundled,online-model
+# Online channel — downloads/caches BGE-small on first semantic use
 ```
 
 > **BGE-small only.** `v0.9.1` intentionally ships only two BGE-small channels: `airgapped` (embedded) and `online`. There is no base/large support and no runtime `--model` flag in this release.
@@ -277,11 +277,11 @@ GigaBrain is open for contributions. All three phases have shipped. Phase 3 is c
 # Debug
 cargo build
 
-# Release (online default, downloads/caches BGE-small on first semantic use)
+# Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
 cargo build --release
 
-# Airgapped release (embeds BGE-small-en-v1.5 for offline use)
-cargo build --release --no-default-features --features bundled,embedded-model
+# Online release (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Cross-compile
 cargo install cross
