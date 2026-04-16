@@ -1341,6 +1341,79 @@ cargo build --release --target x86_64-unknown-linux-musl
 - `file`: "ELF 64-bit LSB pie executable, x86-64, static-pie linked, stripped"
 - Size: 8.8MB (without embedded model weights)
 
+### 2026-04-15: Graph CLI parent-aware rendering (Professor)
+
+**By:** Professor
+
+**What:** Human-readable `gbrain graph` output now renders each edge beneath its actual `from` parent instead of flattening every edge under the root slug. Multi-hop depth-2 edges no longer read as direct root edges.
+
+**Why:** The graph result is a breadth-first slice, not a star. Flattened text output made valid depth-2 edges read misleadingly for review and operator trust.
+
+**How verified:**
+- Strengthened CLI integration test asserts exact depth-2 text shape
+- Root line, direct child edge, grandchild edge indented beneath child
+- Commit: `44ad720`
+
+**Guardrails kept:**
+- Outbound-only traversal unchanged
+- Edge deduping unchanged
+- Active filtering unchanged
+- Text rendering short-circuit only applied to output path
+
+### 2026-04-15: Graph cycle/self-loop render suppression (Scruffy)
+
+**By:** Scruffy
+
+**What:** Self-loop edges and cycles that return to the root no longer print the root as its own neighbour in human output. Edge check for cycle membership now happens before printing the line, not only before recursing.
+
+**Why:** The operator-facing contract requires the root never to appear as its own neighbour, even in edge-case cycles. Traversal safety (via visited set) is separate from output legibility.
+
+**How verified:**
+- Self-edge on root no longer appears as `→ <root> (self)`
+- Cycles `a → b → a` no longer print root back into the tree
+- Regression tests cover both edge cases
+- Commit: `acd03ac`
+- `cargo test --quiet`, `cargo clippy --quiet -- -D warnings`, `cargo fmt --check` all pass
+
+### 2026-04-15: Progressive Retrieval Slice (Fry)
+
+**By:** Fry
+
+**What:** Tasks 5.1–5.6 implement progressive retrieval — the token-budget-gated BFS expansion powering `--depth auto` on `brain_query`. This separates GigaBrain's context-aware retrieval from plain FTS5.
+
+**Decisions:**
+1. Token approximation uses `len(compiled_truth) / 4` — industry standard proxy
+2. Budget is primary brake, depth is safety cap (hard-capped at 3 per MAX_DEPTH)
+3. Outbound-only expansion with active temporal filter (same as graph.rs)
+4. Config table `default_token_budget` authoritative; CLI `--token-budget` acts as floor, not override
+5. MCP `depth` field optional string; `"auto"` triggers expansion; absent/other preserves Phase 1 behavior
+
+**Reviewers:**
+- Professor: Verify budget logic doesn't over-count/under-count tokens
+- Nibbler: Confirm `depth: "auto"` can't abuse unbounded expansion
+
+### 2026-04-15: Assertions/Check Slice (Fry)
+
+**By:** Fry
+
+**What:** Tasks 3.1–4.5 implement triple extraction (`extract_assertions`) and contradiction detection (`check_assertions`). Three regex patterns (works_at, is_a, founded) with OnceLock-cached compilation. Temporal overlap checking with canonical pair ordering prevents duplicates.
+
+**How shipped:**
+- `src/core/assertions.rs`: Full implementation, 14 unit tests
+- `src/commands/check.rs`: CLI with `--all` / slug modes, human-readable and JSON output
+- `tests/assertions.rs`: 8 integration tests
+- All 193 tests pass (up from 185)
+
+**Key design choices:**
+1. Agent-only deletion on re-index: preserves manual assertions across re-indexing (improvement over spec's "DELETE all")
+2. OnceLock for regex caching: compiled once per process
+3. Canonical pair ordering: deterministic insertion, prevents duplicate detection from both directions
+4. Dedup includes resolved: existing contradictions (resolved or unresolved) block re-insertion
+
+**Validation:**
+- Clippy clean, fmt clean
+- Phase 1 roundtrip tests unaffected
+
 
 # Verdict: SG-8 — BEIR nDCG@10 Baseline Established
 
@@ -1682,3 +1755,358 @@ Phase 3 scope cut and implementation routing **APPROVED**. Final deliverables al
 **Team:** Leela, Fry, Amy, Hermes, Zapp, Kif, Scruffy
 
 **Status:** ✅ Complete — Ready for release
+---
+
+## Phase 2 Kickoff Decisions (2026-04-15)
+
+### Leela: Phase 2 Branch, Team Execution, Issue Actions, Archives, Coverage, No Pre-Merge
+
+**Decision IDs:** leela-phase2-kickoff (6 decisions: D1–D6)
+
+**What:**
+- **D1:** Branch phase2/p2-intelligence-layer created from main at v0.1.0
+- **D2:** Team execution split across 8 lanes (Fry impl, Scruffy coverage, Bender integration, Amy docs, Hermes website, Professor review, Nibbler adversarial, Mom temporal)
+- **D3:** Issue actions: close P1 issues #2–5; update #6 in-progress; create 8 sub-issues per lane
+- **D4:** Commit Sprint 0 + Phase 1 OpenSpec archives to branch
+- **D5:** Coverage target 90%+ (≥200 unit tests)
+- **D6:** PR #22 opened but NOT merged; owner macro88 merges manually per user directive
+
+**Why:** Formal phase boundary separation with clear team lanes, issue hygiene, and governance control at owner level.
+
+---
+
+### Scruffy: Phase 2 Coverage Lane + Contradiction Idempotency
+
+**Decision IDs:** scruffy-phase2-coverage (2 decisions: D1–D2)
+
+**What:**
+- **D1:** Coverage strategy: core-first unit tests alongside Fry's implementation; defer CLI process-level tests until stable formatting seams exist
+- **D2:** Contradiction reruns must stay idempotent—rerunning check_assertions does not duplicate rows for same fingerprint
+
+**Why:** Parallelize tests with implementation using OpenSpec specs as contract; ensure contradiction table stays clean on repeated scans.
+
+---
+
+### Bender: Phase 2 Validation Plan + Schema Gap Blocker
+
+**Decision IDs:** bender-phase2-signoff (validation scenarios S1–S24, evidence E1–E10)
+
+**BLOCKER:** knowledge_gaps.query_hash missing UNIQUE constraint. Task 8.1 specifies INSERT OR IGNORE for idempotency, which requires a UNIQUE constraint. Without it, every low-confidence query logs a duplicate row. Resolution required before Group 8 validation.
+
+**What:**
+- 24 destructive validation scenarios (contradiction round-trip, novelty-skip, graph traversal, progressive retrieval, knowledge gaps, MCP tools, regression, full suite)
+- Evidence checklist (E1–E10) including scenarios pass, schema fix, dead_code removal, derive_room behavior
+- Sign-off gate: all evidence required before Bender approves Phase 2 ship
+
+**Why:** Comprehensive edge-case validation ensures Phase 2 is adversarially sound before merge. Schema gap is foundational blocker for Groups 8–9.
+
+---
+
+### Amy: Phase 2 Docs Audit + Post-Ship Checklist
+
+**Decision IDs:** amy-phase2-docs (pre-ship + post-ship update map)
+
+**What:**
+- Pre-ship updates applied: README roadmap + usage note, docs/roadmap Phase 2 status, docs/getting-started callouts for Phase 2 tools, docs/contributing reviewer gates
+- Post-ship checklist created: exact map of what changes after Phase 2 merges and v0.2.0 tags (15 items across README, docs, spec, OpenSpec proposal)
+
+**Why:** Safe pre-ship updates reflect current status without claiming unshipped behavior. Post-ship checklist eliminates guesswork after merge.
+
+---
+
+### Professor: Phase 2 Early Review Gate (Blocking Findings)
+
+**Decision IDs:** professor-phase2-review (4 blocking findings F1–F4, non-blocking guidance)
+
+**BLOCKING FINDINGS:**
+- **F1:** Graph traversal undirected vs spec outbound-first mismatch—choose contract now (neighborhood = undirected adjacency or outbound traversal)
+- **F2:** Edge deduplication missing on cyclic graphs—deduplicate by link ID or (from,to,relationship,valid_from,valid_until)
+- **F3:** Progressive retrieval not started—settle contract before coding to avoid guaranteed rework
+- **F4:** OCC erosion risk in Group 9 MCP writes—preserve Phase 1 OCC discipline on every page-scoped write tool
+
+**What:** Early review identifies architectural gaps before implementation. Non-blocking guidance on BFS loop performance and test structure.
+
+**Why:** Blocking findings are spec-clarification gates. Do not merge Groups 1, 5, 9 without Professor sign-off.
+
+---
+
+### Nibbler: Phase 2 Adversarial Guardrails (5 Ship-Gate Blockers)
+
+**Decision IDs:** nibbler-phase2-adversarial (5 decisions D1–D5)
+
+**BLOCKING GUARDRAILS:**
+- **D1:** Active temporal reads must respect both ends of interval (valid_from ≤ today AND valid_until ≥ today)
+- **D2:** Graph traversal needs output budgets (max nodes/edges/bytes) + explicit direction, not just hop cap
+- **D3:** Contradiction detection idempotent + manual assertions preserved (not erased by re-indexing)
+- **D4:** Gap logging deduplicated via unique query_hash (real key, not just SELECT EXISTS)
+- **D5:** MCP tools return typed truth, not delegated CLI side effects (backlinks temporal arg, timeline shape, tags feedback)
+
+**What:** Adversarial guardrails prevent future-dated links masquerading as present truth, hub-page DoS, contradiction table poisoning, gap noise, and MCP output shape lies.
+
+**Why:** Nibbler sign-off is ship-level gate. These are implementable within Phase 2 scope and critical for product correctness.
+
+---
+
+### Fry: Phase 2 Graph BFS + Phase 2 OpenSpec Completion
+
+**Decision IDs:** fry-phase2-graph (bidirectional traversal + edge dedup), leela-p2-openspec (OpenSpec artifacts)
+
+**What:**
+- **Graph Decision:** Bidirectional BFS (both outbound and inbound links) with edge deduplication by link row ID to build neighbourhood. CLI maps --temporal flag to temporal filters (current→Active, all→All).
+- **OpenSpec Completion:** Leela completed full artifact set (design.md, 5 specs, tasks.md with 49 tasks across 10 groups, scope boundary decisions, reviewer routing)
+
+**Why:** Bidirectional neighbourhood matches real knowledge graphs; edge dedup prevents duplicates on cycles. OpenSpec completion unblocks implementation.
+
+---
+
+### Leela: Phase 2 OpenSpec Package Completion
+
+**Decision IDs:** leela-p2-openspec
+
+**What:** Created full OpenSpec artifact set for p2-intelligence-layer:
+- design.md (8 design decisions)
+- specs/graph/spec.md (N-hop BFS)
+- specs/assertions/spec.md (triple extraction + contradiction detection)
+- specs/progressive-retrieval/spec.md (token-budget gating)
+- specs/novelty-gaps/spec.md (novelty wiring + gaps log/list/resolve)
+- specs/mcp-phase2/spec.md (7 new MCP tools)
+- tasks.md (49 tasks across 10 groups)
+
+**Scope boundary decisions:** OCC on brain_put (excluded—Phase 1), commands/link (excluded—wiring only), novelty logic (excluded—wiring only), derive_room (included—real logic), graph BFS (iterative not recursive), assertions (regex not LLM), progressive depth (3-hop hard cap), room taxonomy (freeform from heading).
+
+**Reviewer routing:** Professor (Groups 1, 5, Task 10.6), Nibbler (Group 9, Task 10.7), Mom (temporal, Task 10.8), Bender (ingest, Task 10.9).
+
+**Why:** Complete artifact set unblocks implementation; scope accuracy prevents rework; reviewer routing clarifies gates.
+
+---
+
+### User Directive: Do Not Leave Half-Finished Work Locally
+
+**Directive ID:** copilot-directive-2026-04-15T12-35-00Z
+
+**What:** Do not leave half-finished work only on local computer. Everything must be committed to a working branch, pushed remote, and tracked through a PR.
+
+**Why:** User request (macro88) — captured for team memory to enforce distributed decision records and PR-gated review.
+
+---
+
+### User Directive: Complete Phase 2 with Frequent Checkpoints + User-Driven Merge
+
+**Directive ID:** copilot-directive-2026-04-15T22-37-52Z
+
+**What:** Complete Phase 2 with frequent commit/push checkpoints, open a PR for review, and do NOT merge the PR—the user will review and merge it.
+
+**Why:** User request (macro88) — enforces checkpoint discipline and preserves owner-level merge control per D6.
+
+---
+
+## P3 Release Branch Decisions (2026-04-13)
+
+### Fry: P3 Branch and PR Workflow
+
+**Decision ID:** fry-pr-workflow
+
+**What:** Created branch p3/release-readiness-docs-coverage from local main and opened draft PR #15 to origin/main. Branch includes 4 prior local commits (scribe summaries, doc drift fixes, decision merges) + 1 new commit with all P3 implementation (CI coverage, release hardening, docs accuracy, docs-site polish, OpenSpec artifacts).
+
+**Why:** Reviewers evaluate against OpenSpec task checklist. 4 prior commits are squad-internal; final commit is P3 payload. Draft status chosen because reviewer gates not yet complete.
+
+---
+
+## Phase 1 Release Decisions (2026-04-15)
+
+### Fry: Phase 1 Release Gap
+
+**Decision ID:** fry-release-gap
+
+**What:** Phase 1 (all 34 tasks + 9 ship gates) is complete, PR #12 merged, PR #15 merged, CI passes, Cargo.toml has version = "0.1.0", but **v0.1.0 tag was never pushed**. Release workflow never fired; no GitHub Release exists. Public docs still say "Phase 1 in progress" (inaccurate).
+
+**Action:** 
+1. Update all docs to reflect Phase 1 complete (README, docs/, website/)
+2. After PR merges, push v0.1.0 tag: git tag v0.1.0 && git push origin v0.1.0
+3. Verify release against .github/RELEASE_CHECKLIST.md
+
+**Why:** Roadmap commits to v0.1.0 after Phase 1. Phase 1 is done. Gap is purely operational.
+
+---
+
+### Fry: v0.1.0 Release Repair
+
+**Decision ID:** fry-release-repair
+
+**What:** v0.1.0 release workflow failed on Linux musl targets. Root causes:
+1. sqlite-vec uses BSD types (u_int8_t, etc.) not in strict musl
+2. db.rs hardcoded i8 transmute but c_char is u8 on aarch64
+3. Static binary check too strict (matched "statically linked" not "static-pie linked")
+
+**Fixes applied:**
+- PR #20: Added Cross.toml with CFLAGS passthrough (-Du_int8_t=uint8_t)
+- PR #21: Changed db.rs to use std::ffi::c_char/c_int (platform-correct); updated grep pattern
+- Tag recreated twice on updated HEAD to re-trigger workflow
+
+**Result:** Release published with 4 platform binaries + checksums. Workflow run 24462421225 succeeded.
+
+**Future implications:** New musl targets need CFLAGS in Cross.toml; sqlite-vec upgrades need aarch64 musl testing.
+
+---
+
+### Zapp: Release Contract Wording
+
+**Decision ID:** zapp-release-contract-wording
+
+**What:** Two locations implied a release existed when no GitHub Release was cut:
+1. README.md—"channels for this release" treated v0.1.0 as shipped
+2. docs/contributing.md—issue script had "[Phase 3] v0.1.0 release" (should be Phase 1)
+
+**Option chosen:** (b) Tighten wording—no release is published yet.
+
+**Changes made:**
+- README.md: split build-from-source (available now) from GitHub Releases (landing with v0.1.0); curl block labeled "Not yet available"
+- docs/contributing.md: issue script corrected: "[Phase 3] v0.1.0 release" → "[Phase 1] v0.1.0 release"
+
+**Why:** Accurate wording removes false implication that release already exists. Release contract unchanged (v0.1.0 cuts after Phase 1 gates pass).
+
+
+
+---
+
+## leela-graph-revision.md
+
+# Leela: Graph Slice Revision (Tasks 1.1–2.5)
+
+- **Date:** 2026-04-15
+- **Scope:** `src/core/graph.rs`, `src/commands/graph.rs`, `tests/graph.rs`, `openspec/changes/p2-intelligence-layer/tasks.md`
+- **Triggered by:** Professor rejection of Fry's graph slice. Fry locked out of this revision cycle.
+
+## What was wrong
+
+Professor rejected the graph slice for four concrete reasons:
+
+1. **Directionality contract unresolved.** `neighborhood_graph` traversed both outbound and inbound links (undirected BFS), contradicting the spec which says "all pages reachable via one active outbound link." This also broke coherence with the existing `gbrain links` (outbound) / `gbrain backlinks` (inbound) command split.
+2. **Misleading human output.** For an inbound-only edge `acme → alice`, `gbrain graph people/alice` would print `→ people/alice (employs)` — root appearing as its own neighbour.
+3. **CLI tests did not verify actual output.** `graph_cli_human_output_shows_root_and_edges` only checked `is_ok()`; `graph_cli_json_output_has_nodes_and_edges` tested the core struct, not the CLI's `--json` output.
+4. **Duplicated SQL logic.** Near-identical outbound/inbound queries made the directionality contract hard to audit.
+
+## Decisions made
+
+### D1: Outbound-only BFS (confirmed from spec)
+
+The graph traversal follows outbound links only. `neighborhood_graph` reflects the explicit spec wording: "reachable via outbound links." Inbound reachability remains the domain of `gbrain backlinks`. This aligns the two surfaces orthogonally.
+
+The `inbound_links_are_included_in_graph` unit test was removed because it directly contradicted the spec.
+
+### D2: temporal `Active` filter now also gates `valid_from`
+
+The previous clause only checked `valid_until`. The corrected clause:
+
+```sql
+(l.valid_from IS NULL OR l.valid_from <= date('now'))
+AND (l.valid_until IS NULL OR l.valid_until >= date('now'))
+```
+
+This ensures future-dated links do not appear in the active graph. Mom's edge-case note identified this gap; fixing it here is the right time.
+
+### D3: CLI output captured via `run_to<W: Write>`
+
+`commands::graph::run` was refactored to delegate to `run_to<W: Write>`, which accepts a generic writer. `run` passes `io::stdout()`. Integration tests pass a `Vec<u8>` buffer and assert on the captured text. This is the minimum change that makes the output contract testable without spawning a subprocess.
+
+### D4: tasks.md updates (1.2, 1.3, 1.5, 2.2, 2.5)
+
+Task descriptions updated to reflect: outbound-only contract, `valid_from` in temporal clause, new test coverage (future-dated links, root-not-self-neighbour), and `run_to` in 2.5 test description.
+
+## Validation
+
+- `cargo test --lib --test graph`: 163 lib tests + 6 integration tests, all pass.
+- `cargo clippy -- -D warnings`: clean.
+- `cargo fmt --check`: clean.
+
+
+---
+
+## professor-graph-review.md
+
+# Professor graph slice review
+
+- **Date:** 2026-04-15
+- **Scope:** OpenSpec `p2-intelligence-layer` tasks 1.1-2.5 (`src/core/graph.rs`, `src/commands/graph.rs`, `src/main.rs`, `tests/graph.rs`)
+- **Verdict:** **REJECT FOR LANDING (slice only)**
+
+## What is acceptable
+
+- Edge deduplication is now present via `seen_edges: HashSet<i64>` keyed by link row ID, so the earlier duplicate-edge concern is materially addressed.
+- The slice does have the basic BFS guardrails: iterative queue, visited set, depth cap, not-found handling, and graph-focused tests.
+
+## Blocking findings
+
+1. **Directionality contract is still unresolved.**
+   - The accepted graph spec and task wording describe one-hop reachability from a page via its outbound links.
+   - `src/core/graph.rs` now traverses both outbound and inbound links as an undirected neighbourhood, which changes the API contract without a matching spec/design amendment.
+   - This also breaks coherence with the already-separated `links` (outbound) vs `backlinks` (inbound) command surface.
+
+2. **Human-readable output is misleading under inbound traversal.**
+   - `src/commands/graph.rs` prints every edge as `→ <edge.to> (<relationship>)`.
+   - For an inbound-only edge like `companies/acme -> people/alice`, running `gbrain graph people/alice` will print `→ people/alice (employs)`, which makes the root appear as its own neighbour.
+
+3. **CLI output-shape tests do not actually verify CLI output.**
+   - `tests/graph.rs` checks that `commands::graph::run(...)` returns `Ok(())`, but it does not capture or assert stdout for the human-readable format.
+   - The JSON test serializes the core `GraphResult` directly instead of asserting the actual CLI `--json` output, so the outward contract remains unpinned.
+
+4. **Maintainability is weaker than it should be for a contract-sensitive slice.**
+   - `src/core/graph.rs` duplicates near-identical inbound/outbound query and row-mapping logic.
+   - That duplication makes the chosen directionality harder to audit and easier to drift again when the contract is revised.
+
+## Required follow-up before approval
+
+1. Decide and document the graph contract explicitly: outbound-only traversal, or an intentionally undirected neighbourhood with matching spec/task wording.
+2. Align CLI rendering to the chosen contract so inbound edges cannot be displayed as if they were outbound neighbours of the root.
+3. Add tests that assert the actual stdout/stderr shape for both text and JSON modes.
+4. If undirected traversal is retained, refactor the duplicated SQL/row-mapping path so the direction semantics are encoded once and remain auditable.
+
+
+---
+
+## professor-graph-rereview.md
+
+# Professor graph slice re-review
+
+- **Date:** 2026-04-15
+- **Scope:** OpenSpec `p2-intelligence-layer` graph slice only (tasks 1.1-2.5; `src/core/graph.rs`, `src/commands/graph.rs`, `src/main.rs`, `tests/graph.rs`)
+- **Verdict:** **APPROVE FOR LANDING (graph slice only)**
+
+## Decision
+
+Leela's revision resolves the three blockers from the prior rejection:
+
+1. **Directionality contract now matches the accepted spec.**
+   - `neighborhood_graph` is outbound-only again.
+   - `gbrain backlinks` remains the inbound surface, which restores command/API coherence.
+
+2. **Human-readable rendering is no longer misleading.**
+   - The CLI prints `→ <edge.to> (<relationship>)` over an outbound-only result set, so the root no longer appears as its own neighbour due to inbound traversal.
+
+3. **CLI tests now pin the real outward contract.**
+   - `run_to<W: Write>` makes the command output injectable.
+   - Integration tests now capture and assert actual text output and actual `--json` output shape.
+
+## Validation performed
+
+- `cargo test graph --quiet` ✅
+- `cargo test --quiet` ✅
+- `cargo clippy --quiet -- -D warnings` ✅
+- `cargo fmt --check` ✅
+
+## Scope caveat
+
+This approval is for the **graph slice only**. Issue #28 as a whole still includes the progressive-retrieval budget/OCC review lane, which is not re-opened or approved by this note.
+
+
+---
+
+## scruffy-assertions-coverage.md
+
+## Scruffy — Assertions/check coverage seam
+
+- **Decision:** Preserve manual assertions when `extract_assertions()` re-indexes a page; only prior `asserted_by = 'agent'` rows are replaced.
+- **Decision:** Keep `commands::check` as a thin printer over a pure `execute_check()` + render helpers so assertions/check coverage can validate behavior deterministically without stdout-capture tricks.
+
+**Why:** Nibbler's Phase 2 guardrails explicitly require contradiction reruns to stay idempotent and manual assertions to survive re-indexing. The helper seam also keeps task 4.5 coverage branch-focused: tests validate page targeting, `--all` processing, JSON shape, and existing contradiction reporting without binding to terminal plumbing.
+

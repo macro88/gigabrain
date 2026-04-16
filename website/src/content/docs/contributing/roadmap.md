@@ -75,7 +75,7 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 ## Phase 2 — Intelligence Layer ⏳
 
-**Status: Not started**  
+**Status: In progress**  
 **Depends on:** Phase 1 ship gate
 
 **Planned scope:**

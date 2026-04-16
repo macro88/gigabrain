@@ -15,7 +15,25 @@
 - When README and docs roadmap disagree on phase status (e.g., "not started" vs. "in progress"), the roadmap docs are usually more current — resolve by reading both sources before writing.
 - Phase 3 gate in roadmap.md said `v0.1.0` when it should have been `v1.0.0` — easy to miss without cross-checking version targets table.
 
-## 2026-04-15 P3 Release — Docs Refresh & Completion
+## 2026-04-15 P2 Docs Audit
+
+**Role:** Pre-ship docs audit for Phase 2 (intelligence layer)
+
+**What happened:**
+- Audited all repo docs impacted by Phase 2 against the proposal, design, tasks, and five feature specs.
+- Made safe implementation-independent updates: README.md (roadmap row, usage note, MCP tools split, contributing section), docs/roadmap.md (status → In progress, branch/PR reference), docs/getting-started.md (Phase 2 command callouts, MCP note), docs/contributing.md (Phase 2 reviewers added to gates table).
+- Produced a full post-ship update map in `.squad/decisions/inbox/amy-phase2-docs.md` — exact per-file, per-location change map for README, roadmap, getting-started, contributing, spec.md, and proposal frontmatter.
+- Left a comment on issue #26 summarizing the work.
+- Did NOT update docs/spec.md (already accurate for Phase 2 design; needs post-ship verification pass only).
+
+**Outcome:** Pre-ship pass COMPLETE. Post-ship pass gated on PR #22 merge + v0.2.0 tag push. Update map ready.
+
+**Learnings:**
+- Split "available MCP tools" into Phase 1 (shipped) and Phase 2 (in progress) when tools are phased — a flat list implies all tools are live.
+- Getting-started tutorials that show Phase 2 commands need explicit phase callouts; tutorials read as "this works now" by default.
+- The post-ship update map should be written at audit time (while the specs are fresh) — not after code lands.
+
+
 
 **Role:** Public documentation refresh, install/status matrix owner
 

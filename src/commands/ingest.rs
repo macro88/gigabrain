@@ -5,7 +5,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
-use crate::core::{markdown, palace};
+use crate::core::{markdown, novelty, palace};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let file = Path::new(path);
@@ -27,6 +27,23 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".to_string())
     });
+
+    // Novelty check: skip near-duplicate content unless --force
+    if !force {
+        if let Ok(existing_page) = crate::commands::get::get_page(db, &slug) {
+            match novelty::check_novelty(&compiled_truth, &existing_page, db) {
+                Ok(false) => {
+                    eprintln!("Skipping ingest: content not novel (slug: {slug})");
+                    return Ok(());
+                }
+                Ok(true) => {} // novel content, proceed
+                Err(e) => {
+                    eprintln!("Warning: novelty check failed ({e}), proceeding with ingest");
+                }
+            }
+        }
+    }
+
     let wing = frontmatter
         .get("wing")
         .cloned()
@@ -167,5 +184,125 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn near_duplicate_content_is_skipped_by_novelty_check() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // First ingest
+        let file_path = dir.path().join("note.md");
+        fs::write(
+            &file_path,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nAlice works at Acme and invests in climate software.\n",
+        )
+        .unwrap();
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        // Second ingest with near-identical content (different file bytes → new ingest_key)
+        let file_path2 = dir.path().join("note2.md");
+        fs::write(
+            &file_path2,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nAlice works at Acme and invests in climate software.\n",
+        )
+        .unwrap();
+        run(&conn, file_path2.to_str().unwrap(), false).unwrap();
+
+        // Version should still be 1 — novelty check prevented the upsert
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE slug = 'notes/test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn distinct_content_proceeds_past_novelty_check() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let file_path = dir.path().join("note.md");
+        fs::write(
+            &file_path,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nAlice works at Acme and invests in climate software.\n",
+        )
+        .unwrap();
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        let file_path2 = dir.path().join("note2.md");
+        fs::write(
+            &file_path2,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nBob teaches medieval history and collects rare maps.\n",
+        )
+        .unwrap();
+        run(&conn, file_path2.to_str().unwrap(), false).unwrap();
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE slug = 'notes/test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn force_bypasses_novelty_check() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let file_path = dir.path().join("note.md");
+        fs::write(
+            &file_path,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nAlice works at Acme and invests in climate software.\n",
+        )
+        .unwrap();
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        // Re-ingest same content with --force
+        let file_path2 = dir.path().join("note2.md");
+        fs::write(
+            &file_path2,
+            "---\nslug: notes/test\ntitle: Test\ntype: concept\n---\nAlice works at Acme and invests in climate software.\n",
+        )
+        .unwrap();
+        run(&conn, file_path2.to_str().unwrap(), true).unwrap();
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE slug = 'notes/test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn first_time_ingest_skips_novelty_check() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let file_path = dir.path().join("brand-new.md");
+        fs::write(
+            &file_path,
+            "---\nslug: notes/brand-new\ntitle: Brand New\ntype: concept\n---\nCompletely new content.\n",
+        )
+        .unwrap();
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE slug = 'notes/brand-new'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

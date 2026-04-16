@@ -22,6 +22,8 @@
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
 - Phase 3 release-readiness work ships via branch `p3/release-readiness-docs-coverage` → draft PR #15. Includes CI coverage job, release workflow hardening, release checklist, docs-site polish, and README accuracy fixes. All P3 tasks marked complete in `openspec/changes/p3-polish-benchmarks/tasks.md`.
 - PR #15 review fix (2026-04-15): Addressed all 9 Copilot review comments. Install snippets across README, install.md, quick-start.md, spec.md, and release.yml now offer both `~/.local/bin` (user-local) and `sudo` (system-wide) install options. Removed inaccurate "embedded model weights" claims; install.md now documents the actual cached-HF / online-model / hash-shim behavior. Fixed typo and consolidated duplicate `## Learnings` headings in zapp history. All 9 threads replied to and resolved.
+- Graph BFS (Phase 2): bidirectional traversal (outbound + inbound links) with link-ID edge dedup via `HashSet<i64>` prevents duplicate edges in the result. The `prepare_cached()` API reuses compiled SQL across BFS iterations. Graph types live in `src/core/graph.rs` (not types.rs) because they're graph-specific. The CLI `--temporal` flag defaults to `"current"` which maps to `TemporalFilter::Active`.
+- Integration tests use `gbrain::` crate path via `src/lib.rs` (which re-exports `pub mod commands; pub mod core; pub mod mcp;`). Test helper pattern: `open_test_db()` returns a Connection with `std::mem::forget(dir)` to prevent TempDir cleanup during test.
 
 ## Core Context
 
@@ -261,3 +263,128 @@
 **Outcome:** P3 Release CI/Release component **COMPLETE**. Coverage job running, release workflow tested, artifact verification validated, all gates passed.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — documents coverage tool selection, checksum format standardization, informational (non-gating) coverage policy, and optional Codecov handling.
+
+## 2026-04-15 Phase 2 Kickoff — Blocker Summary
+
+**Phase 2 branch:** `phase2/p2-intelligence-layer` from main at v0.1.0. PR #22 opened (not merged per user directive).
+
+### CRITICAL BLOCKERS (must resolve before sign-off)
+
+1. **Schema gap: `knowledge_gaps.query_hash` missing UNIQUE constraint (Bender + Nibbler)**
+   - Task 8.1 specifies `INSERT OR IGNORE` for idempotency on duplicate queries
+   - `INSERT OR IGNORE` requires a UNIQUE constraint to trigger
+   - Without it, every low-confidence query logs a duplicate row — idempotency contract broken
+   - **Resolution required:** Add `UNIQUE(query_hash)` to schema (preferred) or create index at init time in db.rs
+   - **Impact:** Blocks Group 8 (knowledge gaps) and Group 9 (MCP write surface) validation
+
+2. **Graph contract ambiguity (Professor)**
+   - Current: BFS traverses both outbound and inbound edges (bidirectional)
+   - Spec: Tasks + spec/graph/spec.md describe outbound-first reachability
+   - CLI output: Each edge printed as `→ <edge.to>`, misleading for inbound-only edges pointing back at root
+   - **Resolution required:** Choose one now
+     - Option A: neighbourhood = undirected adjacency → update spec + CLI renderer to show both directions explicitly
+     - Option B: neighbourhood = outbound traversal → remove inbound BFS from core
+   - **Impact:** Blocks Group 1 sign-off; blocks Professor approval
+
+3. **Edge deduplication on cyclic graphs (Professor)**
+   - Nodes deduplicated with `visited` HashSet, but edges appended unconditionally
+   - Two-node cycle (`a -> b`, `b -> a`) with depth ≥ 2: same link appears twice in result
+   - **Resolution required:** Deduplicate edges by stable identity (prefer link ID, else `(from,to,relationship,valid_from,valid_until)`)
+   - Add test: cyclic graph with depth > 1 asserts duplicate-free edges
+   - **Impact:** Blocks Group 1 sign-off
+
+4. **Progressive retrieval not started (Professor)**
+   - src/core/progressive.rs is still a stub
+   - src/commands/query.rs still Phase 1 behavior: ignores `depth`, never follows links, budgets rendered line length not token count
+   - docs/spec.md describes `summary/section/full/auto` expansion vs Phase 2 tasks simplify to linked-page expansion → `Vec<SearchResult>`
+   - **Resolution required:** Settle contract before coding. Either implement richer spec surface or explicitly narrow spec/design now.
+   - Avoid guaranteed rework
+   - **Impact:** Blocks Group 5 sign-off
+
+5. **OCC erosion risk in Group 9 MCP writes (Professor)**
+   - docs/spec.md: all page-scoped mutators (`brain_link`, `brain_unlink`, `brain_timeline_add`, `brain_tag`, `brain_raw`) must require `page_version` and bump `pages.version`
+   - Group 9 tasks currently say `brain_link/brain_link_close/brain_tags` delegate directly to command helpers that do NOT perform page-version checks
+   - **Resolution required:** Either preserve Phase 1 OCC discipline on every new page-scoped write tool OR amend product spec before implementation
+   - Do NOT quietly weaken write contract
+   - **Impact:** Blocks Group 9 sign-off
+
+### ADVERSARIAL GUARDRAILS (Nibbler, ship-gate blockers)
+
+1. **Active temporal reads (D1)**
+   - Default "active/current" reads must treat link as active only when BOTH:
+     - `valid_from IS NULL OR valid_from <= today` AND
+     - `valid_until IS NULL OR valid_until >= today`
+   - Currently: future-dated links (valid_from > today) indistinguishable from present if only `valid_until` checked
+   - **Impact:** Blocks ship gate until future-dated links excluded from default active views + tested
+
+2. **Graph output budgets (D2)**
+   - Hop cap of 10 alone insufficient; one attacker-controlled hub page with thousands of edges forces huge BFS fan-out
+   - **Resolution required:** Enforce at least one non-depth budget (max nodes, max edges, or max serialized bytes)
+   - Make traversal direction explicit in contract
+   - **Impact:** Ship-gate blocker for Fry + Professor
+
+3. **Contradiction idempotency (D3)**
+   - `extract_assertions` must only replace agent-generated assertions for target page (not erase manual/import)
+   - Contradiction rows must deduplicate by stable fingerprint, not free-form text
+   - **Impact:** Repeated `brain_check` runs must not poison contradictions table
+
+4. **MCP output shape contract (D5)**
+   - MCP tools must return typed truth per spec, not delegated CLI side effects
+   - Current bugs: `backlinks` ignores temporal arg, `timeline --json` returns `{slug, entries}` not bare array, `tags` mutates but prints nothing
+   - **Impact:** Fry must treat output-shape tests + parameter-behaviour tests as ship-gate requirements, not polish
+
+### Coordination Notes
+
+- **Leela:** Phase 2 kickoff complete; 8 agents ready; no blockers for implementation start
+- **Scruffy:** Coverage lane ready; parallelize tests with Fry's implementation
+- **Bender:** 24 validation scenarios ready; awaiting schema gap fix before Group 8 validation
+- **Amy:** Pre-ship docs done; post-ship checklist (15 items) ready after merge
+- **Hermes:** Website docs in progress
+- **Mom:** Temporal edge cases in progress
+- **Professor:** Early review complete; blockers F1–F4 require spec clarification gates
+- **Nibbler:** Guardrails D1–D5 defined; ship gate blocked until all tested
+- **User directive:** Complete Phase 2 with frequent checkpoints; Fry must open PR + not merge (user reviews + merges)
+
+## 2026-04-15 Cross-team Phase 2 Revision Batch
+
+- **Status:** Two agent lanes completed; one in progress (Fry's own assertions slice); one in final review (Professor)
+- **Graph revision (Leela):** All three prior blockers from Professor rejection now resolved. Directionality contract confirmed outbound-only (per spec); temporal gate now includes `valid_from`; CLI test coverage now captures actual text/JSON output shape via `run_to<W>` refactor. **Landing ready.**
+- **Assertions/check coverage (Scruffy):** Pure helper seam confirmed; manual assertions preserved across re-index; coverage deterministically validates without stdout capture. **Landing ready.**
+- **Fry's own assertions slice:** Currently reconciling compilation errors in assertions/check implementation lane. No blockers reported yet.
+- **Professor's graph re-review:** Re-review completed 2026-04-15T23:15:50Z. Verdict: APPROVE FOR LANDING (graph slice tasks 1.1–2.5 only). Issue #28 scope caveat: progressive-retrieval budget/OCC review lane remains separate.
+- **Decision merger completed:** Inbox decisions merged into canonical decisions.md (4 files, 0 conflicts). Cross-agent histories updated; orchestration logs written; session log recorded; ready for git commit.
+
+## 2026-04-15 Phase 2 Graph Fix Batch Complete
+
+- **Professor (completed):** Parent-aware tree rendering of `gbrain graph` output (commit `44ad720`). Multi-hop edges render beneath actual parent, not flattened under root. Depth-2 integration test strengthened with exact text shape assertions. All validation gates pass.
+- **Scruffy (completed):** Self-loop and cycle render suppression (commit `acd03ac`). Root no longer appears as its own neighbour in human output, even in edge-case cycles. Traversal safety unchanged (visited set). Regression tests cover both states. All validation gates pass.
+- **Nibbler (in progress):** Final adversarial re-review of graph slice (tasks 1.1–2.5) after both fixes. Awaiting completion before Phase 2 sign-off.
+- **Fry (in progress):** Progressive retrieval slice (tasks 5.1–5.6) and assertions/check slice (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Token-budget logic and contradiction dedup verified. Decisions merged into canonical ledger.
+
+## 2026-04-15 PR #22 Copilot Review Fixes
+
+Applied 13 fixes from Copilot reviewer feedback on PR #22:
+
+1. cargo fmt — resolved all formatting diffs
+2. progressive_retrieve error fallback — returns original hybrid_search results instead of empty on error
+3. progressive_retrieve budget — caller token_budget overrides config default when non-zero
+4. progressive first-result overflow — removed exception that always included first result even if over-budget
+5. TemporalFilter::Active doc — corrected to document both valid_from and valid_until checks
+6. Graph ORDER BY — added deterministic ordering to outbound SQL
+7. Gaps timestamps — human output now shows detected_at and resolved_at
+8. MCP depth normalization — case-insensitive auto matching via trim+lowercase
+9. MCP temporal synonyms — current/history accepted alongside active/all
+10. Contradiction dedup — resolved contradictions no longer block re-detection
+11. TempDir leak — replaced mem::forget with :memory: DBs in graph.rs and progressive.rs tests
+12. MCP link_id — queried actual id instead of hard-coding 1
+13. Test renames — renamed misleading test names in check.rs and tests/graph.rs
+
+All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
+
+## Learnings
+
+- unwrap_or_else with unused error triggers clippy; use unwrap_or when the fallback is a simple value
+- TempDir leak via mem::forget is a pattern to avoid; :memory: is better for unit tests
+- Contradiction dedup should only match unresolved rows; resolved contradictions must allow re-detection
+- MCP tool parameter matching should always normalize case before string comparison
+

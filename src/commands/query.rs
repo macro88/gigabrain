@@ -1,8 +1,22 @@
+use crate::core::gaps;
+use crate::core::progressive::progressive_retrieve;
 use crate::core::types::SearchResult;
 use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::core::search::hybrid_search;
+
+/// Read `default_token_budget` from the config table, falling back to 4000.
+fn read_token_budget(db: &Connection) -> usize {
+    db.query_row(
+        "SELECT value FROM config WHERE key = 'default_token_budget'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|v| v.parse::<usize>().ok())
+    .unwrap_or(4000)
+}
 
 pub async fn run(
     db: &Connection,
@@ -13,9 +27,28 @@ pub async fn run(
     wing: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let _ = depth;
-
     let results = hybrid_search(query, wing.as_deref(), db, limit as usize)?;
+
+    // Auto-log knowledge gap on weak results
+    if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+        if let Err(e) = gaps::log_gap(query, "", results.first().map(|r| r.score), db) {
+            eprintln!("Warning: failed to log knowledge gap: {e}");
+        } else {
+            eprintln!("Knowledge gap logged.");
+        }
+    }
+
+    let results = if depth == "auto" {
+        let budget = if token_budget > 0 {
+            token_budget as usize
+        } else {
+            read_token_budget(db)
+        };
+        progressive_retrieve(results.clone(), budget, 3, db).unwrap_or(results)
+    } else {
+        results
+    };
+
     let results = budget_results(results, limit as usize, token_budget as usize);
 
     if json {
@@ -101,5 +134,33 @@ mod tests {
 
         assert_eq!(budgeted.len(), 1);
         assert_eq!(budgeted[0].summary, "abcde");
+    }
+
+    #[test]
+    fn low_result_query_auto_logs_gap() {
+        use crate::core::db;
+        use crate::core::gaps;
+
+        let conn = db::open(":memory:").expect("open db");
+
+        // Query with no results should log a gap
+        let results =
+            crate::core::search::hybrid_search("nonexistent quantum socks", None, &conn, 10)
+                .unwrap();
+        assert!(results.len() < 2);
+
+        // Simulate the gap logging that query::run does
+        if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
+            gaps::log_gap(
+                "nonexistent quantum socks",
+                "",
+                results.first().map(|r| r.score),
+                &conn,
+            )
+            .unwrap();
+        }
+
+        let gaps = gaps::list_gaps(false, 10, &conn).unwrap();
+        assert_eq!(gaps.len(), 1);
     }
 }

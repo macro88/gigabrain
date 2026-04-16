@@ -292,5 +292,6 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     CHECK (sensitivity = 'internal' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_hash);
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at)
     WHERE resolved_at IS NULL;
