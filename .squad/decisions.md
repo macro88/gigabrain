@@ -2442,3 +2442,134 @@ contradiction. No change to `alerts/SKILL.md` required.
 **Decision:** `brain_raw` uses `INSERT OR REPLACE` against the `raw_data` table's `UNIQUE(page_id, source)` constraint, allowing updates to existing raw data for the same page+source.
 
 **Rationale:** Enrichment workflows re-fetch data from the same source. Upsert semantics are more useful than error-on-duplicate.
+
+---
+
+## Phase 3 Benchmark Architecture Decision (kif-phase3-benchmarks, 2026-04-15)
+
+### 1. BEIR harness lives in `tests/` not `benchmarks/`
+
+**Decision:** BEIR harness is in `tests/beir_eval.rs` (not `benchmarks/`).
+
+**Rationale:** Standard `cargo test` integration with `#[ignore]` gating gives idiomatic Rust opt-in execution and avoids a separate build step.
+
+**Trade-off:** Spec said "benchmarks/beir_eval.rs" but `tests/` is standard practice.
+
+### 2. SHA-256 hashes in datasets.lock are placeholders
+
+**Decision:** `datasets.lock` uses clearly-marked placeholder hashes for BEIR dataset archives (can't be pre-computed without downloading them).
+
+**Workflow:** download → run `prep_datasets.sh --compute-hashes` → update lock file (documented).
+
+### 3. Latency gate marked `#[ignore]`
+
+**Decision:** p95 < 250ms test is gated behind `--ignored` with clear instruction.
+
+**Rationale:** Latency gate is only meaningful on release builds; debug builds show 3-5× higher latencies.
+
+### 4. Concurrency test uses per-thread connections
+
+**Decision:** Each thread gets its own Connection to the same on-disk DB file.
+
+**Rationale:** SQLite Connection is `Send` but not `Sync`. `Arc<Mutex<Connection>>` serializes all operations, defeating the contention test. Per-thread connections test real SQLite WAL concurrency.
+
+### 5. embedding_to_blob promoted to pub
+
+**Decision:** `embedding_to_blob` promoted from `pub(crate)` to `pub`.
+
+**Rationale:** Integration tests in `tests/` need access. Function is a stable, non-sensitive utility.
+
+### 6. Advisory benchmark hashes: placeholder policy
+
+**Decision:** Placeholder hashes in `datasets.lock` for BEIR zips; workflow to establish real hashes documented.
+
+---
+
+## Professor Phase 3 Core Review — Rejection (professor-phase3-core-review, 2026-04-16)
+
+**Scope:** OpenSpec `p3-skills-benchmarks` task 8.1 review (validate.rs + skills.rs) + architectural review (call.rs, pipe.rs, Phase 3 MCP).
+
+**Verdict:** REJECT FOR LANDING on two blocking artifacts.
+
+### Blocking Finding 1: validate.rs missing stale-vector integrity check
+
+**Issue:** `gbrain validate --embeddings` does not verify that every `page_embeddings.vec_rowid` resolves in the active model's vec table. A brain with broken embedding metadata can report `passed: true`.
+
+**Checks missing:**
+- vec-row resolution against active model's registered vec table
+- Use `embedding_models.vec_table` (not hard-coded)
+
+**Revision direction:**
+- Add vec-row resolution check
+- Add regression test with dangling `vec_rowid`
+- Avoid misleading follow-on conclusions if active-model state is broken
+
+### Blocking Finding 2: skills.rs misses documented resolution model
+
+**Issue:** Skills at `./skills/` are treated as both embedded and local, causing:
+- False shadowing claims at repo root
+- No embedded skills found outside repo root
+- Breaks documented contract that default skills are binary-independent
+
+**Revision direction:**
+- Separate true embedded defaults from filesystem overrides
+- Don't model embedded as `PathBuf::from("skills")`
+- Consistent behavior regardless of caller cwd
+- Only mark shadowed when genuine override exists
+- Test coverage: repo-root, non-root cwd, no false shadowing, real shadowing
+
+### Acceptable artifacts
+- `call.rs` dispatch coverage: acceptable
+- `pipe.rs` line-by-line continuation: acceptable
+- Phase 3 MCP tools: aligned with spec on validation, privacy, not-found handling
+
+**Task status:** Task 8.1 not marked complete. Different revision author must resubmit.
+
+---
+
+## Nibbler Phase 3 Core Review — Rejection (nibbler-phase3-core-review, 2026-04-16)
+
+**Scope:** OpenSpec task 8.2 (`brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`, call/pipe failure modes).
+
+**Verdict:** REJECT FOR LANDING.
+
+### Blocking Finding 1: brain_raw violates spec contract
+
+**Issue:** Spec says `brain_raw` accepts a JSON **object**, but implementation accepts any `serde_json::Value`. Non-object payloads (e.g., `{"slug":"people/alice","source":"demo","data":42}`) succeed.
+
+**Revision:** Reject non-object `data` values with `-32602`.
+
+### Blocking Finding 2: brain_raw has no payload size limit
+
+**Issue:** `brain_raw` accepts ~1.5 MB+ payloads; `pipe` deserializes full JSONL lines into memory with no size check before DB write.
+
+**Revision:**
+- Enforce max serialized payload size before DB write
+- `pipe` enforces max JSONL line size before deserializing
+- Return JSON error for oversized input; continue processing
+
+### Blocking Finding 3: brain_raw silently overwrites prior data
+
+**Issue:** Uses `INSERT OR REPLACE` (silent upsert) instead of plain insert. Callers can destroy enrichment data without being told.
+
+**Spec language:** "INSERT into `raw_data`" — silent replacement is materially different and increases accidental data-loss risk.
+
+**Revision:** Implement true insert-only or document/expose explicit upsert semantics.
+
+### Blocking Finding 4: brain_gap privacy-safe framing is bypassable
+
+**Issue:** Raw query text not stored (good), but `context` field is unbounded free text, persisted, and returned by `brain_gaps`. Agents can copy sensitive queries into `context` and bypass privacy-safe defaults.
+
+**Revision:**
+- Bound and sanitize `context`
+- Redact/omit it from `brain_gaps` output
+- Ensure privacy-safe defaults cannot be trivially bypassed
+
+### Required Test Coverage
+
+- Non-object `brain_raw.data` rejection
+- Oversized raw payload rejection
+- Oversized `gbrain pipe` line handling
+- Privacy behavior of `brain_gap`/`brain_gaps` around `context`
+
+**Task status:** Task 8.2 not marked complete. Different revision author required (nibbler under reviewer lockout).

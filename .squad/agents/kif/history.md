@@ -148,3 +148,30 @@
 5. `page_embeddings.chunk_index` NOT NULL constraint — fixed insertion query in migration test
 
 **Measurement note:** SHA-256 hashes in `datasets.lock` for BEIR archives are placeholders. Run `./benchmarks/prep_datasets.sh --compute-hashes` after first download to establish real hashes.
+
+---
+
+## 2026-04-16: Phase 3 Groups 5–6 Benchmarks (completed)
+
+**Scope:** Benchmark foundation (Groups 5+6)  
+**Status:** Completed  
+
+**Shipped:**
+- datasets.lock (placeholder hashes, workflow documented)
+- prep_datasets.sh with --compute-hashes option
+- requirements.txt for Python dependencies
+- baselines/beir.json reference data
+- Four Rust integration harnesses (BEIR eval, latency gate, concurrency test)
+- Three Python advisory adapters
+
+**Test results:** 19 newly-runnable tests pass; dataset paths gated by #[ignore]  
+
+**Key decisions:**
+- BEIR harness in tests/ (idiomatic Rust, not benchmarks/)
+- Latency gate #[ignore] (debug builds 3-5× slower)
+- Per-thread connections for real SQLite WAL concurrency testing
+- embedding_to_blob promoted to pub for integration test access
+
+**Decision:** kif-phase3-benchmarks.md merged to decisions.md  
+
+**Next:** Phase 3 core reviews (tasks 8.1, 8.2) proceed with revisions to address professor/nibbler blockers.
