@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Simplified-install npm publish alignment (2026-04-16): `publish-npm.yml` tag pattern must match `release.yml` (`v[0-9]*.[0-9]*.[0-9]*`), NOT `v*`. `npm version` needs `--allow-same-version` when package.json already matches the tag version. Use `npm pack --dry-run` (not `npm publish --dry-run`) for unconditional validation — publish dry-run hits the registry and fails when versions conflict. The `gbrain` npm package name has existing published versions (1.3.1+); ownership/version strategy must be resolved before first public publish.
 - Phase 3 CI integration (2026-04-17): Offline benchmarks (corpus_reality, concurrency_stress, embedding_migration) run as a named `benchmarks` job in ci.yml, separate from the general `cargo test` job. BEIR regression lives in its own workflow file (`beir-regression.yml`) to avoid blocking PRs with ~500MB dataset downloads. Formatting fixed before commit — always run `cargo fmt --all` before pushing.
 - The core implementation target is a Rust CLI plus MCP server.
 - The system is intentionally local-first and zero-network for embeddings.

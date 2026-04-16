@@ -25,3 +25,6 @@ Thumbs.db
 
 # Benchmark datasets (downloaded by prep_datasets.sh — never committed)
 benchmarks/datasets/
+
+# npm-installed wrapper binary
+packages/gbrain-npm/bin/gbrain

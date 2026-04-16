@@ -13,6 +13,10 @@
 - Coverage review is not just artifact existence; README/docs must point to the same free GitHub coverage surface, and status wording must stay synchronized across repo docs.
 - Benchmark reproducibility review needs two layers: rerun offline gates twice for stable pass/fail behavior, then verify the pinned-data story is real (lockfile consumed, hashes finalized, baselines established).
 - For CI-gated benchmark reproducibility, compare pass/ignore counts across reruns and treat wall-clock durations as noise unless the harness explicitly gates latency.
+- `scripts/install.sh` must stay LF-normalized; CRLF line endings break POSIX `sh` execution under WSL before any installer logic runs.
+- Cross-platform installer validation from Windows works best with repo-scoped `TMPDIR` paths in WSL plus PATH-injected fake tools for shell error branches, and small Node harnesses with platform overrides for `postinstall.js` network branches.
+- `packages/gbrain-npm/package.json` currently targets the unscoped public package name `gbrain`, but npm already serves `gbrain@1.3.1`, so `npm publish --dry-run` rejects `gbrain@0.9.0` before token handling.
+- `packages/gbrain-npm/scripts/postinstall.js` currently hardcodes `v${package.version}` as its release tag target; with no `v0.9.0` GitHub Release present in `macro88/gigabrain`, supported-platform installs would currently 404.
 
 ## 2026-04-16 Phase 3 — Benchmark Reproducibility Review (Task 8.4)
 

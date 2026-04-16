@@ -5,14 +5,14 @@ description: Current project status, supported install paths, and planned future
 
 ## Project Status
 
-GigaBrain has completed **Phase 3** — all skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. `v1.0.0` release pipeline is ready.
+GigaBrain has completed **Phase 3** — all skills, benchmarks, CLI polish, and the full MCP tool surface are shipped. The current rollout is the `v0.9.0` simplified-install test release.
 
 | Phase | Status | What ships |
 | ----- | ------ | ---------- |
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, embeddings, hybrid search, MCP server — **v0.1.0** |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`, progressive retrieval, full MCP surface — **v0.2.0** |
-| **Phase 3** — Skills + benchmarks + polish | ✅ Complete | All 8 skills production-ready, 16 MCP tools, `validate`, `call`, `pipe`, `skills doctor`, benchmark harnesses — **v1.0.0** |
+| **Phase 3** — Skills + benchmarks + polish | ✅ Complete | All 8 skills production-ready, 16 MCP tools, `validate`, `call`, `pipe`, `skills doctor`, benchmark harnesses — **v0.9.0 test release** |
 
 See the [Roadmap](/contributing/roadmap/) for ship gates and detailed scope.
 
@@ -47,10 +47,10 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64
 
 ## Install — GitHub Releases
 
-Pre-built binaries are available from GitHub Releases for `v1.0.0` and later:
+Pre-built binaries are available from GitHub Releases for the `v0.9.0` test release:
 
 ```bash
-VERSION="v1.0.0"
+VERSION="v0.9.0"
 PLATFORM="linux-x86_64"   # linux-x86_64 | linux-aarch64 | darwin-arm64 | darwin-x86_64
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
@@ -64,13 +64,37 @@ chmod +x "${HOME}/.local/bin/gbrain"
 sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
 ```
 
-### npm global install (deferred)
+### One-command installer
 
-npm packaging is a deliberate follow-on. It is not in scope for the current release slice.
+The `v0.9.0` test release makes the shell installer the simplest supported path:
 
-### One-command installer (deferred)
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+```
 
-A `curl | sh` installer is a deliberate follow-on. Not in scope for the current release slice.
+You can pin a version or change the install directory if you need a reproducible test setup:
+
+```bash
+GBRAIN_VERSION=v0.9.0 sh install.sh
+GBRAIN_VERSION=v0.9.0 GBRAIN_INSTALL_DIR=/usr/local/bin sh install.sh
+```
+
+The installer auto-detects your platform, downloads the matching GitHub Release binary, verifies
+the SHA-256 checksum, runs `gbrain version`, and prints a `GBRAIN_DB` shell-profile tip.
+
+### npm global install (staged)
+
+The npm package and postinstall downloader are implemented, but public npm publication is gated
+until after the shell-installer test cycle and `NPM_TOKEN` is configured for release automation.
+
+When that rollout opens, the install command will be:
+
+```bash
+npm install -g gbrain
+```
+
+The package downloads the platform binary from GitHub Releases during `postinstall` rather than
+bundling the 90MB binary into the npm tarball.
 
 ---
 

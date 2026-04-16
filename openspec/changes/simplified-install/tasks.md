@@ -49,13 +49,18 @@
 
 - [x] D.1 Smoke test `scripts/install.sh` locally against the `v0.9.0` release asset shape: run the full script when a matching release is available, confirm `gbrain version` succeeds.
 
-- [x] D.2 Test npm postinstall locally: `cd packages/gbrain-npm && npm pack --dry-run` confirms tarball contents (4 files, 2.4 kB). Full postinstall download test deferred until a `v0.9.0` GitHub Release with platform binaries exists.
+- [ ] D.2 Test npm postinstall locally: `cd packages/gbrain-npm && npm install` (or `npm pack` then `npm install -g gbrain-0.9.0.tgz`). Confirm `gbrain version` works and binary is ~90MB in `bin/gbrain`.
+  - Blocked on this Windows host: local `npm install` fails immediately with `EBADPLATFORM` because `packages/gbrain-npm/package.json` restricts the package to `os: [darwin, linux]`.
+  - The available Ubuntu WSL distro here does not have a working `node` runtime, so the supported-OS npm lifecycle could not be executed locally as a fallback.
+  - Product gap: `v0.9.0` is not an actual GitHub Release in `macro88/gigabrain` right now, so the package's `v0.9.0` download target would 404 even on a supported platform.
 
 - [x] D.3 Run `npm pack --dry-run` from `packages/gbrain-npm/` and confirm `bin/gbrain` is NOT listed in the packed files (only `bin/.gitkeep` and `scripts/postinstall.js`).
 
 - [x] D.4 Test error paths:
-  - Set `GBRAIN_VERSION=v0.0.0-nonexistent` and run `install.sh` — confirmed clean error message and exit 1 by code review (download curl `-f` flag exits non-zero on 404; fail() prints message to stderr)
-  - Corrupt the downloaded binary checksum and confirm the installer exits 1 before placing the binary — confirmed by code review (`verify_checksum` returns 1 → `fail()` exits before `mv`)
-  - Run `npm install` in an environment with no internet — confirmed by code review (catch block regex matches ENOTFOUND/ECONNREFUSED/ETIMEDOUT → `gracefulSkip` exits 0)
+  - Set `GBRAIN_VERSION=v0.0.0-nonexistent` and run `install.sh` — validated in WSL after normalizing `scripts/install.sh` to LF; installer prints a clean download error and exits 1.
+  - Corrupt the downloaded binary checksum and confirm the installer exits 1 before placing the binary — validated in WSL with a fake `curl` earlier in `PATH`; installer exits 1 and does not install `gbrain`.
+  - Run `npm install` in an environment with no internet — validated with a platform-aware Node harness (`linux/x64` override + mocked `ENOTFOUND`); `postinstall.js` prints the manual-install fallback and exits 0.
 
-- [x] D.5 Verify `.github/workflows/publish-npm.yml` token-guard behavior: tag pattern aligned with `release.yml` (`v[0-9]*.[0-9]*.[0-9]*`), `--allow-same-version` prevents failure when tag matches existing version, `npm pack --dry-run` validates package structure unconditionally, publish step is gated behind `NPM_TOKEN != ''`. Workflow emits notice and succeeds when token is absent.
+- [ ] D.5 Verify `.github/workflows/publish-npm.yml` token-guard behavior: confirm the workflow publishes only when `NPM_TOKEN` is present and otherwise exits successfully with a notice; use `npm publish --dry-run` for the publish-path command validation.
+  - `npm publish --dry-run` is currently blocked before token handling: npm reports that the public `gbrain` package already has `latest` at `1.3.1`, so publishing `gbrain@0.9.0` as the default tag cannot succeed.
+  - No local GitHub Actions runner is available in this environment, and this unmerged workflow could not be executed in GitHub from here; the `if: env.NPM_TOKEN == ''` / `!= ''` guards were reviewed statically only.
