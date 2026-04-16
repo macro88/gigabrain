@@ -124,6 +124,16 @@
 - GitHub issues and OpenSpec both drive work intake.
 - Meaningful changes require an OpenSpec proposal before implementation.
 
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Leela Completion
+
+- **Task:** Updated `.squad/identity/now.md` to reflect simplified-install / v0.9.0 shell-first focus
+- **Changes:**
+  1. Updated current sprint status and focus in `.squad/identity/now.md`
+  2. Confirmed simplified-install as active phase
+  3. Updated identity to reflect installation UX priority (shell-first approach)
+- **Status:** ✅ COMPLETE. Team identity aligned with v0.9.0 release focus (shell-first, installer-centric).
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-leela.md`
+
 ## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
 
 - Orchestration logs written for Leela (Link contract review) and Fry (T02 db.rs completion).

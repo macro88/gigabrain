@@ -83,3 +83,15 @@
 - **Binary size observation:** Release binaries are 7.7–9.5MB, not ~90MB as originally estimated. Proposal claimed 90MB; actual is ~10× smaller. Not a blocker but D.2 task text corrected.
 - **Key paths:** `.github/workflows/release.yml` (release pipeline), `.github/workflows/publish-npm.yml` (npm publish with token guard), `scripts/install.sh` (shell installer), `packages/gbrain-npm/scripts/postinstall.js` (npm postinstall downloader).
 - Decision written to `.squad/decisions/inbox/bender-v0-9-0-release-validation.md`.
+
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Bender Completion
+
+- **Task:** Validated v0.9.0 release and publish-npm workflow success. Closed D.5, kept D.2 open with honest assessment, updated task tracking and decision log
+- **Changes:**
+  1. Release validation — confirmed v0.9.0 tag, binaries, and checksums
+  2. Publish-npm workflow — verified GitHub Actions publish workflow succeeded
+  3. Decision D.5 closure — closed with CI evidence (publish-npm workflow run)
+  4. Decision D.2 assessment — kept open with honest status on publish reliability
+  5. Task tracking — updated tasks/history with validation results
+- **Status:** ✅ COMPLETE. v0.9.0 release validated. Publish workflow confirmed working. Team decision log updated honestly.
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`

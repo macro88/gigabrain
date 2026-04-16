@@ -427,3 +427,14 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 **Outcome:** Phase 3 implementation complete. All reviewer gates passed. Ready for v1.0.0 tagging.
 
 **Decision file:** `.squad/decisions/inbox/fry-phase3-final.md`
+
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Fry Completion
+
+- **Task:** Fixed publish-npm workflow bugs blocking v0.9.0 release
+- **Changes:**
+  1. `publish-npm.yml` tag pattern corrected (glob match for `v[0-9]*.[0-9]*.[0-9]*`)
+  2. `--allow-same-version` enabled to prevent duplicate publish failures
+  3. Dry-run validation logic updated for release flow
+  4. Install surfaces documentation updated
+- **Status:** ✅ COMPLETE. Publish workflow now succeeds for v0.9.0 tag. CI confirmed.
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-fry.md`

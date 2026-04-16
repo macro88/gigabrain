@@ -85,3 +85,14 @@
 - **Professor completed graph parent-aware tree rendering** (commit `44ad720`). Multi-hop depth-2 edges now render beneath actual parent instead of flattening under root. Depth-2 integration test strengthened with exact text shape assertions. All validation gates pass.
 - **Fry advancing slices:** Progressive retrieval (tasks 5.1–5.6) and assertions/check (tasks 3.1–4.5) both implemented. All 193 tests pass (up from 185). Decisions merged into canonical ledger. Awaiting Nibbler's final graph re-review and completion.
 
+## 2026-04-16T14:59:20Z Simplified-install v0.9.0 Release — Scruffy Completion
+
+- **Task:** Validated installer and package paths, normalized line endings, updated task documentation, added validation skill
+- **Changes:**
+  1. Installer path validation — confirmed `simplified-install/` paths and script locations
+  2. Package paths normalization — verified `scripts/install.sh` and Windows/Unix consistency
+  3. Line endings normalization — updated `scripts/install.sh` to consistent CRLF/LF handling
+  4. Task documentation — updated `simplified-install/tasks.md` with validation guidance
+  5. Validation skill — created/appended skill documentation for install validation
+- **Status:** ✅ COMPLETE. Installer paths validated and documented. scripts/install.sh ready for v0.9.0 release.
+- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-scruffy.md`
