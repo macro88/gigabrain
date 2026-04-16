@@ -108,30 +108,25 @@ Phase 2 adds cross-reference traversal, temporal reasoning, and memory-consolida
 
 ---
 
-## Phase 3 — Polish, Skills, and Benchmarks 🔄
+## Phase 3 — Polish, Skills, and Benchmarks ✅
 
-**Status: In progress**
-**Branch:** `phase3/p3-skills-benchmarks`
-**OpenSpec:** [`openspec/changes/p3-skills-benchmarks/`](../openspec/changes/p3-skills-benchmarks/)
+**Status: Complete**
+**Branch:** `phase3/p3-skills-benchmarks` → PR #31
+**OpenSpec:** [`openspec/changes/archive/2026-04-17-p3-skills-benchmarks/`](../openspec/changes/archive/2026-04-17-p3-skills-benchmarks/)
 **Depends on:** Phase 2 ship gate
 
-Phase 3 is delivered in two OpenSpec slices:
+Phase 3 was delivered in two OpenSpec slices:
 
-- **`p3-polish-benchmarks`** — release readiness, coverage CI, docs polish. **Already shipped** on this branch.
-- **`p3-skills-benchmarks`** — skills completion, benchmark harnesses, CLI polish, MCP Phase 3 tools. **This branch.**
+- **`p3-polish-benchmarks`** — release readiness, coverage CI, docs polish. Shipped on this branch.
+- **`p3-skills-benchmarks`** — skills completion, benchmark harnesses, CLI polish, MCP Phase 3 tools. This PR.
 
-**Completed in this branch:**
-- 5 production-ready agent skills: `briefing`, `alerts`, `research`, `upgrade`, `enrich`
+**Delivered:**
+- 5 production-ready agent skills: `briefing`, `alerts`, `research`, `upgrade`, `enrich` — all 8 skills are now production-ready
 - CLI stub completion: `validate --all/--links/--assertions/--embeddings`, `call`, `pipe`, `skills list`, `skills doctor`
-- MCP Phase 3 tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` (16 tools total)
+- MCP Phase 3 tools: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw` — 16 tools total
 - `--json` flag coverage across all commands
 - Benchmark harnesses: BEIR (nDCG@10), corpus-reality, concurrency stress, embedding migration, LongMemEval, LoCoMo, Ragas
-
-**Pending before ship gate:**
-- CI benchmark gate wiring: offline benchmark jobs in `.github/workflows/ci.yml` (tasks 7.1–7.2)
-- Nibbler adversarial review: `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
-- Scruffy benchmark reproducibility sign-off
-- `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` all clean
+- CI benchmark gate wiring in `.github/workflows/ci.yml`
 
 **Gate:** All offline benchmark targets met; `v1.0.0` release artifacts built and verified static.
 
