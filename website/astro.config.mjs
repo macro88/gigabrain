@@ -39,6 +39,10 @@ export default defineConfig({
         { label: "CLI Reference", items: ["reference/cli"] },
         { label: "MCP Server", items: ["guides/mcp-server"] },
         {
+          label: "Guides",
+          items: ["guides/intelligence-layer"],
+        },
+        {
           label: "Architecture",
           items: ["reference/architecture", "reference/spec"],
         },
