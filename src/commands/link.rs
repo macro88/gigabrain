@@ -29,6 +29,28 @@ pub fn run(
     valid_from: Option<String>,
     valid_until: Option<String>,
 ) -> Result<()> {
+    let closed = run_silent(db, from, to, relationship, valid_from, valid_until.clone())?;
+    if closed {
+        println!(
+            "Closed link {from} → {to} ({relationship}) valid_until={}",
+            valid_until.unwrap()
+        );
+    } else {
+        println!("Linked {from} → {to} ({relationship})");
+    }
+    Ok(())
+}
+
+/// Create or close a link without printing to stdout. Safe to call from MCP handlers.
+/// Returns `true` if an existing link was closed, `false` if a new link was created.
+pub fn run_silent(
+    db: &Connection,
+    from: &str,
+    to: &str,
+    relationship: &str,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+) -> Result<bool> {
     let from_id = resolve_page_id(db, from)?;
     let to_id = resolve_page_id(db, to)?;
 
@@ -42,8 +64,7 @@ pub fn run(
         )?;
 
         if rows > 0 {
-            println!("Closed link {from} → {to} ({relationship}) valid_until={until}");
-            return Ok(());
+            return Ok(true);
         }
     }
 
@@ -54,14 +75,20 @@ pub fn run(
         rusqlite::params![from_id, to_id, relationship, valid_from, valid_until],
     )?;
 
-    println!("Linked {from} → {to} ({relationship})");
-    Ok(())
+    Ok(false)
 }
 
 // ── gbrain link-close ────────────────────────────────────────
 
 /// Close a temporal link interval by its database ID.
 pub fn close(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
+    close_silent(db, link_id, valid_until)?;
+    println!("Closed link {link_id} valid_until={valid_until}");
+    Ok(())
+}
+
+/// Close a temporal link by ID without printing to stdout. Safe to call from MCP handlers.
+pub fn close_silent(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
     let rows = db.execute(
         "UPDATE links SET valid_until = ?1 WHERE id = ?2",
         rusqlite::params![valid_until, link_id],
@@ -71,7 +98,6 @@ pub fn close(db: &Connection, link_id: u64, valid_until: &str) -> Result<()> {
         bail!("link not found: id {link_id}");
     }
 
-    println!("Closed link {link_id} valid_until={valid_until}");
     Ok(())
 }
 

@@ -24,29 +24,28 @@ type DbRef = Arc<Mutex<Connection>>;
 const MAX_SLUG_LEN: usize = 512;
 const MAX_CONTENT_LEN: usize = 1_048_576; // 1 MB
 const MAX_LIMIT: u32 = 1000;
+const MAX_RELATIONSHIP_LEN: usize = 64;
+const MAX_TAG_LEN: usize = 64;
+const MAX_TAGS_PER_REQUEST: usize = 100;
+
+fn invalid_params(message: impl Into<String>) -> rmcp::Error {
+    rmcp::Error::new(ErrorCode(-32602), message.into(), None)
+}
 
 fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
     if slug.is_empty() {
-        return Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            "invalid slug: must not be empty".to_string(),
-            None,
-        ));
+        return Err(invalid_params("invalid slug: must not be empty"));
     }
     if slug.len() > MAX_SLUG_LEN {
-        return Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            format!("invalid slug: exceeds maximum length of {MAX_SLUG_LEN} characters"),
-            None,
-        ));
+        return Err(invalid_params(format!(
+            "invalid slug: exceeds maximum length of {MAX_SLUG_LEN} characters"
+        )));
     }
     if !slug.bytes().all(|b| {
         b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'/' || b == b'_' || b == b'-'
     }) {
-        return Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            "invalid slug: allowed characters are [a-z0-9/_-]".to_string(),
-            None,
+        return Err(invalid_params(
+            "invalid slug: allowed characters are [a-z0-9/_-]",
         ));
     }
     Ok(())
@@ -54,16 +53,132 @@ fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
 
 fn validate_content(content: &str) -> Result<(), rmcp::Error> {
     if content.len() > MAX_CONTENT_LEN {
-        return Err(rmcp::Error::new(
-            ErrorCode(-32602),
-            format!(
-                "content too large: {} bytes exceeds maximum of {MAX_CONTENT_LEN} bytes",
-                content.len()
-            ),
-            None,
-        ));
+        return Err(invalid_params(format!(
+            "content too large: {} bytes exceeds maximum of {MAX_CONTENT_LEN} bytes",
+            content.len()
+        )));
     }
     Ok(())
+}
+
+fn validate_token(
+    value: &str,
+    field: &str,
+    max_len: usize,
+    allowed: fn(u8) -> bool,
+    allowed_hint: &str,
+) -> Result<(), rmcp::Error> {
+    if value.is_empty() {
+        return Err(invalid_params(format!(
+            "invalid {field}: must not be empty"
+        )));
+    }
+    if value.len() > max_len {
+        return Err(invalid_params(format!(
+            "invalid {field}: exceeds maximum length of {max_len} characters"
+        )));
+    }
+    if !value.bytes().all(allowed) {
+        return Err(invalid_params(format!(
+            "invalid {field}: allowed characters are {allowed_hint}"
+        )));
+    }
+    Ok(())
+}
+
+fn is_tag_byte(byte: u8) -> bool {
+    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+}
+
+fn validate_relationship(relationship: &str) -> Result<(), rmcp::Error> {
+    validate_token(
+        relationship,
+        "relationship",
+        MAX_RELATIONSHIP_LEN,
+        is_tag_byte,
+        "[a-z0-9_-]",
+    )
+}
+
+fn validate_tag_list(tags: &[String], field: &str) -> Result<(), rmcp::Error> {
+    if tags.len() > MAX_TAGS_PER_REQUEST {
+        return Err(invalid_params(format!(
+            "invalid {field}: exceeds maximum of {MAX_TAGS_PER_REQUEST} tags"
+        )));
+    }
+    for tag in tags {
+        validate_token(tag, "tag", MAX_TAG_LEN, is_tag_byte, "[a-z0-9_-]")?;
+    }
+    Ok(())
+}
+
+fn parse_component(value: &str, start: usize, len: usize) -> Option<u32> {
+    value.get(start..start + len)?.parse().ok()
+}
+
+fn is_valid_temporal_value(value: &str) -> bool {
+    match value.len() {
+        7 => matches!(
+            (parse_component(value, 0, 4), value.as_bytes().get(4), parse_component(value, 5, 2)),
+            (Some(_year), Some(b'-'), Some(month)) if (1..=12).contains(&month)
+        ),
+        10 => matches!(
+            (
+                parse_component(value, 0, 4),
+                value.as_bytes().get(4),
+                parse_component(value, 5, 2),
+                value.as_bytes().get(7),
+                parse_component(value, 8, 2)
+            ),
+            (Some(_year), Some(b'-'), Some(month), Some(b'-'), Some(day))
+                if (1..=12).contains(&month) && (1..=31).contains(&day)
+        ),
+        20 => matches!(
+            (
+                parse_component(value, 0, 4),
+                value.as_bytes().get(4),
+                parse_component(value, 5, 2),
+                value.as_bytes().get(7),
+                parse_component(value, 8, 2),
+                value.as_bytes().get(10),
+                parse_component(value, 11, 2),
+                value.as_bytes().get(13),
+                parse_component(value, 14, 2),
+                value.as_bytes().get(16),
+                parse_component(value, 17, 2),
+                value.as_bytes().get(19)
+            ),
+            (
+                Some(_year),
+                Some(b'-'),
+                Some(month),
+                Some(b'-'),
+                Some(day),
+                Some(b'T'),
+                Some(hour),
+                Some(b':'),
+                Some(minute),
+                Some(b':'),
+                Some(second),
+                Some(b'Z')
+            ) if (1..=12).contains(&month)
+                && (1..=31).contains(&day)
+                && hour <= 23
+                && minute <= 59
+                && second <= 59
+        ),
+        _ => false,
+    }
+}
+
+fn validate_temporal_value(value: &str, field: &str) -> Result<(), rmcp::Error> {
+    if is_valid_temporal_value(value) {
+        Ok(())
+    } else {
+        Err(invalid_params(format!(
+            "invalid {field}: expected YYYY-MM, YYYY-MM-DD, or YYYY-MM-DDTHH:MM:SSZ"
+        )))
+    }
 }
 
 fn map_db_error(e: rusqlite::Error) -> rmcp::Error {
@@ -211,6 +326,7 @@ pub struct BrainLinkCloseInput {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainBacklinksInput {
     pub slug: String,
+    pub limit: Option<u32>,
     pub temporal: Option<String>,
 }
 
@@ -508,9 +624,16 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.from_slug)?;
         validate_slug(&input.to_slug)?;
+        validate_relationship(&input.relationship)?;
+        if let Some(valid_from) = input.valid_from.as_deref() {
+            validate_temporal_value(valid_from, "valid_from")?;
+        }
+        if let Some(valid_until) = input.valid_until.as_deref() {
+            validate_temporal_value(valid_until, "valid_until")?;
+        }
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        link::run(
+        link::run_silent(
             &db,
             &input.from_slug,
             &input.to_slug,
@@ -531,9 +654,10 @@ impl GigaBrainServer {
         &self,
         #[tool(aggr)] input: BrainLinkCloseInput,
     ) -> Result<CallToolResult, rmcp::Error> {
+        validate_temporal_value(&input.valid_until, "valid_until")?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        link::close(&db, input.link_id, &input.valid_until).map_err(map_anyhow_error)?;
+        link::close_silent(&db, input.link_id, &input.valid_until).map_err(map_anyhow_error)?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Closed link {} valid_until={}",
@@ -548,6 +672,7 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
+        let limit = input.limit.unwrap_or(100).min(MAX_LIMIT);
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
         let to_id: i64 = db
@@ -586,13 +711,14 @@ impl GigaBrainServer {
             "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
              FROM links l JOIN pages p ON l.from_page_id = p.id \
              WHERE l.to_page_id = ?1{temporal_clause} \
-             ORDER BY l.created_at DESC"
+             ORDER BY l.created_at DESC \
+             LIMIT ?2"
         );
 
         let mut stmt = db.prepare(&sql).map_err(map_db_error)?;
 
         let rows: Vec<BacklinkRow> = stmt
-            .query_map([to_id], |row| {
+            .query_map(rusqlite::params![to_id, limit], |row| {
                 Ok(BacklinkRow {
                     id: row.get(0)?,
                     from_slug: row.get(1)?,
@@ -618,7 +744,7 @@ impl GigaBrainServer {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let depth = input.depth.unwrap_or(1).min(MAX_LIMIT);
+        let depth = input.depth.unwrap_or(1).min(graph::MAX_DEPTH);
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
 
         let result =
@@ -634,37 +760,68 @@ impl GigaBrainServer {
         &self,
         #[tool(aggr)] input: BrainCheckInput,
     ) -> Result<CallToolResult, rmcp::Error> {
+        if let Some(slug) = input.slug.as_deref() {
+            validate_slug(slug)?;
+        }
+        let slug_filter = input.slug.clone();
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let all = input.slug.is_none();
-        check::run(&db, input.slug, all, None, true).map_err(map_anyhow_error)?;
+        let all = slug_filter.is_none();
+        check::execute_check(&db, input.slug.as_deref(), all, None).map_err(map_anyhow_error)?;
 
         // Fetch unresolved contradictions as JSON
-        let mut stmt = db
-            .prepare(
-                "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
-                 FROM contradictions c \
-                 JOIN pages p ON p.id = c.page_id \
-                 LEFT JOIN pages other ON other.id = c.other_page_id \
-                 WHERE c.resolved_at IS NULL \
-                 ORDER BY c.detected_at, p.slug",
-            )
-            .map_err(map_db_error)?;
-
         use crate::core::assertions::Contradiction;
-        let contradictions: Vec<Contradiction> = stmt
-            .query_map([], |row| {
-                Ok(Contradiction {
-                    page_slug: row.get(0)?,
-                    other_page_slug: row.get(1)?,
-                    r#type: row.get(2)?,
-                    description: row.get(3)?,
-                    detected_at: row.get(4)?,
+        let contradictions: Vec<Contradiction> = if let Some(slug) = slug_filter.as_deref() {
+            let mut stmt = db
+                .prepare(
+                    "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
+                     FROM contradictions c \
+                     JOIN pages p ON p.id = c.page_id \
+                     LEFT JOIN pages other ON other.id = c.other_page_id \
+                     WHERE c.resolved_at IS NULL AND (p.slug = ?1 OR other.slug = ?1) \
+                     ORDER BY c.detected_at, p.slug",
+                )
+                .map_err(map_db_error)?;
+
+            let rows = stmt
+                .query_map([slug], |row| {
+                    Ok(Contradiction {
+                        page_slug: row.get(0)?,
+                        other_page_slug: row.get(1)?,
+                        r#type: row.get(2)?,
+                        description: row.get(3)?,
+                        detected_at: row.get(4)?,
+                    })
                 })
-            })
-            .map_err(map_db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(map_db_error)?;
+                .map_err(map_db_error)?;
+
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_db_error)?
+        } else {
+            let mut stmt = db
+                .prepare(
+                    "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
+                     FROM contradictions c \
+                     JOIN pages p ON p.id = c.page_id \
+                     LEFT JOIN pages other ON other.id = c.other_page_id \
+                     WHERE c.resolved_at IS NULL \
+                     ORDER BY c.detected_at, p.slug",
+                )
+                .map_err(map_db_error)?;
+
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(Contradiction {
+                        page_slug: row.get(0)?,
+                        other_page_slug: row.get(1)?,
+                        r#type: row.get(2)?,
+                        description: row.get(3)?,
+                        detected_at: row.get(4)?,
+                    })
+                })
+                .map_err(map_db_error)?;
+
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_db_error)?
+        };
 
         let json = serde_json::to_string_pretty(&contradictions)
             .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
@@ -679,7 +836,7 @@ impl GigaBrainServer {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
+        let limit = input.limit.unwrap_or(20).min(MAX_LIMIT);
 
         // Verify page exists
         let page = get_page(&db, &input.slug).map_err(map_anyhow_error)?;
@@ -783,6 +940,8 @@ impl GigaBrainServer {
 
         let add = input.add.unwrap_or_default();
         let remove = input.remove.unwrap_or_default();
+        validate_tag_list(&add, "add")?;
+        validate_tag_list(&remove, "remove")?;
 
         for tag in &add {
             db.execute(
@@ -1067,6 +1226,34 @@ mod tests {
         assert!(text.contains("people/alice"));
     }
 
+    #[test]
+    fn brain_link_rejects_invalid_relationship() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        let error = server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
     // ── brain_link_close ─────────────────────────────────────
 
     #[test]
@@ -1120,6 +1307,21 @@ mod tests {
         assert!(text.contains("Closed link 1"));
     }
 
+    #[test]
+    fn brain_link_close_rejects_invalid_temporal_value() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let error = server
+            .brain_link_close(BrainLinkCloseInput {
+                link_id: 1,
+                valid_until: "not-a-date".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+    }
+
     // ── brain_backlinks ──────────────────────────────────────
 
     #[test]
@@ -1150,6 +1352,7 @@ mod tests {
         let result = server
             .brain_backlinks(BrainBacklinksInput {
                 slug: "companies/acme".to_string(),
+                limit: None,
                 temporal: None,
             })
             .unwrap();
@@ -1170,11 +1373,52 @@ mod tests {
         let error = server
             .brain_backlinks(BrainBacklinksInput {
                 slug: "nobody/ghost".to_string(),
+                limit: None,
                 temporal: None,
             })
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_backlinks_applies_limit() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+
+        for slug in ["people/alice", "people/bob", "people/carla"] {
+            create_page(
+                &server,
+                slug,
+                &format!("---\ntitle: {slug}\ntype: person\n---\n{slug}\n"),
+            );
+            server
+                .brain_link(BrainLinkInput {
+                    from_slug: slug.to_string(),
+                    to_slug: "companies/acme".to_string(),
+                    relationship: "works_at".to_string(),
+                    valid_from: None,
+                    valid_until: None,
+                })
+                .unwrap();
+        }
+
+        let result = server
+            .brain_backlinks(BrainBacklinksInput {
+                slug: "companies/acme".to_string(),
+                limit: Some(2),
+                temporal: None,
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+        assert_eq!(arr.len(), 2);
     }
 
     // ── brain_graph ──────────────────────────────────────────
@@ -1276,6 +1520,41 @@ mod tests {
         let text = extract_text(&result);
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert!(!parsed.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn brain_check_filters_output_to_requested_slug() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+        );
+        create_page(
+            &server,
+            "people/bob",
+            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+        );
+
+        server
+            .brain_check(BrainCheckInput {
+                slug: Some("people/bob".to_string()),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_check(BrainCheckInput {
+                slug: Some("people/alice".to_string()),
+            })
+            .unwrap();
+
+        let text = extract_text(&result);
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+        assert!(!parsed.is_empty());
+        assert!(parsed.iter().all(|row| {
+            row["page_slug"] == "people/alice" || row["other_page_slug"] == "people/alice"
+        }));
     }
 
     // ── brain_timeline ───────────────────────────────────────
@@ -1380,6 +1659,27 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_tags_rejects_invalid_tag_values() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+
+        let error = server
+            .brain_tags(BrainTagsInput {
+                slug: "people/alice".to_string(),
+                add: Some(vec!["bad tag".to_string()]),
+                remove: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
     }
 
     fn extract_text(result: &CallToolResult) -> String {

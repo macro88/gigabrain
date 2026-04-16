@@ -5,7 +5,7 @@ use crate::commands::get::get_page;
 use crate::core::assertions::{self, Contradiction};
 
 #[derive(Debug)]
-struct CheckReport {
+pub struct CheckReport {
     contradictions: Vec<Contradiction>,
     processed_pages: usize,
 }
@@ -25,7 +25,8 @@ pub fn run(
     Ok(())
 }
 
-fn execute_check(
+/// Run assertion extraction and contradiction detection without printing. Safe to call from MCP.
+pub fn execute_check(
     db: &Connection,
     slug: Option<&str>,
     all: bool,
