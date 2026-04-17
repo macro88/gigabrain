@@ -79,6 +79,7 @@ fn ensure_sqlite_vec() {
     });
 }
 
+#[allow(dead_code)]
 pub fn open(path: &str) -> Result<Connection, DbError> {
     open_with_model(path, &default_model()).map(|opened| opened.conn)
 }
@@ -112,7 +113,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
         }
         None => {
             eprintln!(
-                "Warning: brain_config is missing; assuming a legacy BAAI/bge-small-en-v1.5 database. Run `gbrain init` once to persist model metadata."
+                "Warning: brain_config is missing or empty; assuming a legacy BAAI/bge-small-en-v1.5 database. Run `gbrain init` once to persist model metadata."
             );
             upgrade_legacy_small_model_names(&conn)?;
             default_model()
@@ -144,7 +145,7 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
 
     let selected_model = if existed_before {
         eprintln!(
-            "Warning: brain_config missing on existing database; writing default small-model metadata during `gbrain init`."
+            "Warning: brain_config missing or empty on existing database; writing default small-model metadata during `gbrain init`."
         );
         upgrade_legacy_small_model_names(&conn)?;
         default_model()
@@ -389,6 +390,7 @@ pub fn set_version(conn: &Connection) -> Result<(), DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::inference::resolve_model;
 
     #[test]
     fn open_creates_all_expected_tables() {
@@ -534,6 +536,29 @@ mod tests {
     }
 
     #[test]
+    fn empty_brain_config_is_treated_as_legacy_small_model() {
+        let conn = open(":memory:").unwrap();
+        conn.execute("DELETE FROM brain_config", []).unwrap();
+
+        let config = read_brain_config(&conn).unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn incomplete_brain_config_returns_schema_error() {
+        let conn = open(":memory:").unwrap();
+        conn.execute("DELETE FROM brain_config", []).unwrap();
+        conn.execute(
+            "INSERT INTO brain_config (key, value) VALUES ('model_id', 'BAAI/bge-small-en-v1.5')",
+            [],
+        )
+        .unwrap();
+
+        let err = read_brain_config(&conn).unwrap_err();
+        assert!(matches!(err, DbError::Schema { .. }));
+    }
+
+    #[test]
     fn missing_brain_config_is_treated_as_legacy_small_model() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_brain.db");
@@ -554,11 +579,13 @@ mod tests {
             schema_version: 4,
         };
         let requested = resolve_model("large");
+        let message = format_model_mismatch(&stored, &requested, "/tmp/test/brain.db");
 
-        let err = DbError::ModelMismatch {
-            message: format_model_mismatch(&stored, &requested, "/tmp/test/brain.db"),
+        let err = DbError::ModelMismatch { message };
+        let DbError::ModelMismatch { message } = &err else {
+            unreachable!()
         };
-        assert!(matches!(err, DbError::ModelMismatch { .. }));
+        assert!(message.contains("rm /tmp/test/brain.db && gbrain init"));
     }
 
     #[cfg(feature = "online-model")]

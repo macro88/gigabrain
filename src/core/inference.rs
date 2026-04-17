@@ -61,6 +61,7 @@ impl ModelConfig {
         &self.model_id
     }
 
+    #[allow(dead_code)]
     pub fn model_hint(&self) -> &str {
         if self.alias == "custom" {
             &self.model_id
@@ -177,6 +178,7 @@ pub fn resolve_model(input: &str) -> ModelConfig {
     }
 }
 
+#[allow(dead_code)]
 pub fn resolve_requested_model(input: Option<&str>) -> ModelConfig {
     let requested = resolve_model(input.unwrap_or(DEFAULT_MODEL_ALIAS));
     coerce_model_for_build(&requested)
@@ -275,6 +277,7 @@ enum EmbeddingBackend {
         model: Box<XLMRobertaModel>,
         tokenizer: Box<Tokenizer>,
         device: Device,
+        max_len: usize,
     },
     HashShim,
 }
@@ -350,7 +353,8 @@ impl EmbeddingModel {
                 model,
                 tokenizer,
                 device,
-            } => embed_candle_xlm_roberta(text, model, tokenizer, device),
+                max_len,
+            } => embed_candle_xlm_roberta(text, model, tokenizer, device, *max_len),
             EmbeddingBackend::HashShim => embed_hash_shim(text, self.config.embedding_dim),
         }
     }
@@ -420,6 +424,7 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
             })
         }
         "xlm-roberta" => {
+            let max_len = read_max_position_embeddings_from_config(&config_path)?;
             let config: XLMRobertaConfig = serde_json::from_str(&config_text)
                 .map_err(|e| format!("parse config.json: {e}"))?;
             let vb = unsafe {
@@ -433,6 +438,7 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
                 model: Box::new(model),
                 tokenizer: Box::new(tokenizer),
                 device,
+                max_len,
             })
         }
         _ => Err(format!(
@@ -491,6 +497,7 @@ fn embed_candle_xlm_roberta(
     model: &XLMRobertaModel,
     tokenizer: &Tokenizer,
     device: &Device,
+    max_len: usize,
 ) -> Result<Vec<f32>, InferenceError> {
     let encoding = tokenizer
         .encode(text, true)
@@ -498,7 +505,6 @@ fn embed_candle_xlm_roberta(
             message: format!("tokenizer: {e}"),
         })?;
 
-    let max_len = 8192;
     let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
     let mask: &[u32] =
         &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
@@ -599,6 +605,7 @@ fn mean_pool_and_normalize(
 
 #[cfg(feature = "online-model")]
 fn download_model_files(model: &ModelConfig) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    validate_model_id(&model.model_id)?;
     let cache_dir = model_cache_dir(model)?;
 
     if let Some(paths) = existing_model_paths(&cache_dir) {
@@ -641,6 +648,7 @@ fn download_model_file(
     file_name: &str,
     cache_dir: &Path,
 ) -> Result<(), String> {
+    let validated_model_id = validate_model_id(&model.model_id)?;
     let destination = cache_dir.join(file_name);
     let temp_destination = cache_dir.join(format!("{file_name}.download"));
     let base_url = huggingface_base_url();
@@ -653,7 +661,7 @@ fn download_model_file(
     let url = format!(
         "{}/{}/resolve/{}/{}",
         base_url.trim_end_matches('/'),
-        model.model_id,
+        validated_model_id,
         revision,
         file_name
     );
@@ -750,27 +758,7 @@ fn model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
 
 #[cfg(feature = "online-model")]
 fn cache_dir_name(model: &ModelConfig) -> String {
-    // Derive a safe directory name from the model ID by:
-    // 1. Replacing `/` with `--` (org/name → org--name)
-    // 2. Stripping any path-traversal sequences (`.`, `..`, OS separators)
-    // 3. Falling back to a hex digest of the model_id if the result would be
-    //    empty or consist only of dots (safety net for exotic IDs).
-    let raw = model.model_id.replace('/', "--");
-    let safe: String = raw
-        .split(std::path::MAIN_SEPARATOR)
-        .flat_map(|part| part.split('/'))
-        .filter(|part| !part.is_empty() && *part != "." && *part != "..")
-        .collect::<Vec<_>>()
-        .join("_");
-
-    if safe.is_empty() || safe.chars().all(|c| c == '.') {
-        // Extreme case: hash the original model_id
-        use sha2::Digest as _;
-        let digest = sha2::Sha256::digest(model.model_id.as_bytes());
-        format!("custom-{:x}", digest)
-    } else {
-        safe
-    }
+    cache_dir_name_from_model_id(&model.model_id)
 }
 
 #[cfg(feature = "online-model")]
@@ -785,10 +773,7 @@ fn existing_model_paths(cache_dir: &Path) -> Option<(PathBuf, PathBuf, PathBuf)>
 
 #[cfg(feature = "online-model")]
 fn read_embedding_dim_from_config(path: &Path) -> Result<usize, String> {
-    let config_text =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let config_json: Value =
-        serde_json::from_str(&config_text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let config_json = read_config_json(path)?;
 
     config_json["hidden_size"]
         .as_u64()
@@ -798,15 +783,138 @@ fn read_embedding_dim_from_config(path: &Path) -> Result<usize, String> {
 
 #[cfg(feature = "online-model")]
 fn read_model_type_from_config(path: &Path) -> Result<String, String> {
-    let config_text =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let config_json: Value =
-        serde_json::from_str(&config_text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let config_json = read_config_json(path)?;
 
     config_json["model_type"]
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| format!("model_type missing in {}", path.display()))
+}
+
+#[cfg(feature = "online-model")]
+fn read_max_position_embeddings_from_config(path: &Path) -> Result<usize, String> {
+    let config_json = read_config_json(path)?;
+
+    config_json["max_position_embeddings"]
+        .as_u64()
+        .map(|value| value as usize)
+        .ok_or_else(|| format!("max_position_embeddings missing in {}", path.display()))
+}
+
+#[cfg(feature = "online-model")]
+fn read_config_json(path: &Path) -> Result<Value, String> {
+    let config_text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    serde_json::from_str(&config_text).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+#[cfg(feature = "online-model")]
+fn validate_model_id(model_id: &str) -> Result<&str, String> {
+    if model_id.trim() != model_id || model_id.is_empty() {
+        return Err(format!(
+            "invalid model id `{model_id}`: expected <org>/<name> without surrounding whitespace"
+        ));
+    }
+
+    if model_id
+        .chars()
+        .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '#' | '?' | '\\'))
+    {
+        return Err(format!(
+            "invalid model id `{model_id}`: spaces, '\\\\', '#', and '?' are not allowed"
+        ));
+    }
+
+    let mut segments = model_id.split('/');
+    let Some(namespace) = segments.next() else {
+        return Err(format!("invalid model id `{model_id}`"));
+    };
+    let Some(name) = segments.next() else {
+        return Err(format!(
+            "invalid model id `{model_id}`: expected exactly one '/' separator"
+        ));
+    };
+
+    if segments.next().is_some() {
+        return Err(format!(
+            "invalid model id `{model_id}`: expected exactly one '/' separator"
+        ));
+    }
+
+    if !is_valid_model_segment(namespace) || !is_valid_model_segment(name) {
+        return Err(format!(
+            "invalid model id `{model_id}`: each path segment must be non-empty and cannot be '.' or '..'"
+        ));
+    }
+
+    Ok(model_id)
+}
+
+#[cfg(feature = "online-model")]
+fn is_valid_model_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+}
+
+#[cfg(feature = "online-model")]
+fn cache_dir_name_from_model_id(model_id: &str) -> String {
+    let mut segments = model_id.split('/');
+    let Some(namespace) = segments.next() else {
+        return hashed_cache_dir_name(model_id);
+    };
+    let Some(name) = segments.next() else {
+        return hashed_cache_dir_name(model_id);
+    };
+
+    if segments.next().is_some() {
+        return hashed_cache_dir_name(model_id);
+    }
+
+    let namespace = sanitize_cache_segment(namespace);
+    let name = sanitize_cache_segment(name);
+
+    match (namespace, name) {
+        (Some(namespace), Some(name)) => format!("{namespace}--{name}"),
+        _ => hashed_cache_dir_name(model_id),
+    }
+}
+
+#[cfg(feature = "online-model")]
+fn sanitize_cache_segment(segment: &str) -> Option<String> {
+    if segment.is_empty()
+        || segment == "."
+        || segment == ".."
+        || segment.chars().any(|ch| ch == '/' || ch == '\\')
+    {
+        return None;
+    }
+
+    let sanitized: String = segment
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    if sanitized.is_empty() || sanitized.chars().all(|ch| ch == '.') {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+#[cfg(feature = "online-model")]
+fn hashed_cache_dir_name(model_id: &str) -> String {
+    let digest = Sha256::digest(model_id.as_bytes());
+    format!("custom-{digest:x}")
 }
 
 fn embed_hash_shim(text: &str, embedding_dim: usize) -> Result<Vec<f32>, InferenceError> {
@@ -1031,13 +1139,34 @@ mod tests {
     // Guard for tests that mutate process-global env vars (GBRAIN_HF_BASE_URL,
     // GBRAIN_MODEL_CACHE_DIR). Rust tests run in parallel by default; without
     // this mutex those tests can observe each other's env-var changes and flake.
-    #[cfg(feature = "online-model")]
     static ENV_MUTATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
         std::sync::OnceLock::new();
 
-    #[cfg(feature = "online-model")]
     fn env_mutation_lock() -> &'static std::sync::Mutex<()> {
         ENV_MUTATION_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     fn open_test_db() -> Connection {
@@ -1084,12 +1213,14 @@ mod tests {
     fn embed_returns_normalized_vector_of_expected_length() {
         // Force hash shim so this test never triggers a real HuggingFace
         // download in CI (download attempt would block for up to 300s).
-        std::env::set_var("GBRAIN_FORCE_HASH_SHIM", "1");
+        let _env_guard = env_mutation_lock()
+            .lock()
+            .expect("env mutation lock poisoned");
+        let _force_hash_shim = EnvVarGuard::set("GBRAIN_FORCE_HASH_SHIM", "1");
         configure_runtime_model(default_model());
         // Reset loaded model so the env var is respected.
         model_runtime().lock().expect("lock").loaded = None;
         let embedding = embed("Alice works at Acme Corp").expect("embed text");
-        std::env::remove_var("GBRAIN_FORCE_HASH_SHIM");
         let norm = embedding
             .iter()
             .map(|value| value * value)
@@ -1183,7 +1314,7 @@ mod tests {
                     .expect("request path");
 
                 let body = if path.ends_with("/config.json") {
-                    "{\n  \"hidden_size\": 1536,\n  \"model_type\": \"bert\"\n}\n".to_owned()
+                    "{\n  \"hidden_size\": 1536,\n  \"max_position_embeddings\": 2048,\n  \"model_type\": \"bert\"\n}\n".to_owned()
                 } else {
                     "{}".to_owned()
                 };
@@ -1207,25 +1338,50 @@ mod tests {
         let _env_guard = env_mutation_lock()
             .lock()
             .expect("env mutation lock poisoned");
-        let prev_base_url = std::env::var("GBRAIN_HF_BASE_URL").ok();
-        let prev_cache_dir = std::env::var("GBRAIN_MODEL_CACHE_DIR").ok();
-        std::env::set_var("GBRAIN_HF_BASE_URL", format!("http://{}", address));
-        std::env::set_var("GBRAIN_MODEL_CACHE_DIR", cache_dir.path());
+        let _base_url = EnvVarGuard::set("GBRAIN_HF_BASE_URL", format!("http://{}", address));
+        let _cache_dir = EnvVarGuard::set("GBRAIN_MODEL_CACHE_DIR", cache_dir.path());
 
         let model = resolve_model("org/custom-model");
         let hydrated = hydrate_model_config(&model).expect("hydrate custom model");
-
-        match prev_base_url {
-            Some(v) => std::env::set_var("GBRAIN_HF_BASE_URL", v),
-            None => std::env::remove_var("GBRAIN_HF_BASE_URL"),
-        }
-        match prev_cache_dir {
-            Some(v) => std::env::set_var("GBRAIN_MODEL_CACHE_DIR", v),
-            None => std::env::remove_var("GBRAIN_MODEL_CACHE_DIR"),
-        }
         server.join().expect("join mock server");
 
         assert_eq!(hydrated.model_id, "org/custom-model");
         assert_eq!(hydrated.embedding_dim, 1536);
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn validate_model_id_rejects_extra_slashes_and_query_chars() {
+        let err = validate_model_id("org/extra/model").unwrap_err();
+        assert!(err.contains("exactly one '/' separator"));
+
+        let err = validate_model_id("org/model?rev=main").unwrap_err();
+        assert!(err.contains("not allowed"));
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn cache_dir_name_falls_back_to_hash_for_degenerate_inputs() {
+        let fallback = cache_dir_name_from_model_id("../..");
+        assert!(fallback.starts_with("custom-"));
+
+        let fallback = cache_dir_name_from_model_id("org//model");
+        assert!(fallback.starts_with("custom-"));
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn read_max_position_embeddings_from_config_uses_config_json_value() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            "{\n  \"hidden_size\": 1024,\n  \"max_position_embeddings\": 4096,\n  \"model_type\": \"xlm-roberta\"\n}\n",
+        )
+        .expect("write config");
+
+        let max_len = read_max_position_embeddings_from_config(&config_path).expect("read max len");
+
+        assert_eq!(max_len, 4096);
     }
 }
