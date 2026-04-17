@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use super::fts::search_fts;
+use super::fts::{sanitize_fts_query, search_fts};
 use super::inference::search_vec;
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
@@ -27,7 +27,12 @@ pub fn hybrid_search(
         }
     }
 
-    let fts_results = search_fts(trimmed, wing, conn, limit)?;
+    let fts_safe = sanitize_fts_query(trimmed);
+    let fts_results = if fts_safe.is_empty() {
+        Vec::new()
+    } else {
+        search_fts(&fts_safe, wing, conn, limit)?
+    };
     let vec_results = search_vec(trimmed, 10, wing, conn)?;
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -383,5 +388,24 @@ mod tests {
         let results =
             hybrid_search("what is rust?", None, &conn, 1000).expect("hybrid search with ?");
         assert!(!results.is_empty());
+    }
+
+    /// Regression: issue #37 — "AND?" must be sanitized to "AND" before FTS5.
+    /// A bare `AND?` would crash FTS5 directly; hybrid_search must absorb it.
+    #[test]
+    fn hybrid_search_accepts_and_question_mark_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let result = hybrid_search("AND?", None, &conn, 1000);
+        assert!(result.is_ok(), "hybrid_search must not propagate FTS5 errors for natural-language input");
     }
 }

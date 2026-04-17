@@ -7,10 +7,14 @@ use super::types::{SearchError, SearchResult};
 /// syntax error.  The result is a plain list of words safe for FTS5 MATCH.
 ///
 /// Removed characters: `" * ? + - ^ ~ : ( ) { } [ ]`
-/// FTS5 boolean keywords (`AND`, `OR`, `NOT`, `NEAR`) are left alone — they
-/// are only special when capitalised **and** surrounded by whitespace, and
-/// removing them would silently drop legitimate search terms.
+/// FTS5 boolean keywords (`AND`, `OR`, `NOT`, `NEAR`) are quoted rather than
+/// removed — stripping them would silently drop legitimate search terms, and
+/// leaving them bare as standalone tokens would produce FTS5 syntax errors
+/// (e.g. `AND?` → stripped to `AND` → invalid). Quoting forces literal
+/// interpretation while preserving the words in the search.
 pub fn sanitize_fts_query(raw: &str) -> String {
+    const FTS5_KEYWORDS: &[&str] = &["AND", "OR", "NOT", "NEAR"];
+
     let cleaned: String = raw
         .chars()
         .map(|c| match c {
@@ -20,8 +24,21 @@ pub fn sanitize_fts_query(raw: &str) -> String {
         })
         .collect();
 
-    // Collapse runs of whitespace and trim.
-    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+    // Collapse whitespace, then quote any bare FTS5 boolean keyword so it is
+    // treated as a literal search term rather than a query operator.
+    // FTS5 keywords are case-sensitive: only uppercase AND/OR/NOT/NEAR are
+    // operators; lowercase variants are safe literals and must not be quoted.
+    cleaned
+        .split_whitespace()
+        .map(|token| {
+            if FTS5_KEYWORDS.contains(&token) {
+                format!("\"{token}\"")
+            } else {
+                token.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// FTS5 full-text search over the `page_fts` virtual table.
@@ -29,14 +46,21 @@ pub fn sanitize_fts_query(raw: &str) -> String {
 /// Returns at most `limit` results ranked by BM25 score (most relevant first).
 /// When `wing_filter` is provided, only pages in that wing are returned.
 /// Returns an empty vec on no matches (not an error).
+///
+/// **Explicit FTS5 semantics are preserved.** Quoted phrases, boolean operators
+/// (`AND`, `OR`, `NOT`), and prefix wildcards (`*`) all work as documented by
+/// SQLite FTS5.  Invalid syntax is propagated as `Err` — this is intentional for
+/// the `gbrain search` / `brain_search` expert interface.  Natural-language
+/// callers (e.g. `hybrid_search`) are responsible for sanitizing input before
+/// calling this function.
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    let sanitized = sanitize_fts_query(query);
-    if sanitized.is_empty() {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -48,7 +72,7 @@ pub fn search_fts(
     );
 
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    params.push(Box::new(sanitized.clone()));
+    params.push(Box::new(trimmed.to_owned()));
 
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?2");
@@ -307,8 +331,8 @@ mod tests {
     #[test]
     fn sanitize_strips_multiple_special_chars() {
         assert_eq!(
-            sanitize_fts_query("(hello) + world: \"test\" * foo?"),
-            "hello world test foo"
+            sanitize_fts_query("(hello) + world: foo?"),
+            "hello world foo"
         );
     }
 
@@ -327,10 +351,27 @@ mod tests {
         assert_eq!(sanitize_fts_query("machine learning"), "machine learning");
     }
 
-    // ── regression: punctuation in search_fts (issue #37) ───────
+    #[test]
+    fn sanitize_quotes_bare_fts5_and_keyword() {
+        // "AND?" → strip "?" → "AND" → quoted to prevent FTS5 operator error.
+        assert_eq!(sanitize_fts_query("AND?"), "\"AND\"");
+    }
 
     #[test]
-    fn search_with_question_mark_does_not_crash() {
+    fn sanitize_quotes_bare_fts5_boolean_keywords() {
+        assert_eq!(sanitize_fts_query("OR NOT NEAR"), "\"OR\" \"NOT\" \"NEAR\"");
+    }
+
+    #[test]
+    fn sanitize_preserves_lowercase_and_or_not_as_plain_words() {
+        // Lowercase and/or/not are not FTS5 operators — leave them unquoted.
+        assert_eq!(sanitize_fts_query("cats and dogs"), "cats and dogs");
+    }
+
+    // ── explicit FTS5 semantics (search_fts is the expert interface) ─────────
+
+    #[test]
+    fn search_fts_accepts_quoted_phrase() {
         let conn = open_test_db();
         insert_page(
             &conn,
@@ -341,36 +382,46 @@ mod tests {
             "Rust is a systems programming language.",
         );
 
-        // "rust programming?" → sanitised to "rust programming" — both terms in content.
-        let results = search_fts("rust programming?", None, &conn, 1000).unwrap();
+        // Explicit FTS5 phrase query must pass through unmodified and match.
+        let results = search_fts("\"systems programming\"", None, &conn, 1000).unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].slug, "concepts/rust");
     }
 
     #[test]
-    fn search_with_complex_punctuation_does_not_crash() {
+    fn search_fts_accepts_boolean_and_operator() {
         let conn = open_test_db();
         insert_page(
             &conn,
-            "concepts/ai",
-            "Artificial Intelligence",
+            "concepts/rust",
+            "Rust Language",
             "concepts",
-            "AI overview",
-            "Artificial intelligence and machine learning research.",
+            "Systems programming",
+            "Rust is a systems programming language.",
         );
 
-        // Mix of FTS5 syntax characters that would previously crash
-        let results =
-            search_fts("(artificial) + intelligence: \"research\"?", None, &conn, 1000).unwrap();
+        // FTS5 boolean AND operator must work for expert users.
+        let results = search_fts("systems AND programming", None, &conn, 1000).unwrap();
         assert!(!results.is_empty());
     }
 
+    /// Regression: issue #37 — search_fts() is the expert FTS5 interface.
+    /// Invalid FTS5 syntax MUST propagate as Err (intended error contract).
+    /// Natural-language callers must sanitize before calling search_fts.
     #[test]
-    fn search_with_only_punctuation_returns_empty() {
+    fn search_fts_returns_error_on_invalid_fts5_syntax() {
         let conn = open_test_db();
-        insert_page(&conn, "test/a", "Test", "test", "summary", "content");
+        insert_page(
+            &conn,
+            "test/a",
+            "Test",
+            "test",
+            "summary",
+            "content about rust",
+        );
 
-        let results = search_fts("???!!!", None, &conn, 1000).unwrap();
-        assert!(results.is_empty());
+        // A bare `?` is not valid FTS5 syntax — Err is the contract.
+        let result = search_fts("rust?", None, &conn, 1000);
+        assert!(result.is_err(), "search_fts must propagate FTS5 syntax errors");
     }
 }
