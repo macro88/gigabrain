@@ -375,25 +375,27 @@ resolve_channel()  { CHANNEL="airgapped"; }
 verify_checksum()  { return 0; }
 need_cmd()         { return 0; }
 PATH="$TEST_STUBS:$PATH"
-T19_PROFILE="$TEST_HOME/.t19_profile"
-rm -f "$T19_PROFILE"
 NO_PROFILE=0
 GBRAIN_NO_PROFILE=0
-detect_profile() {
-  PROFILE_FILE="$T19_PROFILE"
-  printf '%s\n' "Warning: Shell profile $PROFILE_FILE is not writable." >&2
-  return 1
-}
+T19_HOME="$TEST_HOME/unwritable_home_t19"
+mkdir -p "$T19_HOME"
+chmod 500 "$T19_HOME"
+OLD_HOME_T19="$HOME"
+OLD_SHELL_T19="${SHELL:-}"
+HOME="$T19_HOME"
+SHELL=/usr/bin/zsh
 if main >"$TEST_HOME/t19_main.out" 2>"$TEST_HOME/t19_main.err"; then
   not_ok "T19: main() should exit non-zero when profile persistence fails"
 else
-  if grep -Fq 'gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
+  if grep -Fq "Cannot create shell profile ${T19_HOME}/.zshrc" "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'Complete setup by adding these to your shell profile:' "$TEST_HOME/t19_main.err" &&
      grep -Fq 'export PATH="' "$TEST_HOME/t19_main.err" &&
-     grep -Fq 'export GBRAIN_DB="$HOME/brain.db"' "$TEST_HOME/t19_main.err"; then
-    ok "T19: main() prints manual recovery steps when profile persistence fails"
+     grep -Fq 'export GBRAIN_DB="$HOME/brain.db"' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'download first, then run:' "$TEST_HOME/t19_main.err"; then
+    ok "T19: main() drives the real detect_profile failure and prints recovery guidance"
   else
-    not_ok "T19: main() did not print the expected recovery guidance on profile failure"
+    not_ok "T19: main() did not print the expected real failure and recovery output"
   fi
 fi
 if grep -Fq "Installed gbrain to" "$TEST_HOME/t19_main.out"; then
@@ -401,6 +403,14 @@ if grep -Fq "Installed gbrain to" "$TEST_HOME/t19_main.out"; then
 else
   not_ok "T19b: main() should report the installed binary path on profile failure"
 fi
+if [ ! -e "$T19_HOME/.zshrc" ]; then
+  ok "T19c: main() leaves the failed profile path untouched"
+else
+  not_ok "T19c: main() unexpectedly created the unwritable profile file"
+fi
+HOME="$OLD_HOME_T19"
+SHELL="$OLD_SHELL_T19"
+chmod 700 "$T19_HOME"
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
