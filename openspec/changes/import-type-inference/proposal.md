@@ -29,16 +29,16 @@ absent, the code hard-codes `"concept"` without consulting the file's path.
 
 ### 1. `src/core/migrate.rs` — tiered type inference in `parse_file`
 
-Replace the single-fallback `"concept"` default with a two-tier fallback:
+Replace the single-fallback `"concept"` default with a three-tier fallback:
 
 **Tier 1 — frontmatter field (existing, unchanged):**
-If `frontmatter["type"]` is present and non-empty, use it verbatim.
+If `frontmatter["type"]` is present and non-blank/non-null, use it verbatim.
 
 **Tier 2 — top-level folder inference (new):**
-If `frontmatter["type"]` is absent, inspect the first path component of the relative file
+If `frontmatter["type"]` is absent or blank, inspect the first path component of the relative file
 path (the top-level folder) and map it to a type:
 
-| Folder (case-insensitive prefix match) | Inferred type |
+| Folder (case-insensitive exact match after prefix strip) | Inferred type |
 |----------------------------------------|---------------|
 | `projects` / `1. projects`             | `project`     |
 | `areas`    / `2. areas`                | `area`        |

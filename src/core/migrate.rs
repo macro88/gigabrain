@@ -290,8 +290,8 @@ fn strip_numeric_prefix(name: &str) -> &str {
     // If we consumed at least one digit and next char is '.', skip the dot and any spaces
     if i > 0 && i < bytes.len() && bytes[i] == b'.' {
         i += 1; // skip '.'
-        while i < bytes.len() && bytes[i] == b' ' {
-            i += 1; // skip trailing spaces
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1; // skip trailing whitespace
         }
         &name[i..]
     } else {
@@ -1239,5 +1239,117 @@ mod tests {
         assert_eq!(strip_numeric_prefix("3.  Resources"), "Resources");
         assert_eq!(strip_numeric_prefix("Projects"), "Projects");
         assert_eq!(strip_numeric_prefix("10. Archives"), "Archives");
+    }
+
+    // ── blank/null type: precedence bug regression ─────────────────
+
+    #[test]
+    fn blank_type_in_frontmatter_falls_back_to_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Projects/ with `type:` explicitly set to blank — should infer from folder
+        let proj_dir = dir.path().join("Projects");
+        fs::create_dir_all(&proj_dir).unwrap();
+        fs::write(
+            proj_dir.join("note.md"),
+            "---\ntitle: BlankType\ntype: \n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 1, "blank type: should fall back to folder inference");
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'BlankType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "project");
+    }
+
+    #[test]
+    fn null_type_in_frontmatter_falls_back_to_folder_inference() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in Areas/ with `type: null` — should infer from folder
+        let area_dir = dir.path().join("Areas");
+        fs::create_dir_all(&area_dir).unwrap();
+        fs::write(
+            area_dir.join("note.md"),
+            "---\ntitle: NullType\ntype: null\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 1, "null type: should fall back to folder inference");
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'NullType'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "area");
+    }
+
+    #[test]
+    fn unknown_folder_falls_back_to_concept() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File in an unrecognised folder — should default to concept
+        let misc_dir = dir.path().join("Miscellaneous");
+        fs::create_dir_all(&misc_dir).unwrap();
+        fs::write(
+            misc_dir.join("note.md"),
+            "---\ntitle: UnknownFolder\n---\nContent.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'UnknownFolder'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "concept");
+    }
+
+    #[test]
+    fn root_level_file_no_type_falls_back_to_concept() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // File directly at vault root (no sub-folder) — first component is the filename
+        fs::write(
+            dir.path().join("readme.md"),
+            "---\ntitle: RootFile\n---\nRoot level content.\n",
+        )
+        .unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.type_inferred, 0);
+
+        let page_type: String = conn
+            .query_row(
+                "SELECT type FROM pages WHERE title = 'RootFile'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(page_type, "concept");
     }
 }

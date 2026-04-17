@@ -198,16 +198,16 @@ gbrain skills doctor   # verify skill hashes and detect shadowing
 
 ## Page types
 
-`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`
+`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`, `area`, `resource`, `archive`, `journal`
 
 The `original` type is for your own thinking — distinct from compiled external intelligence.
 
 ### Page types and PARA folder structure
 
-When you run `gbrain import`, page types are resolved in two tiers:
+When you run `gbrain import`, page types are resolved in three tiers:
 
-1. **Frontmatter `type:` field** — if your markdown file includes `type: project` (or any type) in the YAML frontmatter, that value is used. Frontmatter always wins.
-2. **Top-level folder inference** — if no `type:` field is present, GigaBrain infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
+1. **Frontmatter `type:` field** — if your markdown file includes `type: project` (or any non-blank type) in the YAML frontmatter, that value is used. Frontmatter always wins. Blank (`type: `) or null (`type: null`) values are treated as absent and fall through to tier 2.
+2. **Top-level folder inference** — if no usable `type:` field is present, GigaBrain infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
 
 | Folder name | Inferred type |
 |-------------|---------------|
@@ -221,7 +221,7 @@ When you run `gbrain import`, page types are resolved in two tiers:
 
 Folder matching is **case-insensitive** and strips leading numeric prefixes (e.g. `1. `, `02. `) that Obsidian users commonly use for sort order.
 
-If the folder doesn't match any known name, the page defaults to `concept`.
+If the folder doesn't match any known name, or if the file is at vault root with no sub-folder, the page defaults to `concept`.
 
 **Example:** importing `2. Areas/Health/exercise.md` (with no `type:` in frontmatter) yields a page with type `area`.
 
