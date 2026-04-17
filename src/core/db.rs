@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::inference::{
     coerce_model_for_build, configure_runtime_model, default_model, hydrate_model_config,
-    resolve_model, ModelConfig,
+    ModelConfig,
 };
 use super::types::DbError;
 
@@ -52,13 +52,13 @@ impl BrainConfig {
         let alias = self.model_alias.as_str();
         if matches!(alias, "small" | "base" | "large" | "m3") {
             let mut model = crate::core::inference::resolve_model(alias);
-            model.embedding_dim = self.embedding_dim as usize;
+            model.embedding_dim = self.embedding_dim;
             model
         } else {
             crate::core::inference::ModelConfig {
                 alias: self.model_alias.clone(),
                 model_id: self.model_id.clone(),
-                embedding_dim: self.embedding_dim as usize,
+                embedding_dim: self.embedding_dim,
                 sha256_hashes: None,
             }
         }
