@@ -22,7 +22,7 @@
 
 - [x] B.2 Update `scripts/install.sh` so it defaults to `GBRAIN_CHANNEL=airgapped` and accepts `GBRAIN_CHANNEL=airgapped|online`. Both values resolve to `gbrain-<platform>-<channel>` asset names. Unknown channel values produce a clear error and exit 1.
 
-- [x] B.3 Update `packages/gbrain-npm/scripts/postinstall.js` so it downloads the `online` channel asset by default (`gbrain-<platform>-online`), emits a notice that npm installs the online BGE-small channel and points airgapped users to GitHub Releases or the shell installer, and handles `GBRAIN_CHANNEL=airgapped|online` overrides.
+- [x] B.3 Update `packages/gbrain-npm/scripts/postinstall.js` so it downloads the `online` channel asset (`gbrain-<platform>-online`), emits a notice that npm installs the online BGE-small channel and points airgapped users to GitHub Releases or the shell installer. npm always uses the `online` channel; no `GBRAIN_CHANNEL` override is supported in this surface.
 
 - [x] B.4 Bump version surfaces to `v0.9.1`: `Cargo.toml` `[package].version`, `packages/gbrain-npm/package.json` `version`, and any related packaging metadata. Confirm `cargo check` still passes after the bump.
 

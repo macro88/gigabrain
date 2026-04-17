@@ -178,8 +178,11 @@ fn embed_candle(
             message: format!("tokenizer: {e}"),
         })?;
 
-    let ids = encoding.get_ids();
-    let mask = encoding.get_attention_mask();
+    // BGE-small-en-v1.5 max_position_embeddings = 512; truncate to avoid OOB.
+    let max_len = 512;
+    let ids: &[u32] = &encoding.get_ids()[..encoding.get_ids().len().min(max_len)];
+    let mask: &[u32] =
+        &encoding.get_attention_mask()[..encoding.get_attention_mask().len().min(max_len)];
 
     let input_ids = Tensor::new(ids, device)
         .and_then(|t| t.unsqueeze(0))

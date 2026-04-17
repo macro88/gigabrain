@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Dual-channel builds are part of the release gate
-Before `v0.9.1` is tagged, the repository SHALL validate the codebase against both the default/airgapped build path and the slim/online build path.
+Before `v0.9.1` is tagged, the repository SHALL validate the codebase against both the default/airgapped build path and the online build path.
 
 #### Scenario: Both channel feature sets are exercised before release
 - **WHEN** Fry runs the release validation commands for this change

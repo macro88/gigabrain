@@ -130,10 +130,7 @@ checksum_name="${asset_name}.sha256"
 binary_url="${RELEASE_BASE}/${VERSION}/${asset_name}"
 checksum_url="${RELEASE_BASE}/${VERSION}/${checksum_name}"
 
-cache_root="${GBRAIN_TMP_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/gbrain-installer}"
-tmp_dir="${cache_root}/$$"
-rm -rf "$tmp_dir"
-mkdir -p "$tmp_dir" || fail "Cannot create temporary directory: ${tmp_dir}"
+tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t gbrain-install)" || fail "Cannot create temporary directory with mktemp"
 
 printf '%s\n' "Installing gbrain ${VERSION} for ${PLATFORM} (${CHANNEL})..."
 curl -fsSL "$binary_url" -o "$tmp_dir/$asset_name" || fail "Failed to download ${binary_url}"

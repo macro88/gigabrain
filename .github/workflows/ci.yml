@@ -35,8 +35,11 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt --all -- --check
 
-      - name: Cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Cargo clippy (default / airgapped channel)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Cargo clippy (online channel)
+        run: cargo clippy --all-targets --no-default-features --features bundled,online-model -- -D warnings
 
       - name: Cargo check
         run: cargo check --all-targets
@@ -114,7 +117,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage (lcov)
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --lcov --output-path lcov.info
 
       - name: Generate coverage summary
         run: |

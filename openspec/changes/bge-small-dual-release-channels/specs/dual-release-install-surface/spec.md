@@ -7,7 +7,7 @@
 - **WHEN** a user runs `curl .../install.sh | sh` without setting `GBRAIN_CHANNEL`
 - **THEN** the installer downloads `gbrain-<platform>-airgapped` and its checksum for the resolved platform
 
-#### Scenario: Shell installer override chooses the slim asset
+#### Scenario: Shell installer override chooses the online asset
 - **WHEN** a user sets `GBRAIN_CHANNEL=online` before invoking `install.sh`
 - **THEN** the installer downloads `gbrain-<platform>-online` and its checksum for the resolved platform
 

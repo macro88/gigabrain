@@ -2311,7 +2311,7 @@ thiserror = "1"
 default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
 embedded-model = []                      # airgapped channel (default): include_bytes!() model weights into binary
-online-model = ["hf-hub"]                # online channel; download weights on first run
+online-model = ["dep:reqwest"]             # online channel; download weights on first run
 ```
 
 ### Build commands
