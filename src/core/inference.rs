@@ -70,6 +70,7 @@ impl ModelConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_small(&self) -> bool {
         self.alias == "small" || self.model_id == "BAAI/bge-small-en-v1.5"
     }
@@ -209,7 +210,7 @@ pub fn hydrate_model_config(model: &ModelConfig) -> Result<ModelConfig, String> 
         let embedding_dim = read_embedding_dim_from_config(&config_path)?;
         let mut hydrated = model.clone();
         hydrated.embedding_dim = embedding_dim;
-        return Ok(hydrated);
+        Ok(hydrated)
     }
 
     #[cfg(not(feature = "online-model"))]
@@ -431,8 +432,8 @@ fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String>
                 VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)
                     .map_err(|e| format!("load model weights: {e}"))?
             };
-            let model = XLMRobertaModel::load(vb, &config)
-                .map_err(|e| format!("build XLM-R model: {e}"))?;
+            let model =
+                XLMRobertaModel::new(&config, vb).map_err(|e| format!("build XLM-R model: {e}"))?;
 
             Ok(EmbeddingBackend::CandleXlmRoberta {
                 model: Box::new(model),
@@ -521,8 +522,21 @@ fn embed_candle_xlm_roberta(
             message: format!("attention_mask tensor: {e}"),
         })?;
 
+    let token_type_ids = input_ids
+        .zeros_like()
+        .map_err(|e| InferenceError::Internal {
+            message: format!("token_type_ids: {e}"),
+        })?;
+
     let output = model
-        .forward(&input_ids, &attention_mask, None, None, None, None)
+        .forward(
+            &input_ids,
+            &attention_mask,
+            &token_type_ids,
+            None,
+            None,
+            None,
+        )
         .map_err(|e| InferenceError::Internal {
             message: format!("XLM-R forward: {e}"),
         })?;
