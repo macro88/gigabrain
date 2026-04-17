@@ -421,18 +421,28 @@ cat requests.jsonl | gbrain pipe
 
 <Tabs>
   <TabItem label="Create + search">
-    ```bash gbrain init ~/brain.db gbrain import /path/to/notes/ --db ~/brain.db
-    gbrain search "river ai" gbrain query "who has worked with Jensen Huang?"
+    ```bash
+    gbrain init ~/brain.db
+    gbrain import /path/to/notes/ --db ~/brain.db
+    gbrain search "river ai"
+    gbrain query "who has worked with Jensen Huang?"
     ```
   </TabItem>
   <TabItem label="Read + write">
-    ```bash gbrain get people/pedro-franceschi cat updated.md | gbrain put
-    people/pedro-franceschi ```
+    ```bash
+    gbrain get people/pedro-franceschi
+    cat updated.md | gbrain put people/pedro-franceschi
+    ```
   </TabItem>
   <TabItem label="Links + graph">
-    ```bash gbrain link people/pedro-franceschi companies/brex --relationship
-    founded --valid-from 2017-01-01 gbrain graph people/pedro-franceschi --depth
-    2 ```
+    ```bash
+    gbrain link people/pedro-franceschi companies/brex --relationship founded --valid-from 2017-01-01
+    gbrain graph people/pedro-franceschi --depth 2
+    ```
   </TabItem>
-  <TabItem label="MCP">```bash GBRAIN_DB=~/brain.db gbrain serve ```</TabItem>
+  <TabItem label="MCP">
+    ```bash
+    GBRAIN_DB=~/brain.db gbrain serve
+    ```
+  </TabItem>
 </Tabs>
