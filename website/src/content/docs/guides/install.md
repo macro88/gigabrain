@@ -96,7 +96,7 @@ GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" \
 
 The installer auto-detects your platform, chooses the airgapped or online release asset based on
 `GBRAIN_CHANNEL`, verifies the SHA-256 checksum, runs `gbrain version`, and automatically writes
-`PATH` and `GBRAIN_DB` to your shell profile (`~/.zshrc`, `~/.bashrc`, or `~/.profile`).
+`PATH` and `GBRAIN_DB` to your shell profile (`~/.zshrc`, `~/.bash_profile` on macOS / `~/.bashrc` on Linux, or `~/.profile`).
 
 To skip automatic profile writes (e.g. in CI or agent environments that manage `$PATH` externally):
 

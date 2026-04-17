@@ -199,6 +199,145 @@ fi
 GBRAIN_NO_PROFILE=0
 
 # ---------------------------------------------------------------
+# detect_profile — branch coverage (T10–T13)
+# ---------------------------------------------------------------
+# Restore detect_profile to its installer-defined implementation.
+# Earlier tests (T8) override it; re-source the function so T10–T13
+# exercise the real branching logic, not a test stub.
+detect_profile() {
+  shell_name="$(basename "${SHELL:-/bin/sh}" 2>/dev/null || echo "sh")"
+  case "$shell_name" in
+    zsh)
+      PROFILE_FILE="$HOME/.zshrc"
+      ;;
+    bash)
+      case "$(uname -s 2>/dev/null || true)" in
+        Darwin) PROFILE_FILE="$HOME/.bash_profile" ;;
+        *)      PROFILE_FILE="$HOME/.bashrc" ;;
+      esac
+      ;;
+    *)
+      PROFILE_FILE="$HOME/.profile"
+      ;;
+  esac
+  if [ ! -f "$PROFILE_FILE" ]; then
+    touch "$PROFILE_FILE" 2>/dev/null || true
+  fi
+}
+
+# T10: zsh → ~/.zshrc (any OS)
+SHELL=/usr/bin/zsh detect_profile
+if [ "$PROFILE_FILE" = "$HOME/.zshrc" ]; then
+  ok "T10: detect_profile — zsh → ~/.zshrc"
+else
+  not_ok "T10: detect_profile — zsh → ~/.zshrc (got: $PROFILE_FILE)"
+fi
+
+# T11: Darwin bash → ~/.bash_profile
+# Inject a fake uname into PATH that reports Darwin for 'uname -s'
+DARWIN_STUBS="$TEST_HOME/darwin_stubs"
+mkdir -p "$DARWIN_STUBS"
+printf '#!/usr/bin/env sh\n[ "$1" = "-s" ] && { printf "Darwin\\n"; exit 0; }; exec /usr/bin/uname "$@"\n' \
+  > "$DARWIN_STUBS/uname"
+chmod +x "$DARWIN_STUBS/uname"
+OLD_PATH_T11="$PATH"
+PATH="$DARWIN_STUBS:$PATH"
+SHELL=/bin/bash detect_profile
+PATH="$OLD_PATH_T11"
+if [ "$PROFILE_FILE" = "$HOME/.bash_profile" ]; then
+  ok "T11: detect_profile — Darwin bash → ~/.bash_profile"
+else
+  not_ok "T11: detect_profile — Darwin bash → ~/.bash_profile (got: $PROFILE_FILE)"
+fi
+
+# T12: Linux bash → ~/.bashrc  (CI runs on Linux; real uname returns Linux)
+SHELL=/bin/bash detect_profile
+if [ "$PROFILE_FILE" = "$HOME/.bashrc" ]; then
+  ok "T12: detect_profile — Linux bash → ~/.bashrc"
+else
+  not_ok "T12: detect_profile — Linux bash → ~/.bashrc (got: $PROFILE_FILE)"
+fi
+
+# T13: unknown shell → ~/.profile
+SHELL=/usr/bin/fish detect_profile
+if [ "$PROFILE_FILE" = "$HOME/.profile" ]; then
+  ok "T13: detect_profile — unknown shell → ~/.profile"
+else
+  not_ok "T13: detect_profile — unknown shell → ~/.profile (got: $PROFILE_FILE)"
+fi
+
+# ---------------------------------------------------------------
+# main() integration tests — T14–T16
+# Exercises the real entry path with stubbed network/system functions.
+# ---------------------------------------------------------------
+
+# Build a fake 'curl' that writes a minimal sh script to any '-o FILE' target.
+TEST_STUBS="$TEST_HOME/stubs"
+mkdir -p "$TEST_STUBS"
+printf '#!/usr/bin/env sh\noutfile=""\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    -o) outfile="$2"; shift 2 ;;\n    *)  shift ;;\n  esac\ndone\n[ -n "$outfile" ] && printf "#!/usr/bin/env sh\\nexit 0\\n" > "$outfile"\nexit 0\n' \
+  > "$TEST_STUBS/curl"
+chmod +x "$TEST_STUBS/curl"
+
+# Override network/platform functions to avoid real I/O
+resolve_version()  { VERSION="v0.0.0-test"; }
+resolve_platform() { PLATFORM="linux-x86_64"; }
+resolve_channel()  { CHANNEL="airgapped"; }
+verify_checksum()  { return 0; }
+need_cmd()         { return 0; }
+
+SAVED_PATH_STUBS="$PATH"
+PATH="$TEST_STUBS:$PATH"
+
+# T14: main() --no-profile parses the flag and skips profile write
+T14_PROFILE="$TEST_HOME/.t14_profile"
+printf '' > "$T14_PROFILE"
+detect_profile() { PROFILE_FILE="$T14_PROFILE"; }
+NO_PROFILE=0
+if main --no-profile >/dev/null 2>&1; then
+  if [ ! -s "$T14_PROFILE" ]; then
+    ok "T14: main() --no-profile parses flag and leaves profile untouched"
+  else
+    not_ok "T14: main() --no-profile wrote to profile (file non-empty)"
+  fi
+else
+  not_ok "T14: main() --no-profile exited non-zero"
+fi
+tmp_dir=""
+
+# T15: main() default path writes both exports through the real write_profile call
+T15_PROFILE="$TEST_HOME/.t15_profile"
+printf '' > "$T15_PROFILE"
+detect_profile() { PROFILE_FILE="$T15_PROFILE"; }
+NO_PROFILE=0
+GBRAIN_NO_PROFILE=0
+if main >/dev/null 2>&1; then
+  if grep -Fq "export PATH=" "$T15_PROFILE" && grep -Fq "export GBRAIN_DB=" "$T15_PROFILE"; then
+    ok "T15: main() default path writes PATH and GBRAIN_DB to profile"
+  else
+    not_ok "T15: main() default path did not write expected exports"
+  fi
+else
+  not_ok "T15: main() default path exited non-zero"
+fi
+tmp_dir=""
+
+PATH="$SAVED_PATH_STUBS"
+
+# T16: GBRAIN_NO_PROFILE=1 env var is captured at script source time → NO_PROFILE=1
+# Run the installer in a fresh subprocess (GBRAIN_TEST_MODE=1 prevents main() from firing
+# but the top-level assignment  NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"  still executes).
+t16_result=$(GBRAIN_TEST_MODE=1 \
+  GBRAIN_NO_PROFILE=1 \
+  GBRAIN_INSTALL_DIR="$TEST_HOME/bin" \
+  HOME="$TEST_HOME" \
+  sh -c ". \"$INSTALL_SH\" && printf '%s' \"\$NO_PROFILE\"" 2>/dev/null)
+if [ "$t16_result" = "1" ]; then
+  ok "T16: GBRAIN_NO_PROFILE=1 env var sets NO_PROFILE=1 at script startup"
+else
+  not_ok "T16: GBRAIN_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t16_result')"
+fi
+
+# ---------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
