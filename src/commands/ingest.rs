@@ -88,7 +88,7 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
         ],
     )?;
 
-    record_ingest(db, &hash, path)?;
+    record_ingest(db, &hash, path, &slug)?;
     println!("Ingested {slug}");
 
     Ok(())
@@ -103,11 +103,15 @@ fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-fn record_ingest(db: &Connection, hash: &str, path: &str) -> Result<()> {
+fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<()> {
     db.execute(
-        "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref) \
-         VALUES (?1, 'file', ?2)",
-        rusqlite::params![hash, path],
+        "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
+         VALUES (?1, 'file', ?2, json_array(?3)) \
+         ON CONFLICT(ingest_key) DO UPDATE SET \
+             source_ref = excluded.source_ref, \
+             pages_updated = excluded.pages_updated, \
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
+        rusqlite::params![hash, path, slug],
     )?;
     Ok(())
 }
@@ -304,5 +308,89 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn ingest_records_resolved_frontmatter_slug_in_pages_updated() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("2024-01-meeting.md");
+        fs::write(
+            &file_path,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+
+        run(&conn, file_path.to_str().unwrap(), false).unwrap();
+
+        let pages_updated: String = conn
+            .query_row(
+                "SELECT pages_updated FROM ingest_log WHERE source_ref = ?1",
+                [file_path.to_str().unwrap()],
+                |row| row.get(0),
+            )
+            .expect("ingest_log row should exist");
+
+        assert!(
+            pages_updated.contains("people/alice"),
+            "pages_updated should contain the resolved slug, got: {pages_updated}"
+        );
+        assert!(
+            !pages_updated.contains("2024-01-meeting"),
+            "pages_updated should not contain the filename stem, got: {pages_updated}"
+        );
+    }
+
+    /// Force re-ingest of identical content from a NEW path must refresh the
+    /// ingest_log source_ref so that `lookup_source_path` returns the new path.
+    #[test]
+    fn force_reingest_from_new_path_refreshes_source_mapping() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let path_a = dir.path().join("old-location.md");
+        fs::write(
+            &path_a,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+        run(&conn, path_a.to_str().unwrap(), false).unwrap();
+
+        // Verify initial source_ref.
+        let initial_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE EXISTS ( \
+                     SELECT 1 FROM json_each(pages_updated) WHERE value = 'people/alice' \
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("initial ingest_log row");
+        assert_eq!(initial_ref, path_a.to_str().unwrap());
+
+        // Force re-ingest same content from a different path.
+        let path_b = dir.path().join("new-location.md");
+        fs::write(
+            &path_b,
+            "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\nAlice is a founder.\n",
+        )
+        .unwrap();
+        run(&conn, path_b.to_str().unwrap(), true).unwrap();
+
+        // source_ref must now point to path_b.
+        let updated_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE EXISTS ( \
+                     SELECT 1 FROM json_each(pages_updated) WHERE value = 'people/alice' \
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("updated ingest_log row");
+        assert_eq!(
+            updated_ref,
+            path_b.to_str().unwrap(),
+            "source_ref must update to the new path after force re-ingest"
+        );
     }
 }

@@ -56,3 +56,25 @@
 - **Status:** Task 8.2 left for re-review by different reviewer per phase 3 workflow (Nibbler).
 
 **Next:** Await Nibbler re-review of all fixes before closing task 8.2.
+
+## Learnings
+
+### 2026-04-19 Import Diagnostics Fix (issues #34, #35, #39)
+
+**What happened:**
+- Fixed two beta-tester reported issues in the import diagnostics lane.
+- **#34 / #39 (duplicate):** `embed::run` batch loop changed from fail-fast (`?`) to per-slug error handling. Each failed page emits `warning: embedding skipped '<slug>': <reason>` and the batch continues. Infrastructure-level failures still propagate.
+- **#35:** `ImportStats.skipped` replaced with `skipped_already_ingested` + `skipped_non_markdown` + `total_skipped()`. Non-markdown files are now counted by `collect_files()` (renamed from `collect_md_files`). Import output message shows the breakdown.
+- 5 new tests added; 288 total pass. Clippy clean.
+- PR #45 opened referencing both issues. #39 closed as duplicate.
+- Decision record: `.squad/decisions/inbox/mom-import-diagnostics.md`
+
+**Key files:**
+- `src/core/migrate.rs` — ImportStats struct, collect_files(), import_dir()
+- `src/commands/embed.rs` — per-slug batch error handling
+- `src/commands/import.rs` — output message with skip-reason breakdown
+- `tests/corpus_reality.rs` — integration test using ImportStats fields
+
+**Architecture note:**
+- `chunk_page()` in current code cannot produce empty-content chunks (all code paths guard against it), so the "input text is empty" error the user saw was likely a transient or historical condition. The fix is still correct and valuable as a defensive guardrail.
+- Naming convention for ImportStats fields: each skip reason gets its own named field — never fold multiple reasons into a catch-all counter.
