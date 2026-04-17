@@ -98,8 +98,16 @@ GBRAIN_CHANNEL=online \
 ```
 
 > The installer automatically writes `PATH` and `GBRAIN_DB` exports to your shell profile
-> (`~/.zshrc`, `~/.bashrc`, or `~/.profile`) so gbrain works immediately in new sessions.
-> To skip profile writes (e.g. in CI), set `GBRAIN_NO_PROFILE=1` or pass `--no-profile`.
+> (`~/.zshrc`, `~/.bash_profile` on macOS / `~/.bashrc` on Linux, or `~/.profile`) so gbrain
+> works immediately in new sessions.
+> To skip profile writes (e.g. in CI), pipe with `GBRAIN_NO_PROFILE=1 sh` or pass `--no-profile`
+> with the two-step method:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | GBRAIN_NO_PROFILE=1 sh
+> # two-step (download first, then run with flag):
+> curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+>   -o gbrain-install.sh && sh gbrain-install.sh --no-profile
+> ```
 
 **Sandboxed / agent environments** — if your security sandbox blocks piping remote scripts
 directly to `sh`, download first, then run:

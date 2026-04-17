@@ -31,10 +31,15 @@ on all supported platforms and is more reliable than reading `/etc/shells`.
 
 ### 3. Idempotent writes — check before appending
 
-**Decision:** Before appending a line, grep the target profile file for the exported
-variable name (`PATH` / `GBRAIN_DB`). Skip the append if already present.
+**Decision:** Before appending a line, grep the target profile file for the exact export
+line to be appended (e.g. `export PATH="$INSTALL_DIR:$PATH"` / `export GBRAIN_DB="$HOME/brain.db"`).
+Use fixed-string matching (`grep -F`) to avoid false positives from regex metacharacters in
+paths. Skip the append if the exact line is already present.
 
 **Rationale:** Repeated installs (version upgrades) must not produce duplicate export lines.
+Using the exact export line as the idempotency key is precise: matching only the variable name
+`PATH` would falsely trigger on every profile (PATH is always present), while matching the
+full line is accurate and handles paths with shell-special characters safely.
 
 ### 4. Two-step install as a documented alternative, not default
 

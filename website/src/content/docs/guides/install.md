@@ -101,9 +101,10 @@ The installer auto-detects your platform, chooses the airgapped or online releas
 To skip automatic profile writes (e.g. in CI or agent environments that manage `$PATH` externally):
 
 ```bash
-GBRAIN_NO_PROFILE=1 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | GBRAIN_NO_PROFILE=1 sh
 # or with the two-step method:
-sh gbrain-install.sh --no-profile
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  -o gbrain-install.sh && sh gbrain-install.sh --no-profile
 ```
 
 #### Sandboxed / agent environments
