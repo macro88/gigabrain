@@ -35,8 +35,20 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
     let mut embedded_chunks = 0_usize;
 
     for s in slugs {
-        let page = get_page(db, &s)?;
-        let pid = page_id(db, &s)?;
+        let page = match get_page(db, &s) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warning: embedding skipped '{s}': {e}");
+                continue;
+            }
+        };
+        let pid = match page_id(db, &s) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("warning: embedding skipped '{s}': {e}");
+                continue;
+            }
+        };
         let chunks = chunk_page(&page);
 
         if chunks.is_empty() {
@@ -49,7 +61,10 @@ pub fn run(db: &Connection, slug: Option<String>, all: bool, stale: bool) -> Res
             continue;
         }
 
-        replace_page_embeddings(db, pid, &model_name, &vec_table, &chunks)?;
+        if let Err(e) = replace_page_embeddings(db, pid, &model_name, &vec_table, &chunks) {
+            eprintln!("warning: embedding skipped '{s}': {e}");
+            continue;
+        }
         embedded_pages += 1;
         embedded_chunks += chunks.len();
     }
@@ -366,5 +381,36 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM page_embeddings", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 1);
+    }
+
+    /// Batch embed (`--all`) must return Ok even when one page's embedding
+    /// fails.  The other pages must still be embedded.
+    ///
+    /// We simulate the failure by inserting a page whose slug matches one that
+    /// `page_id()` will find, then deleting its row right before embed so that
+    /// `get_page` returns NotFound.  The second page must still be embedded.
+    #[test]
+    fn batch_embed_continues_past_per_page_failure() {
+        let conn = open_test_db();
+        insert_test_page(&conn, "people/alice", "## State\nAlice is investing.", "");
+        insert_test_page(&conn, "people/bob", "## State\nBob is building.", "");
+
+        // Delete alice so get_page will fail for her during batch embed.
+        conn.execute("DELETE FROM pages WHERE slug = 'people/alice'", [])
+            .expect("delete alice");
+
+        // Batch embed must succeed despite alice being missing.
+        run(&conn, None, true, false).expect("batch embed should succeed despite missing page");
+
+        // Bob was embedded; alice was not (she was deleted).
+        let bob_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings pe \
+                 JOIN pages p ON p.id = pe.page_id WHERE p.slug = 'people/bob'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("bob embedding count");
+        assert!(bob_count > 0, "bob should have been embedded");
     }
 }

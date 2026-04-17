@@ -12,10 +12,27 @@ pub fn run(db: &Connection, path: &str, validate_only: bool) -> Result<()> {
     if validate_only {
         println!("Validation passed: {} file(s) OK", stats.imported);
     } else {
-        println!(
-            "Imported {} page(s) ({} skipped)",
-            stats.imported, stats.skipped
-        );
+        let total_skipped = stats.total_skipped();
+        if total_skipped == 0 {
+            println!("Imported {} page(s)", stats.imported);
+        } else {
+            let mut reasons = Vec::new();
+            if stats.skipped_already_ingested > 0 {
+                reasons.push(format!(
+                    "{} already ingested",
+                    stats.skipped_already_ingested
+                ));
+            }
+            if stats.skipped_non_markdown > 0 {
+                reasons.push(format!("{} non-markdown", stats.skipped_non_markdown));
+            }
+            println!(
+                "Imported {} page(s) ({} skipped: {})",
+                stats.imported,
+                total_skipped,
+                reasons.join(", ")
+            );
+        }
     }
 
     Ok(())

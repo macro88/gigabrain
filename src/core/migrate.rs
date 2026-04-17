@@ -11,7 +11,16 @@ use crate::core::palace;
 
 pub struct ImportStats {
     pub imported: usize,
-    pub skipped: usize,
+    /// Files skipped because they were already ingested (same SHA-256).
+    pub skipped_already_ingested: usize,
+    /// Files skipped because they are not Markdown (`.md`).
+    pub skipped_non_markdown: usize,
+}
+
+impl ImportStats {
+    pub fn total_skipped(&self) -> usize {
+        self.skipped_already_ingested + self.skipped_non_markdown
+    }
 }
 
 /// Import all `.md` files from a directory into the brain database.
@@ -20,12 +29,13 @@ pub struct ImportStats {
 /// (by hash) are skipped. When `validate_only` is true, files are parsed but
 /// no database writes are performed.
 pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<ImportStats> {
-    let md_files = collect_md_files(dir)?;
+    let (md_files, non_markdown_count) = collect_files(dir)?;
 
     if md_files.is_empty() {
         return Ok(ImportStats {
             imported: 0,
-            skipped: 0,
+            skipped_already_ingested: 0,
+            skipped_non_markdown: non_markdown_count,
         });
     }
 
@@ -51,19 +61,20 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
     if validate_only {
         return Ok(ImportStats {
             imported: parsed.len(),
-            skipped: 0,
+            skipped_already_ingested: 0,
+            skipped_non_markdown: non_markdown_count,
         });
     }
 
     // Check which hashes are already ingested
     let mut imported = 0;
-    let mut skipped = 0;
+    let mut skipped_already_ingested = 0;
 
     let tx = db.unchecked_transaction()?;
 
     for (file_path, hash, entry) in &parsed {
         if is_already_ingested(&tx, hash)? {
-            skipped += 1;
+            skipped_already_ingested += 1;
             continue;
         }
 
@@ -74,14 +85,19 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
 
     tx.commit()?;
 
-    // Embed stale pages after commit
+    // Embed stale pages after commit. embed::run emits per-page warnings on
+    // failure so any infrastructure-level error here is a genuine batch fault.
     if imported > 0 {
         if let Err(e) = crate::commands::embed::run(db, None, true, false) {
             eprintln!("warning: embedding failed after import: {e}");
         }
     }
 
-    Ok(ImportStats { imported, skipped })
+    Ok(ImportStats {
+        imported,
+        skipped_already_ingested,
+        skipped_non_markdown: non_markdown_count,
+    })
 }
 
 /// Export all pages as markdown files to the given output directory.
@@ -260,27 +276,41 @@ fn record_ingest(db: &Connection, hash: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn collect_md_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+/// Returns `(md_files, non_markdown_count)`.
+fn collect_files(dir: &Path) -> Result<(Vec<std::path::PathBuf>, usize)> {
     if !dir.exists() {
         bail!("directory not found: {}", dir.display());
     }
-    let mut files = Vec::new();
-    collect_md_recursive(dir, &mut files)?;
-    files.sort();
-    Ok(files)
+    let mut md_files = Vec::new();
+    let mut non_markdown_count = 0usize;
+    collect_files_recursive(dir, &mut md_files, &mut non_markdown_count)?;
+    md_files.sort();
+    Ok((md_files, non_markdown_count))
 }
 
-fn collect_md_recursive(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+fn collect_files_recursive(
+    dir: &Path,
+    md_files: &mut Vec<std::path::PathBuf>,
+    non_markdown_count: &mut usize,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            collect_md_recursive(&path, files)?;
+            collect_files_recursive(&path, md_files, non_markdown_count)?;
         } else if path.extension().is_some_and(|ext| ext == "md") {
-            files.push(path);
+            md_files.push(path);
+        } else {
+            *non_markdown_count += 1;
         }
     }
     Ok(())
+}
+
+// Keep the old name available for internal test helpers that call it directly.
+#[cfg(test)]
+fn collect_md_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    collect_files(dir).map(|(files, _)| files)
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -358,7 +388,8 @@ mod tests {
         let stats = import_dir(&conn, dir.path(), false).unwrap();
 
         assert_eq!(stats.imported, 1);
-        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.skipped_already_ingested, 0);
+        assert_eq!(stats.skipped_non_markdown, 0);
     }
 
     #[test]
@@ -376,7 +407,8 @@ mod tests {
         let stats = import_dir(&conn, dir.path(), false).unwrap();
 
         assert_eq!(stats.imported, 0);
-        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.skipped_already_ingested, 1);
+        assert_eq!(stats.skipped_non_markdown, 0);
     }
 
     #[test]
@@ -463,7 +495,8 @@ mod tests {
 
         let initial_stats = import_dir(&conn, corpus_dir.path(), false).unwrap();
         assert_eq!(initial_stats.imported, fixture_count);
-        assert_eq!(initial_stats.skipped, 0);
+        assert_eq!(initial_stats.skipped_already_ingested, 0);
+        assert_eq!(initial_stats.skipped_non_markdown, 0);
 
         let modified_fixture = corpus_dir.path().join("person.md");
         let original = fs::read_to_string(&modified_fixture).unwrap();
@@ -478,6 +511,59 @@ mod tests {
 
         let reimport_stats = import_dir(&conn, corpus_dir.path(), false).unwrap();
         assert_eq!(reimport_stats.imported, 1);
-        assert_eq!(reimport_stats.skipped, fixture_count - 1);
+        assert_eq!(reimport_stats.skipped_already_ingested, fixture_count - 1);
+        assert_eq!(reimport_stats.skipped_non_markdown, 0);
+    }
+
+    #[test]
+    fn import_dir_counts_non_markdown_files_as_skipped_non_markdown() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        fs::write(
+            dir.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nContent.\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("config.json"), r#"{"key":"value"}"#).unwrap();
+        fs::write(dir.path().join("README.txt"), "Plain text readme").unwrap();
+
+        let stats = import_dir(&conn, dir.path(), false).unwrap();
+
+        assert_eq!(stats.imported, 1);
+        assert_eq!(stats.skipped_already_ingested, 0);
+        assert_eq!(stats.skipped_non_markdown, 2);
+        assert_eq!(stats.total_skipped(), 2);
+    }
+
+    #[test]
+    fn import_dir_mixed_skips_show_both_reason_counts() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        fs::write(
+            dir.path().join("a.md"),
+            "---\ntitle: A\ntype: concept\n---\nContent A.\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.md"),
+            "---\ntitle: B\ntype: concept\n---\nContent B.\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("config.json"), r#"{"x":1}"#).unwrap();
+
+        // First pass: both .md files imported, json counted as non-markdown
+        let first = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(first.imported, 2);
+        assert_eq!(first.skipped_already_ingested, 0);
+        assert_eq!(first.skipped_non_markdown, 1);
+
+        // Second pass: both .md already ingested, json still non-markdown
+        let second = import_dir(&conn, dir.path(), false).unwrap();
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped_already_ingested, 2);
+        assert_eq!(second.skipped_non_markdown, 1);
+        assert_eq!(second.total_skipped(), 3);
     }
 }
