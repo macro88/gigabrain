@@ -94,7 +94,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
         Some(stored) => {
             if stored.model_id != requested_model.model_id {
                 return Err(DbError::ModelMismatch {
-                    message: format_model_mismatch(&stored, &requested_model),
+                    message: format_model_mismatch(&stored, &requested_model, path),
                 });
             }
             stored.to_model_config()
@@ -208,85 +208,91 @@ fn sync_legacy_config(conn: &Connection, model: &ModelConfig) -> Result<(), DbEr
 }
 
 pub fn write_brain_config(conn: &Connection, config: &BrainConfig) -> Result<(), DbError> {
-    conn.execute(
+    // Write all four keys atomically so a mid-flight crash never leaves a
+    // partial brain_config that silently falls back to the legacy small-model
+    // path on the next open.
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO brain_config (key, value) VALUES ('model_id', ?1) \
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [&config.model_id],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO brain_config (key, value) VALUES ('model_alias', ?1) \
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [&config.model_alias],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO brain_config (key, value) VALUES ('embedding_dim', ?1) \
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [config.embedding_dim.to_string()],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO brain_config (key, value) VALUES ('schema_version', ?1) \
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [config.schema_version.to_string()],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
 pub fn read_brain_config(conn: &Connection) -> Result<Option<BrainConfig>, DbError> {
     if !table_exists(conn, "brain_config")? {
+        // Legacy DB pre-dating brain_config — treated as small-model default.
         return Ok(None);
     }
 
-    let model_id: Option<String> = conn
-        .query_row(
-            "SELECT value FROM brain_config WHERE key = 'model_id'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let model_alias: Option<String> = conn
-        .query_row(
-            "SELECT value FROM brain_config WHERE key = 'model_alias'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let embedding_dim: Option<String> = conn
-        .query_row(
-            "SELECT value FROM brain_config WHERE key = 'embedding_dim'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let schema_version: Option<String> = conn
-        .query_row(
-            "SELECT value FROM brain_config WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
+    // Fetch all four required keys in one pass.
+    let mut rows: std::collections::HashMap<String, String> = conn
+        .prepare("SELECT key, value FROM brain_config WHERE key IN ('model_id','model_alias','embedding_dim','schema_version')")?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<Result<_, _>>()?;
 
-    let Some(model_id) = model_id else {
+    // Table exists but is completely empty → legacy / pre-migration DB.
+    if rows.is_empty() {
         return Ok(None);
-    };
-    let Some(model_alias) = model_alias else {
-        return Ok(None);
-    };
-    let Some(embedding_dim) = embedding_dim else {
-        return Ok(None);
-    };
-    let Some(schema_version) = schema_version else {
-        return Ok(None);
-    };
+    }
+
+    // Table is present but missing one or more keys → partial write, treat as error.
+    let required = ["model_id", "model_alias", "embedding_dim", "schema_version"];
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|k| !rows.contains_key(*k))
+        .collect();
+    if !missing.is_empty() {
+        return Err(DbError::Schema {
+            message: format!(
+                "brain_config is incomplete (missing keys: {}). \
+                 The database may have been corrupted by an interrupted write. \
+                 Re-initialize with: rm <path-to-brain.db> && gbrain init",
+                missing.join(", ")
+            ),
+        });
+    }
+
+    let model_id = rows.remove("model_id").unwrap();
+    let model_alias = rows.remove("model_alias").unwrap();
+    let embedding_dim = rows
+        .remove("embedding_dim")
+        .unwrap()
+        .parse::<usize>()
+        .map_err(|_| DbError::Schema {
+            message: "brain_config.embedding_dim must be an integer".to_owned(),
+        })?;
+    let schema_version = rows
+        .remove("schema_version")
+        .unwrap()
+        .parse::<u32>()
+        .map_err(|_| DbError::Schema {
+            message: "brain_config.schema_version must be an integer".to_owned(),
+        })?;
 
     Ok(Some(BrainConfig {
         model_id,
         model_alias,
-        embedding_dim: embedding_dim.parse().map_err(|_| DbError::Schema {
-            message: "brain_config.embedding_dim must be an integer".to_owned(),
-        })?,
-        schema_version: schema_version.parse().map_err(|_| DbError::Schema {
-            message: "brain_config.schema_version must be an integer".to_owned(),
-        })?,
+        embedding_dim,
+        schema_version,
     }))
 }
 
@@ -301,7 +307,7 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     Ok(exists.is_some())
 }
 
-fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig) -> String {
+fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path: &str) -> String {
     let requested_dim = if requested.embedding_dim == 0 {
         "unknown".to_owned()
     } else {
@@ -309,7 +315,7 @@ fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig) -> Strin
     };
 
     format!(
-        "Error: Model mismatch\n\n  This brain.db was initialized with: {} ({} dimensions)\n  You requested:                       {} ({} dimensions)\n\n  Embedding dimensions are incompatible. Options:\n    1. Use the original model:   GBRAIN_MODEL={} gbrain <command>\n    2. Re-initialize the DB:     rm ~/brain.db && gbrain init   (data will be lost)",
+        "Error: Model mismatch\n\n  This brain.db was initialized with: {} ({} dimensions)\n  You requested:                       {} ({} dimensions)\n\n  Embedding dimensions are incompatible. Options:\n    1. Use the original model:   GBRAIN_MODEL={} gbrain <command>\n    2. Re-initialize the DB:     rm {} && gbrain init   (data will be lost)",
         stored.model_id,
         stored.embedding_dim,
         requested.model_id,
@@ -318,7 +324,8 @@ fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig) -> Strin
             stored.model_id.as_str()
         } else {
             stored.model_alias.as_str()
-        }
+        },
+        db_path,
     )
 }
 
@@ -535,7 +542,7 @@ mod tests {
         let requested = resolve_model("large");
 
         let err = DbError::ModelMismatch {
-            message: format_model_mismatch(&stored, &requested),
+            message: format_model_mismatch(&stored, &requested, "/tmp/test/brain.db"),
         };
         assert!(matches!(err, DbError::ModelMismatch { .. }));
     }

@@ -38,6 +38,10 @@ pub struct ModelFileHashes {
     pub config_json: &'static str,
     pub tokenizer_json: &'static str,
     pub model_safetensors: &'static str,
+    /// Pinned HuggingFace revision (commit SHA) used when downloading.
+    /// Standard aliases always use a pinned revision for reproducibility.
+    /// Custom models use `None` and fall back to `main`.
+    pub revision: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,24 +82,28 @@ const SMALL_HASHES: ModelFileHashes = ModelFileHashes {
     config_json: "094f8e891b932f2000c92cfc663bac4c62069f5d8af5b5278c4306aef3084750",
     tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
     model_safetensors: "3c9f31665447c8911517620762200d2245a2518d6e7208acc78cd9db317e21ad",
+    revision: Some("5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"),
 };
 
 const BASE_HASHES: ModelFileHashes = ModelFileHashes {
     config_json: "bc00af31a4a31b74040d73370aa83b62da34c90b75eb77bfa7db039d90abd591",
     tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
     model_safetensors: "c7c1988aae201f80cf91a5dbbd5866409503b89dcaba877ca6dba7dd0a5167d7",
+    revision: Some("a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"),
 };
 
 const LARGE_HASHES: ModelFileHashes = ModelFileHashes {
     config_json: "446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896",
     tokenizer_json: "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
     model_safetensors: "45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7",
+    revision: Some("d9e9d73f56c5e5851e28a1bcbe3b1c36e3d28d4c"),
 };
 
 const M3_HASHES: ModelFileHashes = ModelFileHashes {
     config_json: "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa",
     tokenizer_json: "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
     model_safetensors: "993b2248881724788dcab8c644a91dfd63584b6e5604ff2037cb5541e1e38e7e",
+    revision: Some("babcf60cae0a1f438d7ade582983571a6b46523f"),
 };
 
 pub fn default_model() -> ModelConfig {
@@ -373,6 +381,12 @@ fn load_embedded_backend(config: &ModelConfig) -> Result<EmbeddingBackend, Strin
 
 #[cfg(feature = "online-model")]
 fn load_online_backend(config: &ModelConfig) -> Result<EmbeddingBackend, String> {
+    // In tests, set GBRAIN_FORCE_HASH_SHIM=1 to skip the 300s download
+    // attempt and use the deterministic hash-based shim instead.  This keeps
+    // tests fast and avoids real network calls.
+    if std::env::var("GBRAIN_FORCE_HASH_SHIM").as_deref() == Ok("1") {
+        return Err("GBRAIN_FORCE_HASH_SHIM=1: skipping model download in test mode".to_owned());
+    }
     let (config_path, tokenizer_path, model_path) = download_model_files(config)?;
     let model_type = read_model_type_from_config(&config_path)?;
     let config_text =
@@ -622,10 +636,17 @@ fn download_model_file(
     let destination = cache_dir.join(file_name);
     let temp_destination = cache_dir.join(format!("{file_name}.download"));
     let base_url = huggingface_base_url();
+    // Use pinned revision for standard aliases; fall back to `main` only for
+    // custom/unpinned models so upstream changes never silently break SHA checks.
+    let revision = model
+        .sha256_hashes
+        .and_then(|h| h.revision)
+        .unwrap_or("main");
     let url = format!(
-        "{}/{}/resolve/main/{}",
+        "{}/{}/resolve/{}/{}",
         base_url.trim_end_matches('/'),
         model.model_id,
+        revision,
         file_name
     );
 
@@ -809,16 +830,32 @@ fn accumulate_token_hash(token: &str, token_index: usize, embedding: &mut [f32])
 
 pub fn ensure_model() {
     let configured = runtime_model_config();
-    let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
 
-    let needs_reload = runtime
-        .loaded
-        .as_ref()
-        .map(|loaded| loaded.config != configured)
-        .unwrap_or(true);
+    // Check under lock whether a reload is needed, then release before doing
+    // the expensive download/mmap so concurrent callers (e.g. `gbrain serve`)
+    // are not blocked for the full model-load duration.
+    let needs_reload = {
+        let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        runtime
+            .loaded
+            .as_ref()
+            .map(|loaded| loaded.config != configured)
+            .unwrap_or(true)
+    };
 
     if needs_reload {
-        runtime.loaded = Some(EmbeddingModel::new(configured));
+        let new_model = EmbeddingModel::new(configured.clone());
+        let mut runtime = model_runtime().lock().expect("model runtime lock poisoned");
+        // Re-check in case another thread loaded the same model while we were
+        // building it — avoid an unnecessary double-install.
+        let still_needs_reload = runtime
+            .loaded
+            .as_ref()
+            .map(|loaded| loaded.config != configured)
+            .unwrap_or(true);
+        if still_needs_reload {
+            runtime.loaded = Some(new_model);
+        }
     }
 }
 
@@ -964,6 +1001,18 @@ mod tests {
     #[cfg(feature = "online-model")]
     use std::thread;
 
+    // Guard for tests that mutate process-global env vars (GBRAIN_HF_BASE_URL,
+    // GBRAIN_MODEL_CACHE_DIR). Rust tests run in parallel by default; without
+    // this mutex those tests can observe each other's env-var changes and flake.
+    #[cfg(feature = "online-model")]
+    static ENV_MUTATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+
+    #[cfg(feature = "online-model")]
+    fn env_mutation_lock() -> &'static std::sync::Mutex<()> {
+        ENV_MUTATION_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().expect("create temp dir");
         let db_path = dir.path().join("test_brain.db");
@@ -1006,8 +1055,17 @@ mod tests {
 
     #[test]
     fn embed_returns_normalized_vector_of_expected_length() {
+        // Force hash shim so this test never triggers a real HuggingFace
+        // download in CI (download attempt would block for up to 300s).
+        std::env::set_var("GBRAIN_FORCE_HASH_SHIM", "1");
         configure_runtime_model(default_model());
+        // Reset loaded model so the env var is respected.
+        model_runtime()
+            .lock()
+            .expect("lock")
+            .loaded = None;
         let embedding = embed("Alice works at Acme Corp").expect("embed text");
+        std::env::remove_var("GBRAIN_FORCE_HASH_SHIM");
         let norm = embedding
             .iter()
             .map(|value| value * value)
@@ -1118,14 +1176,27 @@ mod tests {
         });
 
         let cache_dir = tempfile::TempDir::new().expect("create cache dir");
+
+        // Hold the env-mutation lock for the duration of the test so parallel
+        // tests cannot observe our GBRAIN_HF_BASE_URL / GBRAIN_MODEL_CACHE_DIR
+        // changes. Restore previous values (if any) on drop.
+        let _env_guard = env_mutation_lock().lock().expect("env mutation lock poisoned");
+        let prev_base_url = std::env::var("GBRAIN_HF_BASE_URL").ok();
+        let prev_cache_dir = std::env::var("GBRAIN_MODEL_CACHE_DIR").ok();
         std::env::set_var("GBRAIN_HF_BASE_URL", format!("http://{}", address));
         std::env::set_var("GBRAIN_MODEL_CACHE_DIR", cache_dir.path());
 
         let model = resolve_model("org/custom-model");
         let hydrated = hydrate_model_config(&model).expect("hydrate custom model");
 
-        std::env::remove_var("GBRAIN_HF_BASE_URL");
-        std::env::remove_var("GBRAIN_MODEL_CACHE_DIR");
+        match prev_base_url {
+            Some(v) => std::env::set_var("GBRAIN_HF_BASE_URL", v),
+            None => std::env::remove_var("GBRAIN_HF_BASE_URL"),
+        }
+        match prev_cache_dir {
+            Some(v) => std::env::set_var("GBRAIN_MODEL_CACHE_DIR", v),
+            None => std::env::remove_var("GBRAIN_MODEL_CACHE_DIR"),
+        }
         server.join().expect("join mock server");
 
         assert_eq!(hydrated.model_id, "org/custom-model");
