@@ -11,11 +11,21 @@ fn open_test_db() -> Connection {
 }
 
 fn insert_page(conn: &Connection, slug: &str, compiled_truth: &str) {
+    insert_page_with_frontmatter(conn, slug, slug, compiled_truth, "{}");
+}
+
+fn insert_page_with_frontmatter(
+    conn: &Connection,
+    slug: &str,
+    title: &str,
+    compiled_truth: &str,
+    frontmatter: &str,
+) {
     conn.execute(
         "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
-         VALUES (?1, 'person', ?1, '', ?2, '', '{}', 'people', '', 1)",
-        rusqlite::params![slug, compiled_truth],
+         VALUES (?1, 'person', ?2, '', ?3, '', ?4, 'people', '', 1)",
+        rusqlite::params![slug, title, compiled_truth, frontmatter],
     )
     .unwrap();
 }
@@ -25,8 +35,16 @@ fn insert_page(conn: &Connection, slug: &str, compiled_truth: &str) {
 #[test]
 fn extract_and_check_round_trip_detects_cross_page_conflict() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.",
+    );
 
     let page_a = get_page(&conn, "people/alice").unwrap();
     let page_b = get_page(&conn, "sources/meeting").unwrap();
@@ -84,7 +102,7 @@ fn check_single_slug_finds_contradiction() {
     insert_page(
         &conn,
         "people/alice",
-        "Alice works at Acme Corp.\nAlice works at Beta Corp.",
+        "## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.",
     );
 
     // Call the check command directly — it should succeed
@@ -95,8 +113,16 @@ fn check_single_slug_finds_contradiction() {
 #[test]
 fn check_all_mode_processes_multiple_pages() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.",
+    );
 
     let result = check::run(&conn, None, true, None, false);
     assert!(result.is_ok());
@@ -105,8 +131,16 @@ fn check_all_mode_processes_multiple_pages() {
 #[test]
 fn check_json_output_is_valid_json() {
     let conn = open_test_db();
-    insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-    insert_page(&conn, "sources/meeting", "Alice works at Beta Corp.");
+    insert_page(
+        &conn,
+        "people/alice",
+        "## Assertions\nAlice works at Acme Corp.",
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.",
+    );
 
     // JSON mode should not error
     let result = check::run(&conn, None, true, None, true);
@@ -128,4 +162,30 @@ fn check_neither_slug_nor_all_returns_error() {
 
     let result = check::run(&conn, None, false, None, false);
     assert!(result.is_err());
+}
+
+#[test]
+fn frontmatter_assertions_participate_in_conflict_detection() {
+    let conn = open_test_db();
+    insert_page_with_frontmatter(
+        &conn,
+        "people/alice",
+        "Alice",
+        "Narrative only.",
+        r#"{"works_at":"Acme Corp"}"#,
+    );
+    insert_page(
+        &conn,
+        "sources/meeting",
+        "## Assertions\nAlice works at Beta Corp.",
+    );
+
+    let page_a = get_page(&conn, "people/alice").unwrap();
+    let page_b = get_page(&conn, "sources/meeting").unwrap();
+    assertions::extract_assertions(&page_a, &conn).unwrap();
+    assertions::extract_assertions(&page_b, &conn).unwrap();
+
+    let contradictions = assertions::check_assertions("people/alice", &conn).unwrap();
+
+    assert_eq!(contradictions.len(), 1);
 }

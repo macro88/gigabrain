@@ -228,8 +228,16 @@ mod tests {
     #[test]
     fn all_mode_processes_multiple_pages() {
         let conn = open_test_db();
-        insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-        insert_page(&conn, "sources/alice-profile", "Alice works at Beta Corp.");
+        insert_page(
+            &conn,
+            "people/alice",
+            "## Assertions\nAlice works at Acme Corp.",
+        );
+        insert_page(
+            &conn,
+            "sources/alice-profile",
+            "## Assertions\nAlice works at Beta Corp.",
+        );
 
         let report = execute_check(&conn, None, true, None).unwrap();
 
@@ -244,8 +252,16 @@ mod tests {
     #[test]
     fn json_output_is_valid() {
         let conn = open_test_db();
-        insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-        insert_page(&conn, "sources/alice-profile", "Alice works at Beta Corp.");
+        insert_page(
+            &conn,
+            "people/alice",
+            "## Assertions\nAlice works at Acme Corp.",
+        );
+        insert_page(
+            &conn,
+            "sources/alice-profile",
+            "## Assertions\nAlice works at Beta Corp.",
+        );
         let report = execute_check(&conn, None, true, None).unwrap();
 
         let json = render_output(&report, true).unwrap();
@@ -269,8 +285,16 @@ mod tests {
     #[test]
     fn human_output_includes_contradiction_summary_for_all_mode() {
         let conn = open_test_db();
-        insert_page(&conn, "people/alice", "Alice works at Acme Corp.");
-        insert_page(&conn, "sources/alice-profile", "Alice works at Beta Corp.");
+        insert_page(
+            &conn,
+            "people/alice",
+            "## Assertions\nAlice works at Acme Corp.",
+        );
+        insert_page(
+            &conn,
+            "sources/alice-profile",
+            "## Assertions\nAlice works at Beta Corp.",
+        );
         let report = execute_check(&conn, None, true, None).unwrap();
 
         let output = render_output(&report, false).unwrap();

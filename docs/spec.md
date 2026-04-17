@@ -639,7 +639,7 @@ COMMANDS:
       --depth <N>                   Hops from center node [default: 2]
       --temporal <current|historical|all>  Filter links by temporal state [default: current]
       --limit <N>                   Max nodes to return [default: 50]
-    check [SLUG]                    Run contradiction detection
+    check [SLUG]                    Run contradiction detection (frontmatter + ## Assertions only)
       --all                         Check entire brain
       --type <temporal|cross_page|stale>  Filter by check type
     gaps                            List unresolved knowledge gaps
@@ -2914,6 +2914,28 @@ Wing derivation from slug is straightforward. Room derivation from section heade
 
 LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 
+#### Structured Assertions
+
+`gbrain check` only extracts agent assertions from explicit structured zones:
+
+- Frontmatter fields: `is_a`, `works_at`, `founded`
+- A dedicated `## Assertions` section in `compiled_truth`
+
+General body prose is not scanned. This is intentional: contradiction detection is trust-critical,
+so the default is quiet unless the page opts into structured assertions.
+
+Example:
+
+```markdown
+---
+is_a: researcher
+works_at: Acme Corp
+---
+
+## Assertions
+Alice founded Brain Co.
+```
+
 ---
 
 ## Spec History
@@ -2933,4 +2955,3 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 ---
 
 *This spec is designed to stand alone. Everything needed to build GigaBrain is above — no prior context required. It is explicitly inspired by Garry Tan's GBrain work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 GBrain skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
-

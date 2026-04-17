@@ -173,7 +173,7 @@ enum Commands {
         #[arg(long, default_value = "current")]
         temporal: String,
     },
-    /// Check for contradictions
+    /// Check for contradictions using frontmatter and ## Assertions sections only
     Check {
         slug: Option<String>,
         #[arg(long)]

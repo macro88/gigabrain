@@ -165,7 +165,7 @@ gbrain graph people/pedro-franceschi --depth 2
 # List unresolved knowledge gaps
 gbrain gaps
 
-# Run contradiction checks
+# Run contradiction checks (structured assertions only)
 gbrain check --all
 
 # Brain stats

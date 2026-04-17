@@ -175,7 +175,7 @@ fn conflicting_ingest_contradiction_is_detected() {
         "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
          VALUES ('people/alice', 'person', 'Alice', '', \
-                 'Alice works at Acme Corp.', \
+                 '## Assertions\nAlice works at Acme Corp.', \
                  '', '{}', 'people', '', 1)",
         [],
     )
@@ -185,7 +185,7 @@ fn conflicting_ingest_contradiction_is_detected() {
         "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
          VALUES ('sources/update', 'concept', 'Update', '', \
-                 'Alice works at Beta Corp.', \
+                 '## Assertions\nAlice works at Beta Corp.', \
                  '', '{}', 'sources', '', 1)",
         [],
     )

@@ -2128,7 +2128,7 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
 
         let result = server
@@ -2149,12 +2149,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         server
@@ -2184,12 +2184,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         let result = server.brain_check(BrainCheckInput { slug: None }).unwrap();
