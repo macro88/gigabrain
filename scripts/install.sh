@@ -114,29 +114,54 @@ detect_profile() {
       ;;
   esac
 
+  profile_dir="$(dirname "$PROFILE_FILE")"
+
   # Create the profile file if it does not exist
   if [ ! -f "$PROFILE_FILE" ]; then
-    touch "$PROFILE_FILE" 2>/dev/null || true
+    if [ ! -d "$profile_dir" ] || [ ! -w "$profile_dir" ]; then
+      printf '%s\n' "Warning: Cannot create shell profile ${PROFILE_FILE}; ${profile_dir} is not writable." >&2
+      return 1
+    fi
+
+    if ! touch "$PROFILE_FILE" 2>/dev/null; then
+      printf '%s\n' "Warning: Failed to create shell profile ${PROFILE_FILE}." >&2
+      return 1
+    fi
   fi
+
+  if [ ! -w "$PROFILE_FILE" ]; then
+    printf '%s\n' "Warning: Shell profile ${PROFILE_FILE} is not writable." >&2
+    return 1
+  fi
+
+  return 0
 }
 
 write_profile_line() {
   profile="$1"
   line_to_append="$2"
 
-  [ -f "$profile" ] || return 1
+  if [ ! -f "$profile" ]; then
+    return 2
+  fi
 
   if grep -Fq "$line_to_append" "$profile" 2>/dev/null; then
     return 1
   fi
 
-  printf '\n%s\n' "$line_to_append" >> "$profile"
+  if ! printf '\n%s\n' "$line_to_append" >> "$profile" 2>/dev/null; then
+    printf '%s\n' "Warning: Failed to append to shell profile ${profile}." >&2
+    return 2
+  fi
+
   printf '  Added to %s: %s\n' "$profile" "$line_to_append"
   return 0
 }
 
 write_profile() {
-  detect_profile
+  if ! detect_profile; then
+    return 1
+  fi
 
   path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
   db_line="export GBRAIN_DB=\"\$HOME/brain.db\""
@@ -145,16 +170,30 @@ write_profile() {
 
   if write_profile_line "$PROFILE_FILE" "$path_line"; then
     wrote_something=1
+  else
+    status=$?
+    if [ "$status" -gt 1 ]; then
+      return 1
+    fi
   fi
 
   if write_profile_line "$PROFILE_FILE" "$db_line"; then
     wrote_something=1
+  else
+    status=$?
+    if [ "$status" -gt 1 ]; then
+      return 1
+    fi
   fi
 
   if [ "$wrote_something" = "1" ]; then
     printf '\n  Profile updated: %s\n' "$PROFILE_FILE"
     printf '  Run: source %s\n' "$PROFILE_FILE"
+  else
+    printf '\n  Profile already configured: %s\n' "$PROFILE_FILE"
   fi
+
+  return 0
 }
 
 print_manual_hints() {
@@ -238,7 +277,13 @@ main() {
   if [ "$NO_PROFILE" = "1" ]; then
     print_manual_hints
   else
-    write_profile
+    if ! write_profile; then
+      printf '%s\n' "" >&2
+      printf '%s\n' "Warning: gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically." >&2
+      print_manual_hints >&2
+      print_sandboxed_hint >&2
+      return 1
+    fi
   fi
 
   print_sandboxed_hint

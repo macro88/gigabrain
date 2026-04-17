@@ -249,8 +249,26 @@ else
   not_ok "T13: detect_profile — unknown shell → ~/.profile (got: $PROFILE_FILE)"
 fi
 
+# T14: detect_profile fails with a warning when the profile cannot be created
+UNWRITABLE_HOME="$TEST_HOME/unwritable_home"
+mkdir -p "$UNWRITABLE_HOME"
+chmod 500 "$UNWRITABLE_HOME"
+OLD_HOME_T14="$HOME"
+HOME="$UNWRITABLE_HOME"
+if SHELL=/usr/bin/zsh detect_profile >"$TEST_HOME/t14_detect.out" 2>"$TEST_HOME/t14_detect.err"; then
+  not_ok "T14: detect_profile should fail when profile directory is not writable"
+else
+  if grep -Fq "Cannot create shell profile" "$TEST_HOME/t14_detect.err"; then
+    ok "T14: detect_profile warns when profile creation fails"
+  else
+    not_ok "T14: detect_profile did not explain profile creation failure"
+  fi
+fi
+HOME="$OLD_HOME_T14"
+chmod 700 "$UNWRITABLE_HOME"
+
 # ---------------------------------------------------------------
-# main() integration tests — T14–T16
+# main() integration tests — T15–T18
 # Exercises the real entry path with stubbed network/system functions.
 # ---------------------------------------------------------------
 
@@ -271,56 +289,56 @@ need_cmd()         { return 0; }
 SAVED_PATH_STUBS="$PATH"
 PATH="$TEST_STUBS:$PATH"
 
-# T14: main() --no-profile parses the flag and skips profile write
-T14_PROFILE="$TEST_HOME/.t14_profile"
-printf '' > "$T14_PROFILE"
-detect_profile() { PROFILE_FILE="$T14_PROFILE"; }
-NO_PROFILE=0
-if main --no-profile >/dev/null 2>&1; then
-  if [ ! -s "$T14_PROFILE" ]; then
-    ok "T14: main() --no-profile parses flag and leaves profile untouched"
-  else
-    not_ok "T14: main() --no-profile wrote to profile (file non-empty)"
-  fi
-else
-  not_ok "T14: main() --no-profile exited non-zero"
-fi
-tmp_dir=""
-
-# T15: main() default path writes both exports through the real write_profile call
+# T15: main() --no-profile parses the flag and skips profile write
 T15_PROFILE="$TEST_HOME/.t15_profile"
 printf '' > "$T15_PROFILE"
 detect_profile() { PROFILE_FILE="$T15_PROFILE"; }
 NO_PROFILE=0
-GBRAIN_NO_PROFILE=0
-if main >/dev/null 2>&1; then
-  if grep -Fq "export PATH=" "$T15_PROFILE" && grep -Fq "export GBRAIN_DB=" "$T15_PROFILE"; then
-    ok "T15: main() default path writes PATH and GBRAIN_DB to profile"
+if main --no-profile >/dev/null 2>&1; then
+  if [ ! -s "$T15_PROFILE" ]; then
+    ok "T15: main() --no-profile parses flag and leaves profile untouched"
   else
-    not_ok "T15: main() default path did not write expected exports"
+    not_ok "T15: main() --no-profile wrote to profile (file non-empty)"
   fi
 else
-  not_ok "T15: main() default path exited non-zero"
+  not_ok "T15: main() --no-profile exited non-zero"
+fi
+tmp_dir=""
+
+# T16: main() default path writes both exports through the real write_profile call
+T16_PROFILE="$TEST_HOME/.t16_profile"
+printf '' > "$T16_PROFILE"
+detect_profile() { PROFILE_FILE="$T16_PROFILE"; }
+NO_PROFILE=0
+GBRAIN_NO_PROFILE=0
+if main >/dev/null 2>&1; then
+  if grep -Fq "export PATH=" "$T16_PROFILE" && grep -Fq "export GBRAIN_DB=" "$T16_PROFILE"; then
+    ok "T16: main() default path writes PATH and GBRAIN_DB to profile"
+  else
+    not_ok "T16: main() default path did not write expected exports"
+  fi
+else
+  not_ok "T16: main() default path exited non-zero"
 fi
 tmp_dir=""
 
 PATH="$SAVED_PATH_STUBS"
 
-# T16: GBRAIN_NO_PROFILE=1 env var is captured at script source time → NO_PROFILE=1
+# T17: GBRAIN_NO_PROFILE=1 env var is captured at script source time → NO_PROFILE=1
 # Run the installer in a fresh subprocess (GBRAIN_TEST_MODE=1 prevents main() from firing
 # but the top-level assignment  NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"  still executes).
-t16_result=$(GBRAIN_TEST_MODE=1 \
+t17_result=$(GBRAIN_TEST_MODE=1 \
   GBRAIN_NO_PROFILE=1 \
   GBRAIN_INSTALL_DIR="$TEST_HOME/bin" \
   HOME="$TEST_HOME" \
   sh -c ". \"$INSTALL_SH\" && printf '%s' \"\$NO_PROFILE\"" 2>/dev/null)
-if [ "$t16_result" = "1" ]; then
-  ok "T16: GBRAIN_NO_PROFILE=1 env var sets NO_PROFILE=1 at script startup"
+if [ "$t17_result" = "1" ]; then
+  ok "T17: GBRAIN_NO_PROFILE=1 env var sets NO_PROFILE=1 at script startup"
 else
-  not_ok "T16: GBRAIN_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t16_result')"
+  not_ok "T17: GBRAIN_NO_PROFILE=1 did not set NO_PROFILE=1 (got: '$t17_result')"
 fi
 
-# T17: main() with GBRAIN_NO_PROFILE=1 env var — full end-to-end opt-out
+# T18: main() with GBRAIN_NO_PROFILE=1 env var — full end-to-end opt-out
 # Exercises the real pipe-flow semantics: env var → top-level NO_PROFILE init → main() skip.
 # Re-source install.sh so the top-level NO_PROFILE="${GBRAIN_NO_PROFILE:-0}" re-executes
 # with GBRAIN_NO_PROFILE=1, then call main() and verify no profile write occurred.
@@ -333,19 +351,56 @@ resolve_channel()  { CHANNEL="airgapped"; }
 verify_checksum()  { return 0; }
 need_cmd()         { return 0; }
 PATH="$TEST_STUBS:$PATH"
-T17_PROFILE="$TEST_HOME/.t17_profile"
-printf '' > "$T17_PROFILE"
-detect_profile() { PROFILE_FILE="$T17_PROFILE"; }
+T18_PROFILE="$TEST_HOME/.t18_profile"
+printf '' > "$T18_PROFILE"
+detect_profile() { PROFILE_FILE="$T18_PROFILE"; }
 if main >/dev/null 2>&1; then
-  if [ ! -s "$T17_PROFILE" ]; then
-    ok "T17: main() with GBRAIN_NO_PROFILE=1 skips profile write end-to-end"
+  if [ ! -s "$T18_PROFILE" ]; then
+    ok "T18: main() with GBRAIN_NO_PROFILE=1 skips profile write end-to-end"
   else
-    not_ok "T17: main() with GBRAIN_NO_PROFILE=1 wrote to profile (file non-empty)"
+    not_ok "T18: main() with GBRAIN_NO_PROFILE=1 wrote to profile (file non-empty)"
   fi
 else
-  not_ok "T17: main() with GBRAIN_NO_PROFILE=1 exited non-zero"
+  not_ok "T18: main() with GBRAIN_NO_PROFILE=1 exited non-zero"
 fi
 GBRAIN_NO_PROFILE=0
+tmp_dir=""
+PATH="$SAVED_PATH_STUBS"
+
+# T19: main() fails loudly and prints manual recovery when profile persistence fails
+. "$INSTALL_SH"
+resolve_version()  { VERSION="v0.0.0-test"; }
+resolve_platform() { PLATFORM="linux-x86_64"; }
+resolve_channel()  { CHANNEL="airgapped"; }
+verify_checksum()  { return 0; }
+need_cmd()         { return 0; }
+PATH="$TEST_STUBS:$PATH"
+T19_PROFILE="$TEST_HOME/.t19_profile"
+rm -f "$T19_PROFILE"
+NO_PROFILE=0
+GBRAIN_NO_PROFILE=0
+detect_profile() {
+  PROFILE_FILE="$T19_PROFILE"
+  printf '%s\n' "Warning: Shell profile $PROFILE_FILE is not writable." >&2
+  return 1
+}
+if main >"$TEST_HOME/t19_main.out" 2>"$TEST_HOME/t19_main.err"; then
+  not_ok "T19: main() should exit non-zero when profile persistence fails"
+else
+  if grep -Fq 'gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically.' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'Complete setup by adding these to your shell profile:' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'export PATH="' "$TEST_HOME/t19_main.err" &&
+     grep -Fq 'export GBRAIN_DB="$HOME/brain.db"' "$TEST_HOME/t19_main.err"; then
+    ok "T19: main() prints manual recovery steps when profile persistence fails"
+  else
+    not_ok "T19: main() did not print the expected recovery guidance on profile failure"
+  fi
+fi
+if grep -Fq "Installed gbrain to" "$TEST_HOME/t19_main.out"; then
+  ok "T19b: main() still reports where the binary was installed before failing"
+else
+  not_ok "T19b: main() should report the installed binary path on profile failure"
+fi
 tmp_dir=""
 PATH="$SAVED_PATH_STUBS"
 
