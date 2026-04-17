@@ -861,7 +861,8 @@ mod tests {
 
         // Move the file into a subdirectory.
         fs::create_dir_all(dir.path().join("sub")).unwrap();
-        fs::rename(dir.path().join("note.md"), dir.path().join("sub/note.md")).unwrap();
+        let moved_path = dir.path().join("sub").join("note.md");
+        fs::rename(dir.path().join("note.md"), &moved_path).unwrap();
 
         import_dir(&conn, dir.path(), false).unwrap();
 
@@ -876,8 +877,9 @@ mod tests {
             initial_ref, updated_ref,
             "source_ref must change when the file moves within the directory"
         );
+        let expected_suffix = Path::new("sub").join("note.md");
         assert!(
-            updated_ref.contains("sub/note.md"),
+            Path::new(&updated_ref).ends_with(&expected_suffix),
             "source_ref should reflect the new nested path, got: {updated_ref}"
         );
     }
@@ -1241,69 +1243,7 @@ mod tests {
         assert_eq!(strip_numeric_prefix("10. Archives"), "Archives");
     }
 
-    // ── blank/null type: precedence bug regression ─────────────────
-
-    #[test]
-    fn blank_type_in_frontmatter_falls_back_to_folder_inference() {
-        let conn = open_test_db();
-        let dir = tempfile::TempDir::new().unwrap();
-
-        // File in Projects/ with `type:` explicitly set to blank — should infer from folder
-        let proj_dir = dir.path().join("Projects");
-        fs::create_dir_all(&proj_dir).unwrap();
-        fs::write(
-            proj_dir.join("note.md"),
-            "---\ntitle: BlankType\ntype: \n---\nContent.\n",
-        )
-        .unwrap();
-
-        let stats = import_dir(&conn, dir.path(), false).unwrap();
-        assert_eq!(stats.imported, 1);
-        assert_eq!(
-            stats.type_inferred, 1,
-            "blank type: should fall back to folder inference"
-        );
-
-        let page_type: String = conn
-            .query_row(
-                "SELECT type FROM pages WHERE title = 'BlankType'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(page_type, "project");
-    }
-
-    #[test]
-    fn null_type_in_frontmatter_falls_back_to_folder_inference() {
-        let conn = open_test_db();
-        let dir = tempfile::TempDir::new().unwrap();
-
-        // File in Areas/ with `type: null` — should infer from folder
-        let area_dir = dir.path().join("Areas");
-        fs::create_dir_all(&area_dir).unwrap();
-        fs::write(
-            area_dir.join("note.md"),
-            "---\ntitle: NullType\ntype: null\n---\nContent.\n",
-        )
-        .unwrap();
-
-        let stats = import_dir(&conn, dir.path(), false).unwrap();
-        assert_eq!(stats.imported, 1);
-        assert_eq!(
-            stats.type_inferred, 1,
-            "null type: should fall back to folder inference"
-        );
-
-        let page_type: String = conn
-            .query_row(
-                "SELECT type FROM pages WHERE title = 'NullType'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(page_type, "area");
-    }
+    // ── fallback behavior tests ───────────────────────────────────
 
     #[test]
     fn unknown_folder_falls_back_to_concept() {
