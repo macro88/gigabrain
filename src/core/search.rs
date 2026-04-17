@@ -364,4 +364,24 @@ mod tests {
 
         assert_eq!(strategy, SearchMergeStrategy::SetUnion);
     }
+
+    /// Regression: issue #37 — question marks in natural-language queries must
+    /// not trigger FTS5 syntax errors in the hybrid search path.
+    #[test]
+    fn hybrid_search_accepts_question_mark_in_query() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust",
+            "Systems language",
+            "Rust is a systems programming language focused on safety.",
+            "concepts",
+        );
+        embed::run(&conn, None, true, false).expect("embed pages");
+
+        let results =
+            hybrid_search("what is rust?", None, &conn, 1000).expect("hybrid search with ?");
+        assert!(!results.is_empty());
+    }
 }

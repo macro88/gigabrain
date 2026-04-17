@@ -2,6 +2,28 @@ use rusqlite::Connection;
 
 use super::types::{SearchError, SearchResult};
 
+/// Strip characters that FTS5 interprets as query-syntax operators so that
+/// natural-language input (e.g. "what do I know about X?") never triggers a
+/// syntax error.  The result is a plain list of words safe for FTS5 MATCH.
+///
+/// Removed characters: `" * ? + - ^ ~ : ( ) { } [ ]`
+/// FTS5 boolean keywords (`AND`, `OR`, `NOT`, `NEAR`) are left alone — they
+/// are only special when capitalised **and** surrounded by whitespace, and
+/// removing them would silently drop legitimate search terms.
+pub fn sanitize_fts_query(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| match c {
+            '"' | '*' | '?' | '!' | '+' | '-' | '^' | '~' | ':' | '(' | ')' | '{' | '}' | '['
+            | ']' => ' ',
+            _ => c,
+        })
+        .collect();
+
+    // Collapse runs of whitespace and trim.
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// FTS5 full-text search over the `page_fts` virtual table.
 ///
 /// Returns at most `limit` results ranked by BM25 score (most relevant first).
@@ -13,8 +35,8 @@ pub fn search_fts(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
+    let sanitized = sanitize_fts_query(query);
+    if sanitized.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -26,7 +48,7 @@ pub fn search_fts(
     );
 
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    params.push(Box::new(trimmed.to_owned()));
+    params.push(Box::new(sanitized.clone()));
 
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?2");
@@ -273,5 +295,82 @@ mod tests {
         assert_eq!(r.summary, "Bob is a researcher");
         assert_eq!(r.wing, "people");
         assert!(r.score > 0.0);
+    }
+
+    // ── sanitize_fts_query ──────────────────────────────────────
+
+    #[test]
+    fn sanitize_strips_question_mark() {
+        assert_eq!(sanitize_fts_query("what is rust?"), "what is rust");
+    }
+
+    #[test]
+    fn sanitize_strips_multiple_special_chars() {
+        assert_eq!(
+            sanitize_fts_query("(hello) + world: \"test\" * foo?"),
+            "hello world test foo"
+        );
+    }
+
+    #[test]
+    fn sanitize_collapses_whitespace() {
+        assert_eq!(sanitize_fts_query("  hello   world  "), "hello world");
+    }
+
+    #[test]
+    fn sanitize_returns_empty_for_only_special_chars() {
+        assert_eq!(sanitize_fts_query("???***"), "");
+    }
+
+    #[test]
+    fn sanitize_preserves_plain_words() {
+        assert_eq!(sanitize_fts_query("machine learning"), "machine learning");
+    }
+
+    // ── regression: punctuation in search_fts (issue #37) ───────
+
+    #[test]
+    fn search_with_question_mark_does_not_crash() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/rust",
+            "Rust Language",
+            "concepts",
+            "Systems programming",
+            "Rust is a systems programming language.",
+        );
+
+        // "rust programming?" → sanitised to "rust programming" — both terms in content.
+        let results = search_fts("rust programming?", None, &conn, 1000).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].slug, "concepts/rust");
+    }
+
+    #[test]
+    fn search_with_complex_punctuation_does_not_crash() {
+        let conn = open_test_db();
+        insert_page(
+            &conn,
+            "concepts/ai",
+            "Artificial Intelligence",
+            "concepts",
+            "AI overview",
+            "Artificial intelligence and machine learning research.",
+        );
+
+        // Mix of FTS5 syntax characters that would previously crash
+        let results =
+            search_fts("(artificial) + intelligence: \"research\"?", None, &conn, 1000).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn search_with_only_punctuation_returns_empty() {
+        let conn = open_test_db();
+        insert_page(&conn, "test/a", "Test", "test", "summary", "content");
+
+        let results = search_fts("???!!!", None, &conn, 1000).unwrap();
+        assert!(results.is_empty());
     }
 }
