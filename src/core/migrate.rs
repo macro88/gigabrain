@@ -74,6 +74,8 @@ pub fn import_dir(db: &Connection, dir: &Path, validate_only: bool) -> Result<Im
 
     for (file_path, hash, entry) in &parsed {
         if is_already_ingested(&tx, hash)? {
+            // Content unchanged — refresh the source path in case the file moved.
+            refresh_ingest_source(&tx, hash, &file_path.to_string_lossy())?;
             skipped_already_ingested += 1;
             continue;
         }
@@ -273,6 +275,19 @@ fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<
         "INSERT OR IGNORE INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
          VALUES (?1, 'file', ?2, json_array(?3))",
         rusqlite::params![hash, path, slug],
+    )?;
+    Ok(())
+}
+
+/// Update the source path for an existing ingest_log row. Called when a
+/// directory re-import encounters a file whose SHA-256 already exists but
+/// whose path may have changed (e.g. the user moved or renamed the file).
+fn refresh_ingest_source(db: &Connection, hash: &str, path: &str) -> Result<()> {
+    db.execute(
+        "UPDATE ingest_log SET source_ref = ?2, \
+             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+         WHERE ingest_key = ?1",
+        rusqlite::params![hash, path],
     )?;
     Ok(())
 }
@@ -602,6 +617,108 @@ mod tests {
         assert!(
             !pages_updated.contains("2024-01-meeting"),
             "pages_updated should not contain the filename stem, got: {pages_updated}"
+        );
+    }
+
+    /// Re-importing the same content from a new directory must refresh the
+    /// source_ref in ingest_log so that `lookup_source_path` returns the
+    /// new path, not the stale original.
+    #[test]
+    fn reimport_same_content_from_new_directory_refreshes_source_ref() {
+        let conn = open_test_db();
+
+        // First import from directory A.
+        let dir_a = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir_a.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nSome real content here.\n",
+        )
+        .unwrap();
+        let first = import_dir(&conn, dir_a.path(), false).unwrap();
+        assert_eq!(first.imported, 1);
+
+        let initial_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("initial ingest_log row");
+        assert!(
+            initial_ref.contains("note.md"),
+            "initial source_ref should reference note.md"
+        );
+
+        // Copy exact same content into directory B and re-import.
+        let dir_b = tempfile::TempDir::new().unwrap();
+        fs::write(
+            dir_b.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nSome real content here.\n",
+        )
+        .unwrap();
+        let second = import_dir(&conn, dir_b.path(), false).unwrap();
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped_already_ingested, 1);
+
+        // source_ref must now point to directory B's path.
+        let updated_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("updated ingest_log row");
+        let dir_b_str = dir_b.path().to_string_lossy().to_string();
+        assert!(
+            updated_ref.starts_with(&dir_b_str),
+            "source_ref should now point to dir_b ({}), got: {updated_ref}",
+            dir_b_str
+        );
+    }
+
+    /// Re-importing a directory where a file was moved to a subdirectory
+    /// must refresh the source_ref to the new nested path.
+    #[test]
+    fn reimport_detects_path_change_within_same_directory() {
+        let conn = open_test_db();
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // First: file at top level.
+        fs::write(
+            dir.path().join("note.md"),
+            "---\ntitle: Note\ntype: concept\n---\nContent that stays the same.\n",
+        )
+        .unwrap();
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        let initial_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // Move the file into a subdirectory.
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        fs::rename(dir.path().join("note.md"), dir.path().join("sub/note.md")).unwrap();
+
+        import_dir(&conn, dir.path(), false).unwrap();
+
+        let updated_ref: String = conn
+            .query_row(
+                "SELECT source_ref FROM ingest_log WHERE source_type = 'file'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(
+            initial_ref, updated_ref,
+            "source_ref must change when the file moves within the directory"
+        );
+        assert!(
+            updated_ref.contains("sub/note.md"),
+            "source_ref should reflect the new nested path, got: {updated_ref}"
         );
     }
 }
