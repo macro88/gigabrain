@@ -91,12 +91,12 @@ impl EmbeddingModel {
     fn try_load_candle() -> Result<EmbeddingBackend, String> {
         #[cfg(feature = "embedded-model")]
         {
-            return load_embedded_backend();
+            load_embedded_backend()
         }
 
         #[cfg(feature = "online-model")]
         {
-            return load_online_backend();
+            load_online_backend()
         }
 
         #[cfg(not(any(feature = "embedded-model", feature = "online-model")))]
