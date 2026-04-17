@@ -416,9 +416,16 @@ fn normalize_evidence(value: &str) -> String {
 }
 
 fn has_minimum_object_length(object: &str) -> bool {
-    // Minimum of 3 characters blocks regex noise ("it", "a") while allowing
-    // legitimate short names in explicit ## Assertions sections (CEO, CTO, Acme, Meta).
-    object.trim().chars().count() >= 3
+    // Single-character or empty objects are always noise.
+    // Two-character objects are accepted only when all-uppercase (abbreviations like AI, UK,
+    // JS, PM). Lowercase two-char words ("it", "on", "in") are still rejected as noise.
+    // Three or more characters are accepted unconditionally (CEO, CTO, Acme, …).
+    let trimmed = object.trim();
+    match trimmed.chars().count() {
+        0 | 1 => false,
+        2 => trimmed.chars().all(|c| c.is_ascii_uppercase()),
+        _ => true,
+    }
 }
 
 fn validity_windows_overlap(left: &AssertionRow, right: &AssertionRow) -> bool {
@@ -745,13 +752,70 @@ mod tests {
         #[test]
         fn very_short_regex_object_is_discarded() {
             let conn = open_test_db();
-            // "it" (2 chars) should still be filtered as noise
+            // "it" (2 chars, lowercase) is noise and must still be rejected.
             insert_page(&conn, "people/alice", "## Assertions\nAlice is a it.");
             let page = get_page(&conn, "people/alice").unwrap();
 
             let inserted = extract_assertions(&page, &conn).unwrap();
 
-            assert_eq!(inserted, 0, "objects shorter than 3 chars should be discarded");
+            assert_eq!(inserted, 0, "lowercase two-char noise 'it' must be discarded");
+        }
+
+        #[test]
+        fn two_char_lowercase_object_is_discarded() {
+            // Regression: two-char lowercase words ("on", "it") that match the is_a regex
+            // must still be rejected by the length gate (not all-uppercase → noise).
+            let conn = open_test_db();
+            insert_page(&conn, "people/alice", "## Assertions\nAlice is a on.");
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+
+            assert_eq!(inserted, 0, "lowercase two-char object 'on' must be discarded");
+        }
+
+        #[test]
+        fn two_char_uppercase_abbreviation_is_accepted() {
+            // Regression: legitimate two-char uppercase abbreviations (AI, UK, JS, PM)
+            // in an explicit ## Assertions section must NOT be dropped by the length gate.
+            let conn = open_test_db();
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice is a AI. Alice works at UK. Alice founded JS.",
+            );
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT predicate, object FROM assertions ORDER BY predicate, object")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 3, "two-char uppercase abbreviations must be accepted");
+            assert_eq!(
+                rows,
+                vec![
+                    ("founded".to_string(), "JS".to_string()),
+                    ("is_a".to_string(), "AI".to_string()),
+                    ("works_at".to_string(), "UK".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn two_char_mixed_case_object_is_discarded() {
+            // Two-char objects with mixed case (not a clean abbreviation) are noise.
+            let conn = open_test_db();
+            insert_page(&conn, "people/alice", "## Assertions\nAlice is a Id.");
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+
+            assert_eq!(inserted, 0, "mixed-case two-char object 'Id' must be discarded");
         }
 
         #[test]
