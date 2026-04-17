@@ -58,3 +58,16 @@ extraction will show zero agent assertions after this change. Users re-import or
 **Rationale:** A migration would require scanning all pages, re-extracting, and re-running
 check — risky for large vaults. The change moves the system from "too noisy" to "too quiet"
 which is a safer default. Users can restore precision by adding structured sections.
+
+### 6. Semantic similarity gate for cross-page comparison (#55) — deferred pending rerun
+
+**Decision:** Out of scope for this lane. Do not implement a cosine-similarity pre-filter
+in the contradiction-detection path as part of this change.
+
+**Rationale:** Kif's v0.9.4 triage directs the team to land extraction tightening first,
+rerun Doug's benchmark corpus, and only open a new lane for the semantic gate if false
+positives materially survive after tightening. Implementing a similarity gate before that
+rerun risks solving a problem that no longer exists, adds complexity to the critical path,
+and requires embedding infrastructure that may not be necessary. If the rerun shows the
+gate is still needed, it will be proposed as a standalone lane (`assertion-similarity-gate`)
+with its own spec and acceptance criteria.

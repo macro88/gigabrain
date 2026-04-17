@@ -1,8 +1,9 @@
 # Assertion Extraction Tightening — Implementation Checklist
 
 **Scope:** Scope `extract_from_content` to `## Assertions` sections and frontmatter fields
-only; add minimum object-length guard; document the structured assertion format.
-Closes: #38
+only; add minimum object-length guard; add semantic similarity pre-filter for cross-page
+comparison; document the structured assertion format.
+Closes: #38, #55
 
 ---
 
@@ -51,11 +52,34 @@ Closes: #38
   via frontmatter path, not regex.
 - [ ] C.4 Add unit test: object shorter than 6 chars (e.g., `is_a: it`) — verify discarded.
 
+## Phase E — semantic similarity gate for cross-page comparison (absorbs #55)
+
+- [ ] E.1 In `check_assertions` (or the function that iterates page pairs to compare
+  their assertion triples), add a pre-filter: before comparing `is_a` assertions between
+  page A and page B, compute cosine similarity between A's and B's stored embeddings.
+  Retrieve the most recent embedding vector for each page's `compiled_truth` chunk from
+  `page_embeddings_vec_384`. If cosine similarity is below 0.6, skip the pair entirely.
+  Do not compare assertions for unrelated pages.
+
+- [ ] E.2 If either page has no stored embedding (e.g. newly imported, not yet embedded),
+  fall back to the existing behavior (compare anyway) but log a debug trace noting the
+  missing vector. Do not block the check command on re-embedding.
+
+- [ ] E.3 Add a configurable threshold: read the similarity floor from the `config` table
+  key `assertion_similarity_floor` (default `0.6`). Allow the user to lower it to `0.0`
+  to restore the old all-pairs behavior or raise it for stricter filtering.
+
+- [ ] E.4 Unit test: two pages with cosine similarity < 0.6 → zero contradiction pairs
+  returned even if `is_a` text would match.
+
+- [ ] E.5 Unit test: two pages with cosine similarity ≥ 0.6 → contradiction detection
+  runs normally.
+
 ---
 
-## Phase D — verification
+## Phase F — verification (extends Phase D)
 
-- [ ] D.1 Import the 789-page PARA test vault (or a representative subset) and run
-  `gbrain check --all`. Confirm zero false-positive contradictions from prose text.
-- [ ] D.2 Add a page with a proper `## Assertions` section and run `gbrain check --all`.
-  Confirm the assertion is detected and participates in contradiction checking correctly.
+- [ ] F.1 On the 350-page PARA test vault: run `gbrain check --all` after both extraction
+  tightening (Phase A) and semantic gate (Phase E). Confirm false positive rate is near
+  zero. A genuine contradiction (same-entity, different assertions) must still surface.
+

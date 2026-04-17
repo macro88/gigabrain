@@ -8,6 +8,7 @@ reviewers: [leela, nibbler]
 created: 2026-04-19
 depends_on: p3-skills-benchmarks
 closes: ["#38"]
+related_issues: ["#55"]
 ---
 
 # check --all: tighten assertion extraction to eliminate false-positive contradictions
@@ -24,6 +25,11 @@ Beta tester doug-aillm (issue #38) reproduced this with a 789-page Obsidian vaul
 `check --all` produced 10+ false conflicts all tracing back to a single research-notes page
 whose prose happened to match the is_a pattern in many different ways. The output was
 completely unusable.
+
+Doug's later benchmark issue #55 reports the same trust failure mode on a different real vault.
+This lane is still the first response to that benchmark signal, but only as an extraction
+tightening pass: land the structured-zones fix, rerun the benchmark corpus, and only open a
+follow-on semantic-similarity lane if materially noisy contradictions remain after rerun.
 
 The fix is structural: only extract assertions from explicitly-structured content, not arbitrary
 body prose.
@@ -76,6 +82,10 @@ path; manual assertions are unaffected.
 - Changing contradiction-matching logic — only the extraction side is affected.
 - Re-extracting assertions for already-imported pages automatically — users will need to
   re-run `gbrain check` or re-import; no migration script is required.
+- Implementing a semantic-similarity gate for cross-page assertion comparison (#55) — this
+  is deferred. Land extraction tightening first, rerun Doug's corpus to confirm whether
+  false positives materially survive, and only open a new lane for #55 if the rerun shows
+  they do.
 
 ## Impact
 
