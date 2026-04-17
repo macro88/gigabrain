@@ -45,10 +45,23 @@ impl BrainConfig {
     }
 
     fn to_model_config(&self) -> ModelConfig {
-        let mut model = resolve_model(&self.model_id);
-        model.alias = self.model_alias.clone();
-        model.embedding_dim = self.embedding_dim;
-        model
+        // For standard aliases (small/base/large/m3) resolve via alias to get
+        // the correct SHA-256 pins without emitting the "unpinned custom model"
+        // warning that resolve_model() would print for an unknown model_id.
+        // For custom models, construct directly from persisted values.
+        let alias = self.model_alias.as_str();
+        if matches!(alias, "small" | "base" | "large" | "m3") {
+            let mut model = crate::core::inference::resolve_model(alias);
+            model.embedding_dim = self.embedding_dim as usize;
+            model
+        } else {
+            crate::core::inference::ModelConfig {
+                alias: self.model_alias.clone(),
+                model_id: self.model_id.clone(),
+                embedding_dim: self.embedding_dim as usize,
+                sha256_hashes: None,
+            }
+        }
     }
 }
 

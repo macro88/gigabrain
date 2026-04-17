@@ -742,15 +742,26 @@ fn model_cache_dir(model: &ModelConfig) -> Result<PathBuf, String> {
 
 #[cfg(feature = "online-model")]
 fn cache_dir_name(model: &ModelConfig) -> String {
-    if model.alias == "custom" {
-        model.model_id.replace('/', "--")
+    // Derive a safe directory name from the model ID by:
+    // 1. Replacing `/` with `--` (org/name → org--name)
+    // 2. Stripping any path-traversal sequences (`.`, `..`, OS separators)
+    // 3. Falling back to a hex digest of the model_id if the result would be
+    //    empty or consist only of dots (safety net for exotic IDs).
+    let raw = model.model_id.replace('/', "--");
+    let safe: String = raw
+        .split(std::path::MAIN_SEPARATOR)
+        .flat_map(|part| part.split('/'))
+        .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if safe.is_empty() || safe.chars().all(|c| c == '.') {
+        // Extreme case: hash the original model_id
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(model.model_id.as_bytes());
+        format!("custom-{:x}", digest)
     } else {
-        model
-            .model_id
-            .rsplit('/')
-            .next()
-            .unwrap_or(&model.model_id)
-            .to_owned()
+        safe
     }
 }
 
@@ -871,10 +882,14 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
 
     ensure_model();
     let runtime = model_runtime().lock().expect("model runtime lock poisoned");
+    // Use `ok_or` rather than `expect` so a race between configure_runtime_model
+    // (which sets loaded = None) and embed() returns an error instead of a panic.
     runtime
         .loaded
         .as_ref()
-        .expect("model should be loaded after ensure_model")
+        .ok_or_else(|| InferenceError::Internal {
+            message: "embedding model is not loaded; call configure_runtime_model first".to_owned(),
+        })?
         .embed(trimmed)
 }
 
