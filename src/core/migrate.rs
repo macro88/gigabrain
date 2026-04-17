@@ -1259,7 +1259,10 @@ mod tests {
 
         let stats = import_dir(&conn, dir.path(), false).unwrap();
         assert_eq!(stats.imported, 1);
-        assert_eq!(stats.type_inferred, 1, "blank type: should fall back to folder inference");
+        assert_eq!(
+            stats.type_inferred, 1,
+            "blank type: should fall back to folder inference"
+        );
 
         let page_type: String = conn
             .query_row(
@@ -1287,7 +1290,10 @@ mod tests {
 
         let stats = import_dir(&conn, dir.path(), false).unwrap();
         assert_eq!(stats.imported, 1);
-        assert_eq!(stats.type_inferred, 1, "null type: should fall back to folder inference");
+        assert_eq!(
+            stats.type_inferred, 1,
+            "null type: should fall back to folder inference"
+        );
 
         let page_type: String = conn
             .query_row(
