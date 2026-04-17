@@ -416,7 +416,9 @@ fn normalize_evidence(value: &str) -> String {
 }
 
 fn has_minimum_object_length(object: &str) -> bool {
-    object.trim().chars().count() >= 6
+    // Minimum of 3 characters blocks regex noise ("it", "a") while allowing
+    // legitimate short names in explicit ## Assertions sections (CEO, CTO, Acme, Meta).
+    object.trim().chars().count() >= 3
 }
 
 fn validity_windows_overlap(left: &AssertionRow, right: &AssertionRow) -> bool {
@@ -741,14 +743,59 @@ mod tests {
         }
 
         #[test]
-        fn short_regex_object_is_discarded() {
+        fn very_short_regex_object_is_discarded() {
             let conn = open_test_db();
-            insert_page(&conn, "people/alice", "## Assertions\nAlice founded Acme.");
+            // "it" (2 chars) should still be filtered as noise
+            insert_page(&conn, "people/alice", "## Assertions\nAlice is a it.");
             let page = get_page(&conn, "people/alice").unwrap();
 
             let inserted = extract_assertions(&page, &conn).unwrap();
 
-            assert_eq!(inserted, 0);
+            assert_eq!(inserted, 0, "objects shorter than 3 chars should be discarded");
+        }
+
+        #[test]
+        fn short_valid_objects_in_assertions_section_are_extracted() {
+            // Regression: explicit ## Assertions entries with short but valid objects
+            // (Acme, Meta, CEO, CTO) must not be dropped by the length filter.
+            let conn = open_test_db();
+            insert_page(
+                &conn,
+                "people/alice",
+                "## Assertions\nAlice works at Acme. Alice is a CEO. Alice founded Meta.",
+            );
+            let page = get_page(&conn, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT predicate, object FROM assertions ORDER BY predicate, object")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 3);
+            assert_eq!(
+                rows,
+                vec![
+                    ("founded".to_string(), "Meta".to_string()),
+                    ("is_a".to_string(), "CEO".to_string()),
+                    ("works_at".to_string(), "Acme".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn three_char_object_is_accepted() {
+            // Boundary: exactly 3 chars (e.g. "CTO") should pass the minimum guard.
+            let conn = open_test_db();
+            insert_page(&conn, "people/bob", "## Assertions\nBob is a CTO.");
+            let page = get_page(&conn, "people/bob").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+
+            assert_eq!(inserted, 1, "3-char object 'CTO' should be accepted");
         }
 
         #[test]
