@@ -61,8 +61,12 @@ fn import_completeness_all_fixtures_produce_pages() {
         stats.imported
     );
     assert_eq!(
-        stats.skipped, 0,
+        stats.skipped_already_ingested, 0,
         "no files should be skipped on first import"
+    );
+    assert_eq!(
+        stats.skipped_non_markdown, 0,
+        "no non-markdown files in fixture set"
     );
 
     let page_count: i64 = conn
@@ -155,7 +159,7 @@ fn duplicate_ingest_produces_no_additional_pages() {
         "second import should import 0 files (all cached)"
     );
     assert_eq!(
-        stats2.skipped, stats1.imported,
+        stats2.skipped_already_ingested, stats1.imported,
         "all files from first import should be skipped"
     );
     assert_eq!(

@@ -49,6 +49,14 @@ import GuideVisualPanel from "../../../components/docs/GuideVisualPanel.astro";
   fully offline use.
 </p>
 
+<div class="gb-guide-note">
+  <p>
+    <strong>Requirements:</strong> Rust stable is enough for the default build.
+    No extra system packages are required because SQLite and sqlite-vec are
+    bundled.
+  </p>
+</div>
+
 <CodePanel
   tone={'terminal'}
   label={'Cargo'}
@@ -62,6 +70,22 @@ cargo build --release
 # Online channel — downloads and caches BGE-small on first semantic use
 
 cargo build --release --no-default-features --features bundled,online-model`}
+/>
+
+### Cross-compile a static Linux binary
+
+<p class="gb-guide-section-intro">
+  If you need a portable Linux build, <a href="https://github.com/cross-rs/cross"><code>cross</code></a>{" "}
+  can target MUSL from the same source tree. It requires Docker or Podman to
+  run the target-specific build containers.
+</p>
+
+<CodePanel
+  tone={'terminal'}
+  label={'Cross'}
+  code={`cargo install cross
+cross build --release --target x86_64-unknown-linux-musl
+cross build --release --target aarch64-unknown-linux-musl`}
 />
 
 ## Release channels
@@ -100,6 +124,18 @@ curl -fsSL 'https://github.com/macro88/gigabrain/releases/download/\${VERSION}/\
 shasum -a 256 --check '\${ASSET}.sha256'`}
 />
 
+<CodePanel
+  tone={'terminal'}
+  label={'Install the binary'}
+  code={`# Option A: current user
+mkdir -p '\${HOME}/.local/bin'
+mv '\${ASSET}' '\${HOME}/.local/bin/gbrain'
+chmod +x '\${HOME}/.local/bin/gbrain'
+
+# Option B: system-wide
+sudo install -m 755 '\${ASSET}' /usr/local/bin/gbrain`}
+/>
+
 ## Shell installer
 
 <p class="gb-guide-section-intro">
@@ -113,15 +149,47 @@ shasum -a 256 --check '\${ASSET}.sha256'`}
   label={'Installer'}
   code={`curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
 
-GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online \
- curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh`}
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+ | GBRAIN_VERSION=v0.9.1 sh
+
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+ | GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online sh
+
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+ | GBRAIN_VERSION=v0.9.1 GBRAIN_INSTALL_DIR="$HOME/.local/bin" sh`}
 />
+
+<div class="gb-guide-note">
+  <p>
+    The default install directory is <code>~/.local/bin</code>. System paths
+    like <code>/usr/local/bin</code> still require <code>sudo</code>; the
+    installer does not escalate privileges automatically.
+  </p>
+</div>
+
+<p class="gb-guide-section-intro">
+  The installer auto-detects your platform, verifies the SHA-256 checksum, runs{" "}
+  <code>gbrain version</code>, and writes <code>PATH</code> plus{" "}
+  <code>GBRAIN_DB</code> into your shell profile.
+</p>
 
 <div class="gb-guide-grid gb-guide-grid--two">
   <GuideFeatureCard icon={"approve-check-circle"} title={"Checksums included"}>
     <p>
       Every release asset is paired with a SHA-256 checksum so you can verify
       the binary before moving it into your path.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"information"} title={"Profile writes are optional"}>
+    <p>
+      Use <code>GBRAIN_NO_PROFILE=1</code> or <code>--no-profile</code> when CI,
+      sandboxes, or managed environments already control your shell setup.
+    </p>
+  </GuideFeatureCard>
+  <GuideFeatureCard icon={"warning"} title={"Sandbox-safe flow"}>
+    <p>
+      If your environment blocks <code>curl | sh</code>, download the installer
+      first and run it locally with the same flags.
     </p>
   </GuideFeatureCard>
   <GuideFeatureCard icon={"information"} title={"Coverage is informational"}>
@@ -131,6 +199,22 @@ GBRAIN_VERSION=v0.9.1 GBRAIN_CHANNEL=online \
     </p>
   </GuideFeatureCard>
 </div>
+
+<CodePanel
+  tone={'terminal'}
+  label={'Sandboxed install'}
+  code={`curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+ -o gbrain-install.sh
+sh gbrain-install.sh --no-profile`}
+/>
+
+<p class="gb-guide-section-intro">
+  The npm package remains staged. When publication opens, it will download the{" "}
+  <code>online</code> binary during <code>postinstall</code> instead of bundling
+  a native executable in the npm tarball. If you need the offline-ready binary,
+  stick with the shell installer or the GitHub Releases <code>*-airgapped</code>{" "}
+  assets.
+</p>
 
 <GuideActionBanner
   title={"Ready to run the first commands?"}
