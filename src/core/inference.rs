@@ -270,6 +270,7 @@ enum EmbeddingBackend {
         tokenizer: Box<Tokenizer>,
         device: Device,
     },
+    #[cfg(feature = "online-model")]
     CandleXlmRoberta {
         model: Box<XLMRobertaModel>,
         tokenizer: Box<Tokenizer>,
@@ -281,7 +282,12 @@ enum EmbeddingBackend {
 impl std::fmt::Debug for EmbeddingModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.backend {
-            EmbeddingBackend::CandleBert { .. } | EmbeddingBackend::CandleXlmRoberta { .. } => f
+            EmbeddingBackend::CandleBert { .. } => f
+                .debug_struct("EmbeddingModel")
+                .field("backend", &format!("Candle({})", self.config.model_id))
+                .finish(),
+            #[cfg(feature = "online-model")]
+            EmbeddingBackend::CandleXlmRoberta { .. } => f
                 .debug_struct("EmbeddingModel")
                 .field("backend", &format!("Candle({})", self.config.model_id))
                 .finish(),
@@ -339,6 +345,7 @@ impl EmbeddingModel {
                 tokenizer,
                 device,
             } => embed_candle(text, model, tokenizer, device),
+            #[cfg(feature = "online-model")]
             EmbeddingBackend::CandleXlmRoberta {
                 model,
                 tokenizer,
@@ -478,6 +485,7 @@ fn embed_candle(
     mean_pool_and_normalize(output, attention_mask)
 }
 
+#[cfg(feature = "online-model")]
 fn embed_candle_xlm_roberta(
     text: &str,
     model: &XLMRobertaModel,
