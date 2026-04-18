@@ -90,3 +90,39 @@
 
 **Decision:** professor-phase3-core-review.md merged to decisions.md  
 **Task 8.1:** Not marked complete; revision author must address blockers and resubmit.
+
+## Review History
+
+### 2026-04-19 PR #66 — Flexible Model Resolution (Final Gate)
+
+**Verdict:** APPROVE ✅
+
+**Scope:** Final review of Fry's fixes to two GitHub automated review comments.
+
+**Fix 1 — `src/main.rs:266` (json flag OR):**
+- Before: `ModelCommands::List { json } => EarlyCommand::Model(*json),`
+- After: `ModelCommands::List { json } => EarlyCommand::Model(cli.json || *json),`
+- **Verified:** `cli.json` is a `bool` field on the borrowed `&Cli` reference. The expression `cli.json || *json` correctly OR's the global `--json` flag with the subcommand-local `--json` flag. Borrow rules satisfied; clippy passes.
+
+**Fix 2 — `src/core/db.rs:52` (alias matches):**
+- Before: `if matches!(alias, "small" | "base" | "large" | "m3") {`
+- After: `if matches!(alias, "small" | "base" | "medium" | "large" | "max" | "m3") {`
+- **Verified:** `resolve_model("medium")` returns `{ alias: "base", model_id: "BAAI/bge-base-en-v1.5", embedding_dim: 768 }`. `resolve_model("max")` returns `{ alias: "m3", model_id: "BAAI/bge-m3", embedding_dim: 1024 }`. The `to_model_config()` function then overrides `model.embedding_dim = self.embedding_dim` from the stored config. This is correct: the alias resolves to the canonical model, and the stored dimension is preserved (important if persisted config differs from default).
+
+**Fix 3 — `.squad/agents/bender/history.md` cosmetic:**
+- Confirmed no duplicate "Orchestration log" at line 98 (now unique entry).
+- Confirmed no duplicate "Lesson learned" paragraph at line 144-146 (now unique entry).
+
+**Validation gates:**
+- `cargo clippy -- -D warnings` ✅ (exit 0, no warnings)
+- `cargo test medium_alias` ✅ (1 test passed)
+- `cargo test max_alias` ✅ (1 test passed)
+- No regressions in `src/core/inference.rs` unit tests.
+
+**Checklist:**
+- [x] `src/main.rs:266` — json flag OR'd with global
+- [x] `src/core/db.rs:52` — medium/max in alias matches
+- [x] `.squad/agents/bender/history.md:98` — orchestration log dedup
+- [x] `.squad/agents/bender/history.md:146` — lesson learned dedup
+
+**Decision:** APPROVE FOR MERGE.

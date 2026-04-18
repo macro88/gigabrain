@@ -95,7 +95,6 @@
   5. Task tracking — updated tasks/history with validation results
 - **Status:** ✅ COMPLETE. v0.9.0 release validated. Publish workflow confirmed working. Team decision log updated honestly.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
-- **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-bender.md`
 
 ## 2026-04-19 v0.9.1 Dual-Release D.1 Validation
 
@@ -142,7 +141,6 @@ This dual-release cycle validated the full team workflow:
 - Second validation round confirming all fixes ✓
 - PR opened ready for merge ✓
 
-**Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
 **Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
 
 ## 2026-04-19 PR #47 Blocker Review
