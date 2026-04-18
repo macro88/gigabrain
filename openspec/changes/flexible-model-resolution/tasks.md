@@ -31,3 +31,7 @@
 - [x] 5.2 Add unit test that full HF IDs normalise to alias equivalents
 - [x] 5.3 Add unit test that arbitrary `owner/repo` strings are accepted without error
 - [x] 5.4 Verify `cargo test` passes
+
+## CLOSURE
+
+**All sections 1–5 marked complete as of 2026-04-18.**
