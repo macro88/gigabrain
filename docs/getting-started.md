@@ -1,6 +1,6 @@
 # Getting Started with GigaBrain
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. One static binary, zero runtime dependencies, no internet required.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.4` adds FTS5 search hardening and assertion extraction tightening; the dual-release channels (`airgapped` embedded and `online`) shipped in `v0.9.2`.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete.** The current rollout focus is the `v0.9.0` simplified-install test release: shell installer first, with npm publication staged behind that validation cycle.
+> **Phase 3 is complete.** The current release is `v0.9.4`: FTS5 search hardening and assertion extraction tightening, with `airgapped` and `online` assets shipped from the same release line.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -25,12 +25,12 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — Phases 1–3 implementation complete |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
-| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
-| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
+| Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
+| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
+| One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
 
-> **Shell-first rollout.** Use the shell installer or GitHub Releases for `v0.9.0` testing. The npm package is implemented, but public publication remains gated until the shell installer has soaked and `NPM_TOKEN` is configured for release automation.
+> **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `GBRAIN_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 
 ---
 
@@ -40,10 +40,13 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at: target/release/gbrain (~90MB with embedded model weights)
+# Binary at: target/release/gbrain (airgapped channel — default; embeds BGE-small-en-v1.5)
+
+# Online channel (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 ```
 
-Requirements: Rust toolchain (stable). No other system dependencies — SQLite, sqlite-vec, and the embedding model are all bundled.
+Requirements: Rust toolchain (stable). SQLite and sqlite-vec are bundled. The default build is the **airgapped** channel (embeds BGE-small-en-v1.5 at compile time); the explicit `online-model` build produces the online variant that downloads/caches BGE-small on first semantic use.
 
 ### Cross-compile for static Linux binary
 
@@ -58,6 +61,13 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 ## Your first brain
 
 > **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use all features now; see [Status](#status) and [Install options](#install-options) above.
+
+> **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `GBRAIN_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
+> ```bash
+> export PATH="$HOME/.local/bin:$PATH"
+> export GBRAIN_DB="$HOME/brain.db"
+> ```
+> For CI/agent environments that manage PATH externally, skip profile writes with `GBRAIN_NO_PROFILE=1`.
 
 ### 1. Initialize
 
@@ -188,9 +198,34 @@ gbrain skills doctor   # verify skill hashes and detect shadowing
 
 ## Page types
 
-`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`
+`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`, `area`, `resource`, `archive`, `journal`
 
 The `original` type is for your own thinking — distinct from compiled external intelligence.
+
+### Page types and PARA folder structure
+
+When you run `gbrain import`, page types are resolved in three tiers:
+
+1. **Frontmatter `type:` field** — if your markdown file includes `type: project` (or any non-blank type) in the YAML frontmatter, that value is used. Frontmatter always wins. Blank (`type: `) or null (`type: null`) values are treated as absent and fall through to tier 2.
+2. **Top-level folder inference** — if no usable `type:` field is present, GigaBrain infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
+
+| Folder name | Inferred type |
+|-------------|---------------|
+| `Projects` (or `1. Projects`) | `project` |
+| `Areas` (or `2. Areas`) | `area` |
+| `Resources` (or `3. Resources`) | `resource` |
+| `Archives` (or `4. Archives`) | `archive` |
+| `Journal` / `Journals` | `journal` |
+| `People` | `person` |
+| `Companies` / `Orgs` | `company` |
+
+Folder matching is **case-insensitive** and strips leading numeric prefixes (e.g. `1. `, `02. `) that Obsidian users commonly use for sort order.
+
+If the folder doesn't match any known name, or if the file is at vault root with no sub-folder, the page defaults to `concept`.
+
+**Example:** importing `2. Areas/Health/exercise.md` (with no `type:` in frontmatter) yields a page with type `area`.
+
+To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ---
 
@@ -199,6 +234,7 @@ The `original` type is for your own thinking — distinct from compiled external
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `GBRAIN_DB` | `./brain.db` | Path to the active brain database |
+| `GBRAIN_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
 
 ---
 

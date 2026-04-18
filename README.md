@@ -1,8 +1,8 @@
 # GigaBrain
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
+> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.0` test release in progress — Phase 3 is complete, and the simplified-install rollout is landing with the shell installer first. [See the roadmap →](#roadmap)
+**Status:** `v0.9.4` — Phase 3 complete, FTS5 search hardening, and assertion extraction tightening shipped. The dual-release line ships `airgapped` + `online` install channels with configurable BGE models in the online build. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,7 +17,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.0` test release) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.4` — search hardening + assertion tightening) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -48,9 +48,10 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Features
 
-- **Single static binary** — ~90MB including embedded BGE-small-en-v1.5 model weights. Zero runtime dependencies.
+- **Configurable BGE models** — `GBRAIN_MODEL` / `--model` select `small` (default), `base`, `large`, `m3`, or a full Hugging Face model ID in the `online-model` build
+- **Dual release channels** — `airgapped` embeds BGE-small for offline use; `online` stays slimmer and downloads/caches the selected model on first semantic use
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
-- **Local embeddings** — BGE-small-en-v1.5 via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key, no internet
+- **Local embeddings** — BAAI BGE family via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key; online builds only need internet for the initial model download
 - **MCP server** — `gbrain serve` exposes all 16 tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
@@ -68,46 +69,71 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 | Database | SQLite via `rusqlite` (bundled) |
 | Full-text search | FTS5 (built into SQLite) |
 | Vector search | `sqlite-vec` (statically linked) |
-| Embeddings | `candle` + BGE-small-en-v1.5 (pure Rust, local) |
+| Embeddings | `candle` + BGE-small/base/large/m3 (pure Rust, local) |
 | CLI | `clap` |
 | MCP server | `rmcp` (stdio transport) |
 
 ## Quick start
 
-> Phase 3 is complete. Build from source today, use GitHub Release binaries for `v0.9.0`, or try the shell installer during the current test-release cycle.
+> Phase 3 is complete. `v0.9.4` ships FTS5 search hardening and assertion extraction tightening on top of the dual-release channels introduced in `v0.9.2`: `airgapped` (embedded BGE-small) and `online` (downloads/caches the selected BGE model on first use).
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.0` test release |
-| `npm install -g gbrain` | 🚧 Staged — package and workflow are ready, public publish follows shell-installer testing |
-| One-command curl installer | ✅ Available — `curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \| sh` |
+| Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
+| `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
+| One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** is available now. **GitHub Releases** and the **shell installer** are available for the `v0.9.0` test release. The npm package rollout is staged behind that shell-installer validation window.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.4`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | sh
+
+# Online channel instead of the default airgapped channel
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_CHANNEL=online sh
+```
+
+> The installer automatically writes `PATH` and `GBRAIN_DB` exports to your shell profile
+> (`~/.zshrc`, `~/.bash_profile` on macOS / `~/.bashrc` on Linux, or `~/.profile`) so gbrain
+> works immediately in new sessions.
+> To skip profile writes (e.g. in CI), pipe with `GBRAIN_NO_PROFILE=1 sh` or pass `--no-profile`
+> with the two-step method:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh | GBRAIN_NO_PROFILE=1 sh
+> # two-step (download first, then run with flag):
+> curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+>   -o gbrain-install.sh && sh gbrain-install.sh --no-profile
+> ```
+
+**Sandboxed / agent environments** — if your security sandbox blocks piping remote scripts
+directly to `sh`, download first, then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  -o gbrain-install.sh && sh gbrain-install.sh
 ```
 
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.0"
+VERSION="v0.9.4"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}" -o "gbrain-${PLATFORM}"
-curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/gbrain-${PLATFORM}.sha256" -o "gbrain-${PLATFORM}.sha256"
-shasum -a 256 --check "gbrain-${PLATFORM}.sha256"
+ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+shasum -a 256 --check "${ASSET}.sha256"
 # Option A: install for the current user
 mkdir -p "${HOME}/.local/bin"
-mv "gbrain-${PLATFORM}" "${HOME}/.local/bin/gbrain"
+mv "${ASSET}" "${HOME}/.local/bin/gbrain"
 chmod +x "${HOME}/.local/bin/gbrain"
 
 # Option B: install system-wide (requires root)
-sudo install -m 755 "gbrain-${PLATFORM}" /usr/local/bin/gbrain
+sudo install -m 755 "${ASSET}" /usr/local/bin/gbrain
 ```
 
 Or build from source:
@@ -116,10 +142,43 @@ Or build from source:
 git clone https://github.com/macro88/gigabrain
 cd gigabrain
 cargo build --release
-# Binary at target/release/gbrain
+# Airgapped channel (default) — embeds BGE-small-en-v1.5 for offline use
+
+cargo build --release --no-default-features --features bundled,online-model
+# Online channel — downloads/caches the selected model on first semantic use
 ```
 
-> **Shell-first rollout.** `v0.9.0` is the install-simplification test release: use the shell installer or GitHub Releases today. npm packaging is implemented, but public publication stays gated until the shell path is proven and `NPM_TOKEN` is configured for release automation.
+### Embedding model selection
+
+```bash
+# Default remains BGE-small-en-v1.5
+gbrain query "stablecoin regulation"
+
+# Environment variable
+GBRAIN_MODEL=large gbrain query "stablecoin regulation"
+
+# CLI flag overrides the environment variable
+GBRAIN_MODEL=base gbrain --model m3 query "stablecoin regulation"
+```
+
+`GBRAIN_MODEL` and `--model` are supported in the `online-model` build. In the default airgapped build they are a warning-only no-op and GigaBrain continues with embedded `small`.
+
+| Alias | Model ID | Dimensions | Approx size | Use case |
+| ----- | -------- | ---------- | ----------- | -------- |
+| `small` | `BAAI/bge-small-en-v1.5` | 384 | 130 MB | Default, fastest, lowest memory |
+| `base` | `BAAI/bge-base-en-v1.5` | 768 | 438 MB | Better recall on larger corpora |
+| `large` | `BAAI/bge-large-en-v1.5` | 1024 | 1.34 GB | Highest English recall, slower |
+| `m3` | `BAAI/bge-m3` | 1024 | 2.27 GB | Multilingual retrieval |
+
+If you initialize a DB with one model and later open it with another, GigaBrain errors before any command proceeds. Switching models requires a new DB initialization.
+
+### Environment variables
+
+| Variable | Purpose |
+| -------- | ------- |
+| `GBRAIN_DB` | Default database path for all commands |
+| `GBRAIN_MODEL` | Embedding model alias or full Hugging Face model ID for the online build |
+| `GBRAIN_CHANNEL` | Installer channel selection (`airgapped` or `online`) |
 
 ---
 
@@ -237,13 +296,36 @@ gbrain skills doctor
 
 ## Page types
 
-`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`
+`person`, `company`, `deal`, `project`, `concept`, `original`, `source`, `media`, `decision`, `commitment`, `action_item`, `area`, `resource`, `archive`, `journal`
 
-The `original` type is for your own thinking — distinct from world knowledge. Everything else is compiled external intelligence.
+The `original` type is for your own thinking — distinct from compiled external intelligence.
+
+### PARA folder inference
+
+When you run `gbrain import`, page types are resolved in three tiers:
+
+1. **Frontmatter `type:` field** — if your file includes `type: project` in YAML frontmatter, that wins. Blank or null values fall through to tier 2.
+2. **Top-level folder inference** — GigaBrain infers type from the first folder in the path, supporting PARA and common Obsidian vault layouts:
+
+| Folder name | Inferred type |
+|-------------|---------------|
+| `Projects` (or `1. Projects`) | `project` |
+| `Areas` (or `2. Areas`) | `area` |
+| `Resources` (or `3. Resources`) | `resource` |
+| `Archives` (or `4. Archives`) | `archive` |
+| `Journal` / `Journals` | `journal` |
+| `People` | `person` |
+| `Companies` / `Orgs` | `company` |
+
+Folder matching is case-insensitive and strips leading numeric prefixes (e.g. `1. `, `02. `).
+
+3. **Default** — falls back to `concept` if no folder match and no frontmatter type.
+
+To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-GigaBrain is open for contributions. All three phases have shipped. Phase 3 (`v1.0.0`) is complete.
+GigaBrain is open for contributions. All three phases have shipped. The current release is `v0.9.4`, which adds FTS5 search hardening and assertion extraction tightening on top of the `v0.9.2` dual-channel line.
 
 **How we work:**
 
@@ -269,8 +351,11 @@ GigaBrain is open for contributions. All three phases have shipped. Phase 3 (`v1
 # Debug
 cargo build
 
-# Release (optimised, ~90MB with embedded model weights)
+# Release (airgapped default — embeds BGE-small-en-v1.5 for offline use)
 cargo build --release
+
+# Online release (downloads/caches the selected BGE model on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Cross-compile
 cargo install cross

@@ -3,9 +3,10 @@
 set -eu
 
 REPO="macro88/gigabrain"
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-RELEASE_BASE="https://github.com/${REPO}/releases/download"
+API_URL="${GBRAIN_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}"
+RELEASE_BASE="${GBRAIN_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 INSTALL_DIR="${GBRAIN_INSTALL_DIR:-$HOME/.local/bin}"
+NO_PROFILE="${GBRAIN_NO_PROFILE:-0}"
 
 tmp_dir=""
 
@@ -61,6 +62,14 @@ resolve_version() {
   [ -n "$VERSION" ] || fail "Failed to parse tag_name from GitHub API response"
 }
 
+resolve_channel() {
+  case "${GBRAIN_CHANNEL:-airgapped}" in
+    airgapped) CHANNEL="airgapped" ;;
+    online) CHANNEL="online" ;;
+    *) fail "Unsupported GBRAIN_CHANNEL: ${GBRAIN_CHANNEL}. Use airgapped or online." ;;
+  esac
+}
+
 verify_checksum() {
   checksum_file="$1"
   asset_name="$2"
@@ -86,73 +95,200 @@ verify_checksum() {
   [ -f "$tmp_dir/$asset_name" ] || fail "Checksum verification did not preserve downloaded binary"
 }
 
-print_path_hint() {
-  case ":${PATH:-}:" in
-    *:"$INSTALL_DIR":*) ;;
+# --- Profile detection and writing (A.1–A.3) ---
+
+detect_profile() {
+  shell_name="$(basename "${SHELL:-/bin/sh}" 2>/dev/null || echo "sh")"
+  case "$shell_name" in
+    zsh)
+      PROFILE_FILE="$HOME/.zshrc"
+      ;;
+    bash)
+      case "$(uname -s 2>/dev/null || true)" in
+        Darwin) PROFILE_FILE="$HOME/.bash_profile" ;;
+        *)      PROFILE_FILE="$HOME/.bashrc" ;;
+      esac
+      ;;
     *)
-      printf '%s\n' ""
-      printf '%s\n' "Add this directory to your PATH to run gbrain from anywhere:"
-      printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+      PROFILE_FILE="$HOME/.profile"
       ;;
   esac
+
+  profile_dir="$(dirname "$PROFILE_FILE")"
+
+  # Create the profile file if it does not exist
+  if [ ! -f "$PROFILE_FILE" ]; then
+    if [ ! -d "$profile_dir" ] || [ ! -w "$profile_dir" ]; then
+      printf '%s\n' "Warning: Cannot create shell profile ${PROFILE_FILE}; ${profile_dir} is not writable." >&2
+      return 1
+    fi
+
+    if ! touch "$PROFILE_FILE" 2>/dev/null; then
+      printf '%s\n' "Warning: Failed to create shell profile ${PROFILE_FILE}." >&2
+      return 1
+    fi
+  fi
+
+  if [ ! -w "$PROFILE_FILE" ]; then
+    printf '%s\n' "Warning: Shell profile ${PROFILE_FILE} is not writable." >&2
+    return 1
+  fi
+
+  return 0
 }
 
-print_gbrain_db_tip() {
+write_profile_line() {
+  profile="$1"
+  line_to_append="$2"
+
+  if [ ! -f "$profile" ]; then
+    return 2
+  fi
+
+  if grep -Fq "$line_to_append" "$profile" 2>/dev/null; then
+    return 1
+  fi
+
+  if ! printf '\n%s\n' "$line_to_append" >> "$profile" 2>/dev/null; then
+    printf '%s\n' "Warning: Failed to append to shell profile ${profile}." >&2
+    return 2
+  fi
+
+  printf '  Added to %s: %s\n' "$profile" "$line_to_append"
+  return 0
+}
+
+write_profile() {
+  if ! detect_profile; then
+    return 1
+  fi
+
+  path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
+  db_line="export GBRAIN_DB=\"\$HOME/brain.db\""
+
+  wrote_something=0
+
+  if write_profile_line "$PROFILE_FILE" "$path_line"; then
+    wrote_something=1
+  else
+    status=$?
+    if [ "$status" -gt 1 ]; then
+      return 1
+    fi
+  fi
+
+  if write_profile_line "$PROFILE_FILE" "$db_line"; then
+    wrote_something=1
+  else
+    status=$?
+    if [ "$status" -gt 1 ]; then
+      return 1
+    fi
+  fi
+
+  if [ "$wrote_something" = "1" ]; then
+    printf '\n  Profile updated: %s\n' "$PROFILE_FILE"
+    printf '  Run: source %s\n' "$PROFILE_FILE"
+  else
+    printf '\n  Profile already configured: %s\n' "$PROFILE_FILE"
+  fi
+
+  return 0
+}
+
+print_manual_hints() {
   printf '%s\n' ""
-  printf '%s\n' "Tip: Set GBRAIN_DB in your shell profile to avoid passing --db on every command:"
-  printf '%s\n' "  echo 'export GBRAIN_DB=\"\$HOME/brain.db\"' >> ~/.zshrc"
-  printf '%s\n' "  echo 'export GBRAIN_DB=\"\$HOME/brain.db\"' >> ~/.bashrc"
+  printf '%s\n' "Complete setup by adding these to your shell profile:"
+  printf '  export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+  printf '  export GBRAIN_DB="$HOME/brain.db"\n'
 }
 
-need_cmd curl
-need_cmd mktemp
-need_cmd mkdir
-need_cmd chmod
-need_cmd mv
+print_sandboxed_hint() {
+  printf '%s\n' ""
+  printf '%s\n' "For sandboxed/agent environments: download first, then run:"
+  printf '  curl -fsSL https://raw.githubusercontent.com/%s/main/scripts/install.sh \\\n' "$REPO"
+  printf '    -o gbrain-install.sh && sh gbrain-install.sh\n'
+}
 
-trap cleanup EXIT INT HUP TERM
+# --- Main execution ---
 
-resolve_platform
-resolve_version
+main() {
+  for arg in "$@"; do
+    case "$arg" in
+      --no-profile) NO_PROFILE=1 ;;
+    esac
+  done
 
-asset_name="gbrain-${PLATFORM}"
-checksum_name="${asset_name}.sha256"
-binary_url="${RELEASE_BASE}/${VERSION}/${asset_name}"
-checksum_url="${RELEASE_BASE}/${VERSION}/${checksum_name}"
+  need_cmd curl
+  need_cmd mkdir
+  need_cmd chmod
+  need_cmd mv
+  need_cmd mktemp
+  need_cmd grep
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/gbrain-install.XXXXXX")"
+  trap cleanup EXIT INT HUP TERM
 
-printf '%s\n' "Installing gbrain ${VERSION} for ${PLATFORM}..."
-curl -fsSL "$binary_url" -o "$tmp_dir/$asset_name" || fail "Failed to download ${binary_url}"
-curl -fsSL "$checksum_url" -o "$tmp_dir/$checksum_name" || fail "Failed to download ${checksum_url}"
+  resolve_platform
+  resolve_channel
+  resolve_version
 
-if ! verify_checksum "$checksum_name" "$asset_name"; then
-  fail "SHA-256 verification failed for ${asset_name}"
-fi
+  case "$CHANNEL" in
+    airgapped|online) asset_name="gbrain-${PLATFORM}-${CHANNEL}" ;;
+  esac
+  checksum_name="${asset_name}.sha256"
+  binary_url="${RELEASE_BASE}/${VERSION}/${asset_name}"
+  checksum_url="${RELEASE_BASE}/${VERSION}/${checksum_name}"
 
-if [ -d "$INSTALL_DIR" ] && [ ! -w "$INSTALL_DIR" ]; then
-  fail "Install directory is not writable: ${INSTALL_DIR}
+  tmp_dir="$(mktemp -d 2>/dev/null || mktemp -d -t gbrain-install)" || fail "Cannot create temporary directory with mktemp"
+
+  printf '%s\n' "Installing gbrain ${VERSION} for ${PLATFORM} (${CHANNEL})..."
+  curl -fsSL "$binary_url" -o "$tmp_dir/$asset_name" || fail "Failed to download ${binary_url}"
+  curl -fsSL "$checksum_url" -o "$tmp_dir/$checksum_name" || fail "Failed to download ${checksum_url}"
+
+  if ! verify_checksum "$checksum_name" "$asset_name"; then
+    fail "SHA-256 verification failed for ${asset_name}"
+  fi
+
+  if [ -d "$INSTALL_DIR" ] && [ ! -w "$INSTALL_DIR" ]; then
+    fail "Install directory is not writable: ${INSTALL_DIR}
   Either use the default (~/.local/bin) or re-run with appropriate privileges:
-    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh
+    curl -fsSL ... | GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" sh
     sudo sh -c 'GBRAIN_INSTALL_DIR=/usr/local/bin sh' < install.sh"
-fi
+  fi
 
-if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
-  fail "Cannot create install directory: ${INSTALL_DIR}
+  if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+    fail "Cannot create install directory: ${INSTALL_DIR}
   Try a user-writable path or run with appropriate privileges:
-    GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" curl -fsSL ... | sh"
+    curl -fsSL ... | GBRAIN_INSTALL_DIR=\"\$HOME/.local/bin\" sh"
+  fi
+
+  install_path="${INSTALL_DIR}/gbrain"
+  mv "$tmp_dir/$asset_name" "$install_path" || fail "Cannot write to ${install_path} — is the directory writable?"
+  chmod +x "$install_path"
+
+  if ! "$install_path" version; then
+    rm -f "$install_path"
+    fail "Smoke test failed: ${install_path} version"
+  fi
+
+  printf '%s\n' ""
+  printf 'Installed gbrain to %s\n' "$install_path"
+
+  if [ "$NO_PROFILE" = "1" ]; then
+    print_manual_hints
+  else
+    if ! write_profile; then
+      printf '%s\n' "" >&2
+      printf '%s\n' "Warning: gbrain was installed, but PATH/GBRAIN_DB were not persisted automatically." >&2
+      print_manual_hints >&2
+      print_sandboxed_hint >&2
+      return 1
+    fi
+  fi
+
+  print_sandboxed_hint
+}
+
+if [ "${GBRAIN_TEST_MODE:-0}" != "1" ]; then
+  main "$@"
 fi
-
-install_path="${INSTALL_DIR}/gbrain"
-mv "$tmp_dir/$asset_name" "$install_path" || fail "Cannot write to ${install_path} — is the directory writable?"
-chmod +x "$install_path"
-
-if ! "$install_path" version; then
-  rm -f "$install_path"
-  fail "Smoke test failed: ${install_path} version"
-fi
-
-printf '%s\n' ""
-printf 'Installed gbrain to %s\n' "$install_path"
-print_path_hint
-print_gbrain_db_tip

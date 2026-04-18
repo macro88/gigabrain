@@ -96,7 +96,7 @@ Additionally: every existing knowledge-base tool (Obsidian, Notion, RAG framewor
 
 ## The Solution
 
-A single Rust binary (~90MB including embedded model weights) wrapping:
+A single Rust CLI distributed in two BGE-small channels — airgapped embedded (~180MB) or online (~90MB) — wrapping:
 
 - **SQLite** with WAL mode - single logical database (`brain.db` + WAL sidecars while live; `gbrain compact` checkpoints to true single file for transport/backup)
 - **FTS5** - full-text search, built into SQLite
@@ -246,7 +246,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS pages (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     slug            TEXT    NOT NULL UNIQUE,    -- e.g. "people/pedro-franceschi"
-    type            TEXT    NOT NULL,            -- person, company, deal, yc, civic, project, concept, original, source, media, decision, commitment, action_item
+    type            TEXT    NOT NULL,            -- person, company, deal, project, concept, original, source, media, decision, commitment, action_item, area, resource, archive, journal
     title           TEXT    NOT NULL,
     summary         TEXT    NOT NULL DEFAULT '', -- executive summary (blockquote at top of compiled_truth)
     compiled_truth  TEXT    NOT NULL DEFAULT '', -- markdown, above the line
@@ -1047,6 +1047,38 @@ Response includes expansion metadata:
 
 ## Ingest Pipeline
 
+### Structured Assertions
+
+Heuristic contradiction detection now extracts agent assertions from **structured zones only**:
+
+- A dedicated `## Assertions` section inside `compiled_truth`. Regex extraction runs only on the
+  lines between that heading and the next `##` heading (or end of page).
+- Structured frontmatter fields: `is_a`, `works_at`, and `founded`.
+
+General body prose is **not** scanned for contradictions. If a page has neither one of the
+supported frontmatter fields nor a `## Assertions` section, `gbrain check` extracts zero agent
+assertions for that page.
+
+Objects shorter than 6 characters are discarded to avoid noise like `is_a: it`.
+
+Example:
+
+```md
+---
+title: Alice
+type: person
+is_a: researcher
+works_at: Acme Corp
+---
+
+# Alice
+
+Operational notes and general prose live here. They do not participate in assertion extraction.
+
+## Assertions
+Alice founded Brain Co.
+```
+
 ```
 Source document (meeting notes, article, transcript)
             │
@@ -1137,24 +1169,26 @@ Importing an existing markdown brain (7,471 files at `/data/brain/`):
 
 ### Type mapping
 
+`gbrain import` resolves page types in three tiers:
+
+1. **Frontmatter `type:` wins** when present and non-blank.
+2. **Top-level folder inference** applies when `type:` is absent, blank, or null.
+3. **Fallback to `concept`** if no folder rule matches.
+
+Supported folder inference rules:
+
 ```
-Directory prefix → page type:
-  people/      → person
-  companies/   → company
-  deals/       → deal
-  yc/          → yc
-  civic/       → civic
-  projects/    → project
-  concepts/    → concept
-  originals/   → original
-  sources/     → source
-  media/       → media
-  meetings/    → source
-  programs/    → source
-  decisions/   → decision
-  commitments/ → commitment
-  actions/     → action_item
+Top-level folder (case-insensitive; numeric prefixes like `1. ` stripped) → page type:
+  Projects / 1. Projects   → project
+  Areas / 2. Areas         → area
+  Resources / 3. Resources → resource
+  Archives / 4. Archives   → archive
+  Journal / Journals       → journal
+  People                   → person
+  Companies / Orgs         → company
 ```
+
+Any other top-level folder — or a file imported from the vault root — defaults to `concept`.
 
 ### Parse algorithm
 
@@ -2234,7 +2268,7 @@ Skills (skills/) are fat markdown files - all intelligence lives there.
 
 ```bash
 cargo build --release
-# Output: target/release/gbrain (~90MB with embedded model weights)
+# Output: target/release/gbrain (airgapped channel — default)
 
 # Cross-compile
 cargo install cross
@@ -2251,9 +2285,11 @@ cargo test
 
 ## Embedding model
 
-BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. Model weights embedded
-into binary by default via include_bytes!(). Truly zero-dependency, no network
-required. For smaller binary with on-demand download: `--features online-model`.
+BGE-small-en-v1.5 via candle (pure Rust). 384 dimensions. `v0.9.2` ships two
+compile-time channels:
+
+- `embedded-model` — airgapped channel (default): `include_bytes!()` model assets embedded at build time
+- `online-model` — online channel: downloads/caches BGE-small on first semantic use
 
 ## Skills
 
@@ -2315,10 +2351,10 @@ anyhow = "1"
 thiserror = "1"
 
 [features]
-default = ["bundled", "embed-model"]
+default = ["bundled", "embedded-model"]
 bundled = ["rusqlite/bundled"]
-embed-model = []                         # include_bytes!() model weights into binary (default)
-online-model = []                        # download weights on first run instead
+embedded-model = []                      # airgapped channel (default): include_bytes!() model weights into binary
+online-model = ["dep:reqwest"]           # online channel: download/cache BGE-small on first use
 ```
 
 ### Build commands
@@ -2330,8 +2366,11 @@ cargo build
 # Release (optimized)
 cargo build --release
 
-# Release with embedded model weights (~90MB binary, zero first-run download) — default
+# Release (airgapped channel — default; embeds BGE-small for offline use)
 cargo build --release
+
+# Release — online channel (downloads/caches BGE-small on first semantic use)
+cargo build --release --no-default-features --features bundled,online-model
 
 # Run tests
 cargo test
