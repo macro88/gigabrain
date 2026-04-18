@@ -53,13 +53,16 @@ enum Commands {
         #[arg(long, default_value = "50")]
         limit: u32,
     },
-    /// Full-text search
+    /// Full-text search (sanitizes natural-language input by default; use --raw for expert FTS5 syntax)
     Search {
         query: String,
         #[arg(long)]
         wing: Option<String>,
         #[arg(long, default_value = "10")]
         limit: u32,
+        /// Pass the query verbatim to FTS5 without sanitization (for expert FTS5 syntax: quoted phrases, boolean operators, wildcards)
+        #[arg(long, default_value_t = false)]
+        raw: bool,
     },
     /// Semantic / hybrid query
     Query {
@@ -177,7 +180,7 @@ enum Commands {
         #[arg(long, default_value = "current")]
         temporal: String,
     },
-    /// Check for contradictions
+    /// Check for contradictions using assertions from frontmatter or ## Assertions sections
     Check {
         slug: Option<String>,
         #[arg(long)]
@@ -299,9 +302,12 @@ async fn main() -> Result<()> {
             r#type,
             limit,
         } => commands::list::run(&db, wing, r#type, limit, cli.json),
-        Commands::Search { query, wing, limit } => {
-            commands::search::run(&db, &query, wing, limit, cli.json)
-        }
+        Commands::Search {
+            query,
+            wing,
+            limit,
+            raw,
+        } => commands::search::run(&db, &query, wing, limit, cli.json, raw),
         Commands::Query {
             query,
             depth,

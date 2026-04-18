@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::get::get_page;
 use crate::commands::{check, link};
 
-use crate::core::fts::search_fts;
+use crate::core::fts::{sanitize_fts_query, search_fts};
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::markdown;
@@ -595,8 +595,9 @@ impl GigaBrainServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
-        let results = search_fts(&input.query, input.wing.as_deref(), &db, limit)
-            .map_err(map_search_error)?;
+        let safe_query = sanitize_fts_query(&input.query);
+        let results =
+            search_fts(&safe_query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -1496,6 +1497,33 @@ mod tests {
         assert_eq!(rows[0]["slug"], "companies/acme");
     }
 
+    // D.6 — brain_search with natural-language '?' query returns valid JSON-RPC response
+    #[test]
+    fn brain_search_natural_language_question_mark_returns_valid_response() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        // '?' would be invalid FTS5 syntax if passed raw — brain_search must sanitize.
+        let result = server.brain_search(BrainSearchInput {
+            query: "what is CLARITY?".to_string(),
+            wing: None,
+            limit: None,
+        });
+
+        assert!(
+            result.is_ok(),
+            "brain_search with '?' must not return an MCP error: {result:?}"
+        );
+        // The response content must parse as a JSON array (empty or populated).
+        let text = extract_text(&result.unwrap());
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("brain_search response must be valid JSON");
+        assert!(
+            parsed.is_array(),
+            "brain_search response must be a JSON array"
+        );
+    }
+
     #[test]
     fn brain_list_applies_wing_and_type_filters() {
         let (_dir, conn) = open_test_db();
@@ -2128,7 +2156,7 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
 
         let result = server
@@ -2149,12 +2177,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         server
@@ -2184,12 +2212,12 @@ mod tests {
         create_page(
             &server,
             "people/alice",
-            "---\ntitle: Alice\ntype: person\n---\nAlice works at Acme. Alice works at Beta.\n",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
         );
         create_page(
             &server,
             "people/bob",
-            "---\ntitle: Bob\ntype: person\n---\nBob works at Gamma. Bob works at Delta.\n",
+            "---\ntitle: Bob\ntype: person\n---\n## Assertions\nBob works at Gamma LLC.\nBob works at Delta LLC.\n",
         );
 
         let result = server.brain_check(BrainCheckInput { slug: None }).unwrap();

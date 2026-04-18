@@ -65,7 +65,7 @@
 
 ## Phase H — PR
 
-- [ ] H.1 `cargo test` passes with no failures.
+- [x] H.1 `cargo test` passes with no failures.
 - [ ] H.2 Push `feat/44-configurable-model` and open PR against `main`. Title: `feat: configurable embedding model selection via GBRAIN_MODEL env / --model flag (#44)`. Body references this openspec change directory.
 
 ---
