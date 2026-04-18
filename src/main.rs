@@ -235,8 +235,20 @@ enum Commands {
     Pipe,
     /// Print version information
     Version,
-    /// List known embedding model aliases
-    Model,
+    /// Manage embedding models
+    Model {
+        #[command(subcommand)]
+        command: ModelCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelCommands {
+    /// List known model aliases, HF IDs, dimensions, and sizes
+    List {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -244,13 +256,15 @@ enum EarlyCommand<'a> {
     None,
     Init(&'a str),
     Version,
-    Model,
+    Model(bool),
 }
 
 fn early_command<'a>(cli: &'a Cli) -> EarlyCommand<'a> {
     match &cli.command {
         Commands::Version => EarlyCommand::Version,
-        Commands::Model => EarlyCommand::Model,
+        Commands::Model { command } => match command {
+            ModelCommands::List { json } => EarlyCommand::Model(*json),
+        },
         Commands::Init { path } => {
             let db_path = cli.db.as_deref().unwrap_or("brain.db");
             EarlyCommand::Init(path.as_deref().unwrap_or(db_path))
@@ -285,7 +299,7 @@ async fn main() -> Result<()> {
     // Commands that don't require a database connection
     match early_command(&cli) {
         EarlyCommand::Version => return commands::version::run(),
-        EarlyCommand::Model => return commands::model::run(cli.json),
+        EarlyCommand::Model(json) => return commands::model::run(json),
         EarlyCommand::Init(path) => return commands::init::run(path, &requested_model),
         EarlyCommand::None => {}
     }
@@ -296,7 +310,7 @@ async fn main() -> Result<()> {
     let db = opened.conn;
 
     match cli.command {
-        Commands::Init { .. } | Commands::Version | Commands::Model => unreachable!(),
+        Commands::Init { .. } | Commands::Version | Commands::Model { .. } => unreachable!(),
         Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
         Commands::Put {
             slug,
@@ -400,10 +414,18 @@ mod tests {
     }
 
     #[test]
-    fn early_command_returns_model_for_model_subcommand() {
-        let cli = Cli::try_parse_from(["gbrain", "model"]).expect("parse model");
+    fn early_command_returns_model_for_model_list_subcommand() {
+        let cli = Cli::try_parse_from(["gbrain", "model", "list"]).expect("parse model list");
 
-        assert_eq!(early_command(&cli), EarlyCommand::Model);
+        assert_eq!(early_command(&cli), EarlyCommand::Model(false));
+    }
+
+    #[test]
+    fn early_command_returns_model_with_json_flag() {
+        let cli =
+            Cli::try_parse_from(["gbrain", "model", "list", "--json"]).expect("parse model list --json");
+
+        assert_eq!(early_command(&cli), EarlyCommand::Model(true));
     }
 
     #[test]
