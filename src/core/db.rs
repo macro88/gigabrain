@@ -49,7 +49,7 @@ impl BrainConfig {
         // canonical model_id and embedding_dim.  For custom models, construct
         // directly from the persisted values.
         let alias = self.model_alias.as_str();
-        if matches!(alias, "small" | "base" | "large" | "m3") {
+        if matches!(alias, "small" | "base" | "medium" | "large" | "max" | "m3") {
             let mut model = crate::core::inference::resolve_model(alias);
             model.embedding_dim = self.embedding_dim;
             model

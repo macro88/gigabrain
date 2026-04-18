@@ -263,7 +263,7 @@ fn early_command<'a>(cli: &'a Cli) -> EarlyCommand<'a> {
     match &cli.command {
         Commands::Version => EarlyCommand::Version,
         Commands::Model { command } => match command {
-            ModelCommands::List { json } => EarlyCommand::Model(*json),
+            ModelCommands::List { json } => EarlyCommand::Model(cli.json || *json),
         },
         Commands::Init { path } => {
             let db_path = cli.db.as_deref().unwrap_or("brain.db");
