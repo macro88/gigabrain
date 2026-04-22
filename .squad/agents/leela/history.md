@@ -11,6 +11,36 @@
 - For a breaking schema change, the schema DDL update + test fixture update must be atomic.
 - When a spec replaces an entire ingest path (import.rs → reconciler.rs), the new path must be complete before removal.
 - IPC security surfaces need adversarial review (Nibbler) before implementation, not after.
+- When a foundation slice is rejected with 181 test failures, a focused repair pass (not a full rewrite) can fix all blockers in one coordinated cycle if: legacy defaults are prioritized, schema compatibility shims are kept, and all write paths (upsert/filter) are wired together.
+
+## 2026-04-22 Vault Sync Foundation Repair Pass
+
+**Session:** Leela integration-focused repair after Professor+Scruffy+Nibbler foundation rejections.
+
+**What happened:**
+- Vault-sync foundation slice was rejected by Professor for schema coherence (181 test failures) and incomplete task marking.
+- Root cause: `NOT NULL` constraints on `pages.collection_id` and `pages.uuid` added without updating 20+ legacy INSERT sites and all filter paths.
+- Leela took ownership of repair (Fry locked out under reviewer rejection protocol).
+
+**Five decisions made (now canonical in decisions.md):**
+1. `pages.collection_id DEFAULT 1` + auto-created default collection at `open_connection()`
+2. `pages.uuid` becomes nullable (`DEFAULT NULL`) until UUID lifecycle tasks (5a.1–5a.7) are wired
+3. `ingest_log` table retained as compatibility shim (removed only when watcher/reconciler fully replaces import)
+4. Updated all `ON CONFLICT` clauses from `(slug)` to `(collection_id, slug)` across ingest.rs and migrate.rs
+5. Added `AND p.quarantined_at IS NULL` filter to `search_vec` in inference.rs
+
+**Outcome:**
+- `cargo test`: 181 failures → **0 failures**
+- All legacy write helpers now work with v5 schema without modification
+- Default collection auto-created on every `open_connection()`
+- Quarantine filtering wired consistently across FTS5 and vector search
+
+**Learnings for future repairs:**
+- Breaking schema changes can be made compatible by adding defaults and shims rather than rewriting all callers
+- Consistency across read paths (FTS5 + vector search) must be verified in parallel, not sequentially
+- Legacy support code (ingest_log shim) should be kept until its replacement is fully wired, not removed preemptively
+
+**Status:** Foundation repair complete. 181 test failures resolved. Follow-on implementation batches now unblocked.
 
 ## Vault Sync Engine Breakdown — 2026-04-22
 
@@ -658,3 +688,28 @@
 - **Assertion false positives are a trust problem, not just a bug:** The fix scope should be narrow (scoped extraction) to avoid introducing new false negatives. The structural choice — `## Assertions` section as opt-in contract — makes the behavior teachable and predictable.
 - **PARA is the dominant Obsidian structure:** Any import tooling that ignores top-level folder names will fail this user base on first run. The folder-to-type mapping is a first-class feature, not a nice-to-have.
 - **High-risk core changes should be explicitly gated on Nibbler adversarial review in the proposal.** Putting Nibbler in `reviewers:` in the frontmatter is insufficient; the tasks.md should have an explicit Nibbler phase gate (Phase D.1 pattern from p3-skills-benchmarks).
+
+## Vault Sync Foundation Repair -- 2025-07-18
+
+What happened: Professor rejected Fry's foundation slice. 181 tests were failing. Fry locked out; Leela owned the repair pass.
+
+Root causes found:
+1. pages.collection_id NOT NULL -- v5 schema added this FK but no write helper supplied it. Every INSERT failed on NOT NULL constraint.
+2. pages.uuid NOT NULL -- UUID lifecycle (tasks 5a.*) is not yet wired; making the column non-nullable was premature.
+3. ingest_log removed from schema -- the spec removes it in the reconciler slice but ingest.rs, embed.rs, and migrate.rs still depend on it.
+4. ON CONFLICT(slug) -- the v5 unique constraint changed to UNIQUE(collection_id, slug); SQLite requires the ON CONFLICT target to match. All upsert paths broke.
+5. search_vec missing quarantine filter -- FTS was correct (triggers) but vector search joined pages without filtering quarantined rows.
+
+Fixes applied:
+- schema.sql: collection_id DEFAULT 1, uuid DEFAULT NULL with partial unique index, ingest_log re-added as compatibility shim.
+- db.rs: ensure_default_collection() -- INSERT OR IGNORE of collection id=1 name=default on every open_connection().
+- ingest.rs and migrate.rs: ON CONFLICT(collection_id, slug).
+- inference.rs: AND p.quarantined_at IS NULL added to search_vec.
+- tasks.md: checkboxes and notes corrected to match actual state.
+
+Result: cargo test -- 0 failures (was 181).
+
+Key lessons:
+- A schema change adding NOT NULL FKs is never complete until ALL write paths supply the column. Use DEFAULT or nullable when lifecycle is incomplete.
+- Removing a table that existing code depends on is two-step: (1) replace dependents, (2) drop table. Never in one step.
+- Marking tasks as done when downstream insert sites are incomplete is an integrity violation. Reviewers treat checkboxes as verified guarantees.

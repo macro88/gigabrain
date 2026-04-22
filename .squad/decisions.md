@@ -3509,3 +3509,64 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 **Why:** This slice is schema + foundation types only, kept coherent and testable independently. Later slices will wire collections into commands and implement the reconciler pipeline. Deferral avoids premature platform dependencies and keeps each slice focused.
 
 **Next Steps:** Slice B will wire collections into commands (init creates default collection, get/put/search become collection-aware) and update MCP tool signatures for collection context.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Repair Pass — Leela Lead
+
+**By:** Leela
+**Date:** 2026-04-22
+**Status:** Complete
+**Topic:** vault-sync-engine foundation slice repair (schema v5 coherence)
+
+### Context
+
+The vault-sync-engine foundation slice was rejected by Professor for schema coherence issues and 181 test failures. Foundation was left with `NOT NULL` constraints on `pages.collection_id` and `pages.uuid` without updating legacy INSERT helpers that omit those columns.
+
+### Decisions Made
+
+#### D1: `pages.collection_id DEFAULT 1` + auto-created default collection
+
+Every legacy INSERT INTO pages that omits `collection_id` needs a valid FK target. Rather than touch 20+ insert sites (tests + production):
+- Added `DEFAULT 1` to `collection_id` in the schema
+- Added `ensure_default_collection()` to `db.rs` called at every `open_connection()`, which inserts collection `(id=1, name='default', ...)` with `INSERT OR IGNORE`
+
+The default collection provides a stable FK target for all pre-collection code. When the `gbrain collection add` command is implemented, new collections get distinct IDs.
+
+#### D2: `pages.uuid` becomes nullable until UUID lifecycle tasks (5a.1–5a.7) are wired
+
+`uuid TEXT NOT NULL` was premature. Making it nullable (`uuid TEXT DEFAULT NULL`) with a partial unique index (`WHERE uuid IS NOT NULL`) is the honest state. UUID assignment can be added transparently when lifecycle tasks are implemented.
+
+#### D3: `ingest_log` table retained as compatibility shim
+
+The v5 spec removes `ingest_log` in favour of `raw_imports`, but `gbrain import`, `gbrain ingest`, and `gbrain embed` all depend on it. Removing the table before the reconciler slice replaces these commands would be a second breakage. The table stays until the watcher/reconciler slice explicitly removes `gbrain import` and migrates its callers.
+
+#### D4: `ON CONFLICT(collection_id, slug)` replaces `ON CONFLICT(slug)`
+
+The v5 unique constraint on `pages` is `UNIQUE(collection_id, slug)`. SQLite requires the `ON CONFLICT` target to exactly match a declared constraint. All upsert paths in `ingest.rs` and `migrate.rs` were updated.
+
+#### D5: `search_vec` gains `AND p.quarantined_at IS NULL`
+
+The vector search path in `inference.rs` was joining pages without the quarantine filter. FTS5 was already correct. Vector search is now aligned.
+
+### Outcome
+
+**Before repair:** `cargo test` reported **181 failing tests** across `commands::check`, `core::fts`, `core::inference`, and other test bins.  
+**After repair:** `cargo test` reports **0 failures** across all test bins.
+
+### What is NOT done (scoped out)
+
+- `serve_sessions`, `collection_owners` tables — watcher slice, not foundation
+- UUID generation in write helpers (tasks 5a.1–5a.7)
+- `brain_gap` slug binding (tasks 1.1b–1.1c)
+- All watcher, reconciler, and fs-safety tasks (sections 3–6, 5a)
+
+### Why
+
+Schema v5 is the foundation layer for multi-collection vault sync. This repair makes the foundation coherent by:
+1. Ensuring legacy code paths work without modification
+2. Deferring UUID lifecycle (complex temporal semantics) until dedicated tasks
+3. Maintaining import/ingest/embed continuity through the compatibility shim
+4. Wiring quarantine filtering consistently across all search surfaces
+
+This unblocks follow-on implementation batches on a solid foundation.

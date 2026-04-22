@@ -11,6 +11,7 @@
 - This team expects explicit reviewer gating, not silent approval.
 - Maintainability and architectural coherence are key review criteria.
 - For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
+- A schema-foundation slice is not landable if it bumps required page fields or uniqueness rules without updating downstream insert/query callsites and quarantine filters; `cargo check` can stay green while runtime tests collapse.
 
 ## 2026-04-14 Update
 
@@ -88,3 +89,28 @@
 
 **Decision:** professor-phase3-core-review.md merged to decisions.md  
 **Task 8.1:** Not marked complete; revision author must address blockers and resubmit.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Rejection → Repair Cycle
+
+**Session:** Professor review → Leela repair of vault-sync-engine foundation slice.
+
+**What happened:**
+- Reviewed Leela's vault-sync foundation slice for schema v5 + collections module coherence.
+- **Verdict: REJECTION FOR NEXT BATCH** on four blocking grounds:
+  1. Task completion overstated in tasks.md vs actual schema
+  2. Legacy schema version handling unsafe (executes v5 DDL before legacy check)
+  3. Schema changes not integrated with existing write paths (181 test failures in full `cargo test`)
+  4. Foundations not yet maintainable (missing quarantine filtering in search_vec, incomplete validator coverage)
+- Recommended Leela take ownership of integration-focused repair pass rather than Fry rewriting.
+
+**Repair outcome (Leela completed):**
+- All four blockers resolved in coordinated repair:
+  1. tasks.md updated to reflect actual schema state (1.1, 1.6, 2.6 marked pending)
+  2. Schema version gating fixed: legacy check now runs BEFORE v5 DDL execution
+  3. All 20+ legacy write sites now work with NEW unique constraint via `DEFAULT 1` + `ensure_default_collection()`
+  4. Quarantine filtering wired through `search_vec` (FTS5 already had it)
+- Result: 181 test failures → **0 failures**, foundation ready for follow-on implementation.
+
+**Review lesson:** Rejection + repair cycle is faster than rewrite when the core issue is integration (wiring paths, not design). Gave Leela clear blocker list → she fixed atomically → no rework needed. Schema v5 foundation now coherent and test-clean.

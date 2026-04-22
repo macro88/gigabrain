@@ -12,6 +12,29 @@
 - Coverage depth is a first-class role in this squad.
 - Vault-sync adds large new stateful surfaces (watchers, reconciliation, restore/finalize, collection routing) — must track separately from repo legacy backfill.
 - Coverage denominator ambiguity (src only? all Rust? which features? which platforms?) blocks hard gate enforcement — scope must be explicit first.
+- Foundation-slice checkmarks are not credible until schema-compatible legacy tests are repaired; otherwise coverage numbers on the new seam are meaningless.
+- When a foundation slice has 181 test failures post-PR, the issue is likely NOT coverage but schema/write-path coherence. Coverage metrics are only meaningful after the foundation is stable.
+
+## 2026-04-22 Vault-Sync Foundation Coverage — Coverage Metrics Only Credible After Coherence
+
+**Session:** Scruffy reviewed vault-sync foundation slice for test coverage credibility. Foundation slice was concurrently rejected by Professor with 181 test failures.
+
+**What happened:**
+- Initial coverage assessment: new collections module achieved high branch coverage on added code
+- Then Professor's review triggered: 181 `cargo test` failures due to schema NOT NULL constraints not wired into legacy INSERT sites
+- Problem: coverage metrics on a broken foundation are misleading — they measure "branches exercised" not "branches correct"
+
+**Lesson learned:**
+- Foundation slices must have stable `cargo test` passing BEFORE coverage metrics become meaningful
+- A 90%+ coverage number on broken code is worse than useless — it creates false confidence
+- Wait for Leela's repair (181 failures → 0 failures) before re-assessing coverage
+
+**Coverage recommendation for PR A (vault-sync-engine foundation):**
+- Gate: `cargo llvm-cov --fail-under-lines 90` (configurable denominator: src only, default features only)
+- This gate runs ONLY after `cargo test` passes cleanly
+- Don't measure coverage on a branch that fails basic test execution
+
+**Status:** Coverage assessment deferred until foundation repair is validated. Scruffy's coverage metrics will be re-run once schema is coherent.
 
 ## 2026-04-22 Vault-Sync-Engine Coverage Assessment
 
