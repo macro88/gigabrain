@@ -25,6 +25,9 @@
 - Wrapper seams need their own tests, not just primitive coverage: `stat_file_fd()` should directly prove it preserves nofollow behavior and full stat population, even if `fs_safety::stat_at_nofollow()` already has syscall-level tests.
 - Reconciler foundations need explicit non-destructive contract tests while still stubbed: `full_hash_reconcile()` must stay empty-success, and pre-walk `stat_diff()` should loudly show DB rows as missing rather than pretending discovery happened.
 - A repaired stub slice is approvable once the safety-critical defaults fail loudly instead of succeeding quietly, direct tests pin those error messages/contracts, and task notes still say the real walk/hash behavior is deferred.
+- Batch E frontmatter coverage is strongest at round-trip seams: lock `gbrain_id` through parse/render, import/export, and serde before UUID columns are fully wired.
+- When UUID adoption is only partially implemented, avoid tests that bless the placeholder state; cover source-byte non-rewrite and explicit quarantine outcomes instead, then call out the exact missing seam.
+- Batch E rename-guard coverage needs a direct adversarial template seam: large frontmatter plus a tiny non-empty body must still refuse hash pairing, while long-body hash/UUID positives stay named around what actually succeeds.
 
 ## 2026-04-22 Vault-Sync Foundation Third Gate — Approved With Explicit Debt
 

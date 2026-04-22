@@ -22,6 +22,7 @@
 - A re-gate can approve an unfinished foundation scaffold when every safety-critical entry point now fails explicitly, the task ledger names deferred walk/hash work honestly, and Unix-only imports are wired so the code is structurally ready for real Unix builds.
 - A technically solid vault-sync slice is still rejectable when `tasks.md` mixes stale repair notes with current-state claims; the ledger must describe today's behavior, not preserve contradicted historical status inline.
 - A narrow re-gate can clear a prior task-ledger blocker when the current-state note explicitly supersedes the historical repair note and each repaired claim is directly traceable to real code paths and tests.
+- A UUID-identity slice is landable when `Page.uuid` becomes mandatory in typed read paths, UUID generation/adoption stays explicit and read-only by default, and task notes clearly defer frontmatter write-back and watcher-native production work.
 
 
 ## Core Context

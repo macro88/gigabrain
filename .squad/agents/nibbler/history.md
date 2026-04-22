@@ -14,6 +14,8 @@
 - Privacy-safe fields are not enough if adjacent free-form fields can still carry the same secret.
 - Line-oriented shell protocols need explicit payload caps or raw-data endpoints become an easy memory-pressure path.
 - For vault-bound walks, `WalkBuilder` output is only a candidate list; root-bounded `open_root_fd` + `walk_to_parent` + `stat_at_nofollow` must be the only authority for classification if symlink escapes are to stay closed.
+- Hash-based rename guards are not safe if they use whole-file byte counts plus a non-empty-body check; conservative pairing needs post-frontmatter body significance, or template notes can inherit the wrong page identity.
+- Batch E re-gate closed the hash-rename seam once both sides measured trimmed post-frontmatter body bytes, not whole-file size, and regression coverage pinned both refusal and success boundaries.
 
 ## 2026-04-15 In Progress
 
@@ -40,4 +42,3 @@
 
 **Decision:** nibbler-phase3-core-review.md merged to decisions.md  
 **Task 8.2:** Not marked complete; different revision author required (reviewer lockout).
-

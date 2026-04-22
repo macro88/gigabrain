@@ -4111,3 +4111,62 @@ Batch B (prior batch) is now reviewable enough to proceed. Previous blocker (saf
 - openspec/changes/vault-sync-engine/tasks.md — truthful scoping: foundation complete, walk/hash/apply deferred
 
 **Next Batch (D):** Full reconciler walk has clear handoff. Fd-relative primitives in place, stat helpers functional, platform gates protect invariants. Walk plumbing, rename resolution, delete-vs-quarantine classifier ready to wire.
+
+### 2026-04-22: Vault-sync Batch E identity rules
+
+**By:** Fry
+
+For Batch E, pages.uuid is now treated as the authoritative page identity across ingest, CLI writes, MCP writes, export/import compatibility paths, and reconciler classification.
+
+**Implemented rules:**
+
+1. Page.uuid is non-optional in Rust data structures and read paths fail loudly if a row still lacks a UUID.
+2. If markdown frontmatter includes gbrain_id, write paths adopt it only when it parses as a real UUID and does not conflict with an already-stored page UUID.
+3. If markdown lacks gbrain_id, the system generates UUIDv7 server-side and stores it in pages.uuid without rewriting the source file in the default ingest path.
+4. Reconciler rename classification now resolves in strict order: native rename interface, then UUID, then conservative content-hash fallback. Any ambiguous or non-qualifying hash inference fails closed into quarantined_ambiguous and emits an INFO refusal log.
+
+**Why:** This closes the Batch D identity gap without drifting into the later apply pipeline. It also avoids silent placeholder defaults and avoids the data-destruction risk of optimistic hash pairing when evidence is ambiguous or trivial.
+
+### 2026-04-22: Batch E Routing Decision
+
+**By:** Leela  
+**Scope:** Vault-sync-engine next batch after Batch D
+
+**Decision: Batch E = UUID Lifecycle + Rename Resolution**
+
+After Batch D the system can walk a vault, stat every file, and classify each missing file as quarantine-vs-delete. What it cannot yet do is **resolve identity across a rename event** — a page that moved from 
+otes/foo.md to 
+otes/projects/foo.md is seen as one missing file and one new file with no awareness that they are the same page. Batch E closes that gap entirely.
+
+**Coverage:** Tests for UUID/hash rename inference and quarantine logic preserve page identity across renames. Watcher-produced native events deferred to Batch F.
+
+### 2026-04-22: Nibbler initial gate — vault-sync-engine Batch E
+
+**Verdict:** REJECT (resolved by repair)  
+**Reviewer:** Nibbler
+
+Hash-rename guard in src/core/reconciler.rs used whole-file size instead of post-frontmatter body bytes, allowing template notes with large frontmatter and tiny body to incorrectly inherit the wrong page identity. Repair required before approval.
+
+### 2026-04-22: Hash-rename guard uses body bytes, not whole-file size
+
+**Author:** Leela
+
+The 64-byte minimum-content check must apply to **body bytes after frontmatter** (trimmed), not whole-file size. Only MissingPageIdentity, NewTreeIdentity, load/refusal helpers touched. One regression test added for template-note guard.
+
+### 2026-04-22: Nibbler re-gate — vault-sync-engine Batch E repair
+
+**Verdict:** APPROVE  
+**Reviewer:** Nibbler
+
+Repair closed the large-frontmatter/tiny-body exploit: missing/new-side significance now from trimmed post-frontmatter body. Fails closed correctly; tests locked. Batch E is landable.
+
+### 2026-04-22: Scruffy — Vault Sync Batch E coverage lane
+
+**Decision:** Lock tests on gbrain_id round-trip, ingest non-rewrite, delete-vs-quarantine outcomes. Do not test incomplete rename logic.
+
+### 2026-04-22: Professor — Vault Sync Batch E Gate
+
+**Verdict:** APPROVE
+
+UUID/gbrain_id wiring truthful. Page.uuid non-optional, loud on NULL. Default ingest read-only. Rename classification conservative and correctly staged for Batch E. tasks.md honest. Coverage sufficient. Ready to land as narrow identity/reconciliation slice.
+
