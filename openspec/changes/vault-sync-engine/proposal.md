@@ -1,6 +1,6 @@
 # Vault Sync Engine
 
-> **Pre-release software, zero users, no migration path required.** GigaBrain has not shipped a tagged public release; `v0.9.x` labels in the README are developer-preview build tags. There are zero external `brain.db` files. A v4→v5 migrator or `gbrain import` compatibility shim is out of scope — migrating empty to empty is not engineering.
+> **Pre-release software, zero users, no migration path required.** GigaBrain has not shipped a tagged public release; `v0.9.x` labels in the README are developer-preview build tags. There are zero external `brain.db` files. A v4→v5 migrator is out of scope. The end-state of this change removes `gbrain import`, but the foundation slice keeps `gbrain import` + `ingest_log` as temporary compatibility shims until the reconciler/watcher path replaces them.
 
 ## Why
 
@@ -33,7 +33,7 @@ This change also introduces **collections** — named groupings with their own r
 - **`.gbrainignore` is authoritative; `collections.ignore_patterns` is a cached mirror.** On-disk file is truth; DB column is populated on every successful atomic parse. Sync is one-way (file → DB), transactional (all-or-nothing), mtime-free. CLI `ignore add|remove` writes the file; watcher refreshes the mirror.
 - **Live `.gbrainignore` reload — atomic parse, last-known-good on failure.** Every non-comment line validated via `globset::Glob::new` BEFORE any effect. Fully-valid parse → refresh mirror + reconcile. Any failing line → mirror UNCHANGED, `ignore_parse_errors` recorded, no reconciliation. Absent file with no prior mirror = empty patterns (defaults only), WARN logged.
 - **Live-serve coordination for restore/remap (lease-based ack).** `serve_sessions` heartbeat table (5s refresh, 15s liveness). Restore/remap without `--online` refuses with `ServeOwnsCollectionError`. `--online` runs a lease-based polled handshake keyed on `(session_id, reload_generation)` — timestamp-only ack is insufficient. Root_fd lifetime is scoped to the collection session, not the serve process.
-- **`gbrain import` removed.** Replaced entirely by `gbrain collection add` / `sync`.
+- **End-state: `gbrain import` removed.** Replaced by `gbrain collection add` / `sync`, but the current foundation slice intentionally keeps `gbrain import` and `ingest_log` as temporary compatibility shims until §15 lands.
 - **BREAKING:** v5 schema. See `design.md § Schema`. Existing `brain.db` files require re-init.
 
 ## Capabilities
@@ -50,9 +50,9 @@ This change also introduces **collections** — named groupings with their own r
 
 ## Impact
 
-- `src/schema.sql` — v5 schema: new tables (`collections`, `file_state`, `embedding_jobs`, `serve_sessions`, `collection_owners`), modified `pages`, removed `ingest_log`.
-- `src/core/` — new: `collections.rs`, `watcher.rs`, `reconciler.rs`, `embedding_worker.rs`, `dedup.rs`, `fs_safety.rs`. Modified: `migrate.rs` (folded into `reconciler.rs`; `import_dir` removed), `db.rs`, `types.rs`.
-- `src/commands/` — new: `collection.rs` (add/list/info/sync/remove/restore/quarantine/ignore). Removed: `import.rs`. Modified: `init.rs`, `stats.rs`, `serve.rs`, `get.rs`, `put.rs`, `search.rs`, `query.rs`, `list.rs`, `link.rs`.
+- `src/schema.sql` — v5 foundation schema: new tables (`collections`, `file_state`, `embedding_jobs`, later `serve_sessions`/`collection_owners`), modified `pages`, and a temporary retained `ingest_log` compatibility shim until §15 removes it.
+- `src/core/` — new foundation module: `collections.rs`; later slices add `watcher.rs`, `reconciler.rs`, `embedding_worker.rs`, `dedup.rs`, `fs_safety.rs`. `migrate.rs` remains temporarily; `import_dir` is removed only when reconciler lands.
+- `src/commands/` — future: `collection.rs` (add/list/info/sync/remove/restore/quarantine/ignore). `import.rs` remains temporarily in the foundation slice and is removed only in §15 with the doc updates in §16.
 - `src/mcp/server.rs` — collection-aware slug parsing; new `brain_collections` tool.
 - `Cargo.toml` — new deps: `notify`, `ignore`, `globset`, `rustix`.
 - `tests/` — collection lifecycle, reconciliation, watcher, write-through, round-trip restore.

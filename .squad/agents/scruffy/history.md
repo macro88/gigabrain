@@ -15,6 +15,29 @@
 - Foundation-slice checkmarks are not credible until schema-compatible legacy tests are repaired; otherwise coverage numbers on the new seam are meaningless.
 - When a foundation slice has 181 test failures post-PR, the issue is likely NOT coverage but schema/write-path coherence. Coverage metrics are only meaningful after the foundation is stable.
 - A repaired foundation can still be under-tested: green default+online suites do not prove collection-routing logic, schema-version refusal, or quarantine filters unless those branches have direct assertions.
+- Once the foundation’s three gating seams each have direct tests (`parse_slug`, quarantined `search_vec`, pre-v5 refusal-before-DDL), green default+online suites are strong enough to approve the slice and carry the remaining matrix debt into the next batch.
+- The carry-forward `parse_slug()` debt was real: single-collection shortcut, read unique/not-found, write-create without a write-target, and update/admin multi-owner ambiguity each needed their own direct assertions rather than relying on adjacent matrix cases.
+- Ignore-pattern coverage is more credible when it locks the error payload shape, not just success/failure: raw failing lines, canonical `code`, stable-absence sentinel shape, and parse-error clearing on the next valid reload are all part of the contract.
+- `file_state` helper coverage can defend the reconciler seam before the full engine lands: ctime-only and inode-only drift must trigger re-hash even when mtime and size stay stable, and timestamp fields should be asserted at the row-helper layer.
+
+## 2026-04-22 Vault-Sync Foundation Third Gate — Approved With Explicit Debt
+
+**Session:** Scruffy re-gated Professor's three required coverage seams after the third-author repair pass.
+
+**Validation rerun:**
+- `cargo test --quiet` passed on the default channel.
+- `GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model` passed on the online channel.
+
+**What changed enough to clear the gate:**
+- `src/core/collections.rs` now has direct `parse_slug()` tests for explicit addressing, multi-owner ambiguity, write-target create routing, write-create conflict, write-update miss, and write-admin single-owner resolution.
+- `src/core/inference.rs` now directly asserts quarantined pages are excluded from `search_vec()` even when embedding rows exist.
+- `src/core/db.rs` now directly asserts v4 databases are refused before v5 tables are created, for both `open_with_model()` and `init()`.
+
+**Gate call:** APPROVE for the next implementation batch. The repaired foundation is compatibility-safe enough to build on, and the previously missing branch tests are now present where they mattered.
+
+**Carry-forward debt for the next slice:**
+- Expand `parse_slug()` coverage to the remaining matrix edges (single-collection bare-slug shortcut, read single-owner/not-found, write-create without write-target, multi-owner ambiguity for update/admin).
+- Add a touched-surface coverage threshold once denominator scope is locked; current approval is based on seam depth plus green dual-channel suites, not a hard numeric coverage gate.
 
 ## 2026-04-22 Vault-Sync Foundation Re-review — Compatibility Repaired, Branch Depth Still Thin
 
@@ -156,3 +179,23 @@
   5. Validation skill — created/appended skill documentation for install validation
 - **Status:** ✅ COMPLETE. Installer paths validated and documented. scripts/install.sh ready for v0.9.0 release.
 - **Orchestration log:** `.squad/orchestration-log/2026-04-16T14-59-20Z-scruffy.md`
+
+## 2026-04-22: Vault-Sync Batch B Coverage Seams Locked
+
+**What:** Completed targeted coverage work on vault-sync Batch B seams before full reconciler lands. Locked parse_slug routing matrix, .gbrainignore error-shape contracts, and file_state drift/upsert behavior.
+
+**Decisions:**
+
+### Early Seam Coverage Prevents Silent Refactor Failures
+Helper-level tests as integration scaffold. Tests serve double duty: immediate validation of parse/ignore/stat helpers AND early warning system for integration hazards.
+
+### Coverage Delivered
+- parse_slug() routing matrix: all branching cases covered
+- .gbrainignore error-shape contracts: all error codes and line-level reporting fidelity proved
+- file_state stat-diff behavior: ctime/inode-only and mtime/size changes both trigger re-hash
+
+**Validation:** 10 new direct unit tests for coverage seams. All tests pass. Error paths tested and will fail loudly if later changes break contracts.
+
+**Why:** These are touched-surface seams with branchy behavior that future reconciler/watcher work will reuse directly. Guarding them now keeps Batch B credible even before the larger integration paths exist.
+
+**Status:** ✅ COMPLETE. Ready for full reconciler implementation.

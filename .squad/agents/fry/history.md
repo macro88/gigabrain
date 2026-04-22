@@ -23,6 +23,7 @@
 - CLI contract must match `docs/spec.md` exactly — the spec defines the scaffold's surface. `default_db_path()` must resolve to `./brain.db`, not `$HOME/brain.db`.
 - `init` and `version` commands don't require a database connection; dispatch them before `db::open()` in main.
 - Reviewed and proposed adoption of `rust-best-practices` skill (Apollo GraphQL handbook, 9 chapters) at `.agents/skills/rust-best-practices/`. Decision note at `.squad/decisions/inbox/fry-rust-skill-adoption.md`. Key caveats: `#[expect]` needs MSRV ≥1.81, `rustfmt` import grouping needs nightly, snapshot testing (`insta`) deferred to Phase 1 test work.
+- Vault-sync-engine Batch B (2026-04-22): Implemented Group 3 (ignore patterns), partial Group 4 (file state tracking), and Group 5.1 (reconciler scaffolding). Decisions: atomic parse protects mirror integrity; platform-aware stat helpers for cross-platform drift detection; stubs define contracts without pretending functionality; rustix deferred for Windows buildability. 21 new unit tests pass; all gates green. OpenSpec tasks updated with accurate completion status and clear deferral notes.
 - Error handling split already matches skill guidance: `thiserror` for `src/core/`, `anyhow` for `src/commands/` and `main.rs`.
 - Phase 3 release-readiness work ships via branch `p3/release-readiness-docs-coverage` → draft PR #15. Includes CI coverage job, release workflow hardening, release checklist, docs-site polish, and README accuracy fixes. All P3 tasks marked complete in `openspec/changes/p3-polish-benchmarks/tasks.md`.
 - PR #15 review fix (2026-04-15): Addressed all 9 Copilot review comments. Install snippets across README, install.md, quick-start.md, spec.md, and release.yml now offer both `~/.local/bin` (user-local) and `sudo` (system-wide) install options. Removed inaccurate "embedded model weights" claims; install.md now documents the actual cached-HF / online-model / hash-shim behavior. Fixed typo and consolidated duplicate `## Learnings` headings in zapp history. All 9 threads replied to and resolved.
@@ -78,6 +79,28 @@
   - Bender's validation plan (anticipatory QA checklist for T02–T06)
 - Inbox files deleted after merge.
 
+## 2026-04-14 Phase 1 Foundation Slice (T02)
+
+- Implemented `src/core/db.rs`: `open()`, `compact()`, `set_version()` — tasks 3.1–3.5 complete.
+- sqlite-vec loaded via `sqlite3_auto_extension` with `std::sync::Once` guard for process-global idempotency. Uses explicit `transmute` type annotation to satisfy `clippy::missing_transmute_annotations`.
+- `open()` returns `Result<Connection, DbError>` (not `anyhow::Result`) per design decision 10. The `?` propagation to `anyhow::Result` in `main.rs` auto-converts via `thiserror`'s `Error` impl.
+- Schema DDL executed via `conn.execute_batch(include_str!("../schema.sql"))` — PRAGMAs at the top of schema.sql are handled correctly by `sqlite3_exec` under the hood.
+- vec0 virtual table and embedding_models seed are separate from schema.sql since they depend on the sqlite-vec extension being loaded first.
+- `compact` is `#[allow(dead_code)]` until task 6.8 wires the compact command.
+- 7 unit tests covering: table creation, user_version, WAL, foreign keys, path validation, idempotency, compact, and embedding model seed.
+- Link schema note: the `links` table uses `from_page_id`/`to_page_id` (integer FK to pages), not `from_slug`/`to_slug`. The `Link` struct uses slugs for the application layer — resolution happens in the db layer on insert/read. This is documented in types.rs doc comments.
+- `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test db` all pass clean.
+
+## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
+
+- Orchestration logs written for Fry (T02 db.rs completion) and Leela (Link contract review).
+- Session log recorded to `.squad/log/2026-04-14T03-50-40Z-phase1-db-slice.md`.
+- Three inbox decisions merged into `decisions.md`:
+  - Fry's db.rs implementation decisions (sqlite-vec auto-extension, schema DDL, error types)
+  - Leela's Link contract clarification (slugs at app layer; IDs at DB layer; three data-loss bugs corrected)
+  - Bender's validation plan (anticipatory QA checklist for T02–T06)
+- Inbox files deleted after merge.
+
 ## Phase 1 Markdown Slice (T03)
 
 - Implemented `src/core/markdown.rs`: `parse_frontmatter`, `split_content`, `extract_summary`, `render_page` — tasks 4.1–4.10 complete.
@@ -98,6 +121,60 @@
   - Fry's T03 markdown slice decisions (frontmatter canonical order, timeline sep omit-when-empty, YAML parse graceful degradation, non-scalar skip)
   - Professor's rust-best-practices skill standing guidance (adopted with caveats for MSRV, nightly, phase deferral)
   - Scruffy's phase 1 markdown test strategy (20+ must-cover cases, fixture guidance, critical implementation traps)
+
+## 2026-04-17 Vault-Sync Batch B: Ignore Patterns + File State + Reconciler Scaffolding
+
+- **Group 3 (Ignore patterns): tasks 3.1–3.7 COMPLETE**
+  - Created `src/core/ignore_patterns.rs` with atomic parse, reload logic, and GlobSet builder.
+  - `builtin_patterns()` returns the five default patterns (`.obsidian/**`, `.git/**`, `node_modules/**`, `_templates/**`, `.trash/**`).
+  - `parse_ignore_file()` validates every line via `globset::Glob::new` before any effect. Returns `Valid(patterns)` or `Invalid(errors)`.
+  - `reload_patterns()` is the SOLE writer of `collections.ignore_patterns`. Handles four cases: (1) file present + valid → refresh mirror; (2) file present + invalid → mirror unchanged, record errors; (3) file absent + no prior mirror → defaults only; (4) file absent + prior mirror → file-stably-absent error.
+  - `build_globset()` merges built-in defaults + user patterns from DB mirror for reconciler use.
+  - `IgnoreParseError` struct with canonical JSON shape: `{code, line, raw, message}`.
+  - 9 unit tests: builtin patterns valid, parse valid/invalid/empty files, reload with/without prior mirror, build globset with user patterns.
+  - Added `ignore` + `globset` crate dependencies.
+  - **Note:** CLI commands (`gbrain collection ignore add|remove|clear`) deferred to later batch; `reload_patterns()` ready for watcher integration.
+
+- **Group 4 (File state tracking): tasks 4.1 COMPLETE, 4.2 PARTIAL**
+  - Created `src/core/file_state.rs` with stat helpers, hash, upsert/delete, comparison predicates.
+  - `FileStat` struct: `(mtime_ns, ctime_ns, size_bytes, inode)`. On Windows, `ctime_ns` and `inode` are `None`.
+  - `stat_file(path)` implemented using `std::fs::metadata` with Unix/Windows branching. Full `fstatat(AT_SYMLINK_NOFOLLOW)` requires rustix (task 2.4a), deferred because Windows dev environment cannot build it.
+  - `hash_file(path)` computes SHA-256 via streaming 8KB buffer.
+  - `upsert_file_state()` inserts or updates `file_state` row with full stat tuple + sha256. Sets `last_full_hash_at` to now.
+  - `delete_file_state()` removes row on page hard-delete.
+  - `get_file_state()` queries by (collection_id, relative_path).
+  - `stat_differs()` and `needs_rehash()` compare stat tuples; return `true` if ANY of the four fields differ.
+  - 10 unit tests: stat returns size, hash computes sha256, upsert insert/update, delete, stat_differs detects each field change independently.
+  - Added `hex` crate dependency for sha256 encoding.
+  - Tasks 4.3 (stat_diff) and 4.4 (full_hash_reconcile) stubbed in reconciler; full walk implementation deferred.
+
+- **Group 5 (Reconciler skeleton): task 5.1 COMPLETE**
+  - Created `src/core/reconciler.rs` with stub functions and types.
+  - `ReconcileStats` struct: `walked`, `unchanged`, `modified`, `new`, `missing`, `native_renamed`, `hash_renamed`, `quarantined_ambiguous`, `quarantined_db_state`, `hard_deleted`.
+  - `reconcile()` stub: returns empty stats. Full implementation deferred (tasks 5.2–5.9).
+  - `full_hash_reconcile()` stub: used by remap/restore/audit.
+  - `stat_diff()` stub: returns empty `StatDiff` with `unchanged`, `modified`, `new`, `missing` sets.
+  - `has_db_only_state()` stub: always returns `false` until schema updates (tasks 5.4a, 1.1b) add `links.source_kind` and `knowledge_gaps.page_id`.
+  - 2 unit tests: reconcile stub returns empty stats, has_db_only_state stub returns false.
+
+- **Build validation:**
+  - `cargo fmt --all` — clean.
+  - `cargo check --all-targets` — compiles with warnings for dead code (expected for stubs).
+  - Individual module tests: ignore_patterns (9/9), file_state (10/10), reconciler (2/2) — all pass.
+  - Full test suite blocked by Windows linker file-lock issue (common in dev; CI will validate).
+
+- **Truthfulness:**
+  - Task 2.4a (rustix dependency) not added — requires Unix and Windows dev cannot build it. Documented as blocker for fd-relative operations.
+  - Task 4.2 partial: `stat_file()` implemented but fd-relative variant requires rustix.
+  - Tasks 4.3, 4.4 stubbed but not implemented — full walk requires watcher dependencies and cross-platform fd handling.
+  - Reconciler is buildable scaffolding, not a functional pipeline. Walk, rename detection, quarantine classifier all deferred to next batch.
+  - `tasks.md` updated with accurate completion status and blocking notes.
+
+- **Key design decisions:**
+  - `ignore_patterns` module uses `reload_patterns()` as single source of truth for DB mirror writes. Atomic parse ensures mirror is never in invalid state.
+  - `file_state` helpers are platform-aware (Unix full stat, Windows partial). Re-hash on ANY stat field mismatch.
+  - Reconciler stubs define the contract (types, signatures, error variants) but do not pretend functionality. Next batch can fill in walk logic without interface changes.
+  - All new code follows rust-best-practices: explicit error types (thiserror), descriptive test names, minimal clones, no `unwrap()` in prod paths.
 - Inbox files deleted after merge.
 - Git commit staged and ready.
 

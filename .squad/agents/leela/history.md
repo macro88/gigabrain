@@ -7,6 +7,9 @@
 
 ## Learnings
 
+- Third-author gate verification: when Professor claims "no-side-effects" on legacy refusal, verify by checking that v5 DDL tables are absent post-rejection, not just that an error was returned.
+- Gate approval requires `cargo test` + `cargo clippy -- -D warnings` both clean; `cargo fmt` is implicitly validated when clippy passes.
+- After a foundation approval, route Groups 3–5 (ignore patterns, file state, reconciler) as the next implementation batch; 2.4a (`rustix` dep) must arrive with or before 4.2 since `stat_file` needs `fstatat`.
 - `docs\spec.md` is the primary product spec.
 - For a breaking schema change, the schema DDL update + test fixture update must be atomic.
 - When a spec replaces an entire ingest path (import.rs → reconciler.rs), the new path must be complete before removal.

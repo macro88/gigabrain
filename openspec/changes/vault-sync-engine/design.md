@@ -4,7 +4,7 @@ GigaBrain's current ingest model treats `gbrain import <path>` as a one-shot com
 
 The viral positioning — "GigaBrain as THE memory for Claude Code / OpenClaw / Hermes" — requires a frictionless daily experience. QMD's advantage is architectural: a persistent SQLite index, hourly cron-driven refresh with hash-skip short-circuit, no daemon required for queries. We can beat it by adding live file watching to what `gbrain serve` is already doing for MCP.
 
-Zero current users means no migration tax. We can drop `gbrain import`, reshape the schema, and treat the vault as the single source of truth without worrying about breaking existing setups.
+Zero current users means no migration tax. We can reshape the schema and treat the vault as the single source of truth without worrying about preserving old external setups. The end-state removes `gbrain import`, but the foundation slice keeps `gbrain import` + `ingest_log` as temporary compatibility shims until the reconciler/watcher path is ready to replace them.
 
 ## Goals / Non-Goals
 
@@ -471,10 +471,10 @@ On post-rename failure (steps 10–12): the dedup entry is live and the bytes ar
 Zero users = no data migration burden. For developer-local brains:
 
 1. v5 schema replaces v4 entirely. `gbrain init` on a fresh directory creates v5.
-2. `src/schema.sql` is updated to v5 DDL; `src/core/db.rs::open()` detects schema version via `brain_config.schema_version`. If an older schema is found, error with instructions to re-init from the source vault.
+2. `src/schema.sql` is updated to v5 DDL; `src/core/db.rs::{open,init}` preflight stored schema metadata (`brain_config.schema_version`, falling back to legacy `config.version`) before any v5 DDL runs. If an older schema is found, error with instructions to re-init from the source vault.
 3. We deliberately do not write a v4 → v5 migration. Developers re-run `gbrain init` + `gbrain collection add <vault-path>`.
 
-Code deletions:
+Planned final-state deletions (NOT part of the current foundation slice):
 
 - `src/commands/import.rs` removed
 - `src/core/migrate.rs::import_dir()` removed; file split into `reconciler.rs` (walk + stat-diff) and `writer.rs` (page upsert + FTS)
@@ -482,7 +482,7 @@ Code deletions:
 
 
 
-**Decision:** `gbrain import` is removed from the binary. No compatibility shim, no in-place v4-database upgrade, no "import-dir" transitional alias, no v4→v5 migrator, no export/import path for v4 DB-only state. All callers — `AGENTS.md`, `skills/ingest/SKILL.md`, `skills/enrich/SKILL.md`, `docs/getting-started.md`, `docs/spec.md`, `README.md`, `CLAUDE.md`, and any test fixtures invoking `import_dir` — are updated by **tasks 16.1–16.8 of this change** (task-list driven, not yet implemented). **Implementation sequencing requirement:** the `gbrain import` removal (code deletion in `src/commands/import.rs`, task 15.x) SHALL NOT land before tasks 16.1–16.8 complete — the removal and the caller updates ship together in the same change. A spec-consistency audit test (task 17.17) + a repo-wide grep gate in CI SHALL block merging any commit that removes `import.rs` while any of the listed callers still reference `gbrain import` or `import_dir`. This closes the concern that the design bullet's "are updated in this change" wording could be read as "are already updated in main" when in fact the updates live in tasks 16.1–16.8 and MUST be sequenced with the removal.
+**Decision:** the END-STATE of this change removes `gbrain import` from the binary. Until tasks 15.x and 16.1–16.8 land together, the repository intentionally keeps `src/commands/import.rs`, `src/core/migrate.rs::import_dir()`, and the `ingest_log` table as temporary compatibility shims so schema v5 can land without deleting the only working ingest path. There is still no in-place v4-database upgrade, no "import-dir" transitional alias, and no v4→v5 migrator. **Implementation sequencing requirement:** the `gbrain import` removal (code deletion in `src/commands/import.rs`, task 15.x) SHALL NOT land before tasks 16.1–16.8 complete — the removal and the caller updates ship together in the same change. A spec-consistency audit test (task 17.17) + a repo-wide grep gate in CI SHALL block merging any commit that removes `import.rs` while any of the listed callers still reference `gbrain import` or `import_dir`. This keeps the design truthful about the current foundation slice while preserving the intended final state.
 
 **Why this is correct, not a regression:**
 

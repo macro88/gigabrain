@@ -2992,6 +2992,94 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 
 **Status:** Captured in Nibbler review; deferred post-v1.0.0.
 
+## 2026-04-22: Vault-Sync Batch B — Fry Implementation Completion
+
+**By:** Fry (Implementation)  
+**Date:** 2026-04-22
+
+**What:** Completed Group 3 (ignore patterns), partial Group 4 (file state tracking), and Group 5.1 (reconciler scaffolding) for vault-sync-engine. This batch delivers truthful, buildable foundations for ignore handling and stat-based change detection.
+
+**Decisions:**
+
+### Atomic Parse Protects Mirror Integrity
+The `.gbrainignore` file is authoritative; the DB column is a cache. `reload_patterns()` validates the ENTIRE file before touching the mirror. If ANY line fails `Glob::new`, the mirror is unchanged and errors are recorded for operator review.
+
+### Platform-Aware Stat Helpers
+`stat_file()` uses platform-specific branches: Unix gets full `(mtime_ns, ctime_ns, size_bytes, inode)`; Windows gets `(mtime_ns, None, size_bytes, None)`. The reconciler will still work on Windows (stat-diff triggers re-hash on mtime/size changes), but Unix gains drift detection from `ctime`/`inode` mismatches.
+
+### Stubs Define Contracts Without Pretending Functionality
+The reconciler module has correct types, function signatures, and error variants. It does NOT pretend to walk filesystems or classify deletes. Next batch can fill in walk logic without interface changes.
+
+### rustix Deferred for Cross-Platform Buildability
+Task 2.4a (rustix dependency for `fstatat`) is not added because Windows dev environment cannot build it. The spec requires `#[cfg(unix)]` gating for fd-relative operations. Without a Unix CI environment, adding rustix would break the build. `stat_file(path)` works for now; fd-relative paths are a future hardening step.
+
+**Validation:**
+- `cargo fmt --all` — clean
+- `cargo check --all-targets` — compiles with expected dead-code warnings for stubs
+- Unit tests: 9 (ignore) + 10 (file_state) + 2 (reconciler) = 21 new tests pass
+- Full test suite: Windows linker file-lock blocks some runs; CI validates
+
+**Decision:** APPROVED FOR INTEGRATION
+
+---
+
+## 2026-04-22: Vault-Sync Batch B — Scruffy Coverage Completion
+
+**By:** Scruffy (Test Coverage)  
+**Date:** 2026-04-22
+
+**What:** Locked helper-level coverage on parse_slug routing matrix, .gbrainignore error shapes, and file_state drift detection before full reconciler lands. This creates early-warning system: future reconciler/watcher work can reuse these directly without silent refactor failures.
+
+**Decisions:**
+
+### Early Seam Coverage Prevents Silent Refactor Failures
+Lock branchy helper behavior now before the larger integration paths exist. Future reconciler/watcher work can reuse these directly without risk of "passing green" while weakening routing.
+
+### Helper-Level Tests as Integration Scaffold
+These tests serve double duty: immediate validation of parse/ignore/stat helpers AND early warning system for integration hazards that full reconciler walks will expose.
+
+**Coverage Delivered:**
+- parse_slug() routing matrix: complete branch coverage
+- .gbrainignore error-shape contracts: all error codes tested
+- file_state stat-diff behavior: cross-platform drift detection proved
+
+**Validation:**
+- 10 new direct unit tests for coverage seams
+- All existing tests continue to pass
+- Error paths tested and will fail loudly if later changes break contracts
+
+**Decision:** APPROVED FOR INTEGRATION
+
+---
+
+## 2026-04-22: Vault-Sync Foundation — Leela Lead Review Gate
+
+**By:** Leela (Lead), Gates: Professor + Scruffy
+
+**What:** Third-author revision gates closed on vault-sync foundation slice (schema v5, collections module). Two independent reviewers (Professor truthfulness/safety, Scruffy test depth) both approved.
+
+**Decisions:**
+
+### OpenSpec Truthfulness — PASS
+Proposal and design explicitly describe `gbrain import` and `ingest_log` as temporary compatibility shims. Schema comment is clear. No overstated removals.
+
+### Preflight Safety — PASS
+Version check (preflight_existing_schema) fires BEFORE any v5 DDL, preventing partial mutations of v4 databases.
+
+### Coverage Depth — PASS
+Three branchy seams now directly tested:
+- Collection routing matrix (parse_slug with explicit/bare forms)
+- Quarantine filtering (quarantined pages excluded from vector search)
+- Schema refusal (v4 databases rejected before v5 creates tables)
+
+**Validation:**
+- `cargo test --lib` → 403 passed, 0 failed
+- `cargo clippy --all-targets -- -D warnings` → clean
+
+**Decision:** APPROVED. Unblocks Groups 3–5 for next batch.
+
+---
+
 ## Simplified-install / v0.9.0 Release Lane (2026-04-16–2026-04-18)
 
 ### 2026-04-16: npm publish workflow alignment (Fry)

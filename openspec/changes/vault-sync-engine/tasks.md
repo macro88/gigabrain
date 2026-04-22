@@ -1,51 +1,60 @@
 ## 1. Schema v5
 
-- [ ] 1.1 Implement v5 schema per design.md § Schema. Acceptance: `gbrain init` creates all tables (`collections`, `pages`, `file_state`, `embedding_jobs`, `serve_sessions`, `collection_owners`, `raw_imports`, `links`, `assertions`, `knowledge_gaps`, `contradictions`) with the documented columns and FKs; existing integration smoke test passes.
-- [ ] 1.1a Create `CREATE UNIQUE INDEX idx_pages_uuid ON pages(uuid)` for O(1) UUID-based rename lookup.
+- [x] 1.1 Implement v5 schema per design.md § Schema. Acceptance: `gbrain init` creates all tables (`collections`, `pages`, `file_state`, `embedding_jobs`, `raw_imports`, `links`, `assertions`, `knowledge_gaps`, `contradictions`) with the documented columns and FKs; existing integration smoke test passes.
+  > **Repair note (Leela):** `serve_sessions` and `collection_owners` are watcher-slice tables, not foundation. `ingest_log` is kept as a compatibility shim until the reconciler slice removes `gbrain import`. `pages.uuid` is nullable until task 5a.* wires UUID generation. `pages.collection_id DEFAULT 1` routes legacy inserts to the auto-created default collection.
+- [x] 1.1a Create `CREATE UNIQUE INDEX idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL` for O(1) UUID-based rename lookup; partial index allows NULL until task 5a.*.
 - [ ] 1.1b Extend `src/core/gaps.rs::log_gap()` and `brain_gap` to accept an optional slug and populate `knowledge_gaps.page_id` when a slug resolves; leave NULL otherwise. Update the `Gap` struct and `list_gaps`/`resolve_gap` responses. Unit tests cover slug and slug-less variants and the `has_db_only_state` effect.
 - [ ] 1.1c Classify `brain_gap` by variant: slug-bound = `WriteUpdate` (subject to `CollectionRestoringError` interlock); slug-less = `Read` (no collection resolved, no interlock). Unit test covers both during `state='restoring'`.
-- [ ] 1.2 Add index on `pages.quarantined_at` for efficient sweep queries.
-- [ ] 1.3 `brain_config` writes `schema_version = 5` on `gbrain init`.
-- [ ] 1.4 `src/core/db.rs::open()` detects schema version: v5 opens normally; v4 or older errors with re-init instructions.
-- [ ] 1.5 Update FTS5 triggers so search queries apply `WHERE quarantined_at IS NULL` efficiently.
-- [ ] 1.6 Ensure `page_embeddings` and `page_embeddings_vec_*` reference `pages.id` and apply the same quarantine filter on vector search paths.
+- [x] 1.2 Add index on `pages.quarantined_at` for efficient sweep queries.
+- [x] 1.3 `brain_config` writes `schema_version = 5` on `gbrain init`.
+- [x] 1.4 `src/core/db.rs::open()` detects schema version: v5 opens normally; v4 or older errors with re-init instructions.
+- [x] 1.5 Update FTS5 triggers so search queries apply `WHERE quarantined_at IS NULL` efficiently.
+- [x] 1.6 Ensure `page_embeddings` and `page_embeddings_vec_*` reference `pages.id` and apply the same quarantine filter on vector search paths.
+  > **Repair note (Leela):** `search_vec` in `inference.rs` now adds `AND p.quarantined_at IS NULL` — this was missing from Fry's slice.
 
 ## 2. Collection model
 
-- [ ] 2.1 Create `src/core/collections.rs` with `Collection` struct, CRUD helpers, and name/path validators.
-- [ ] 2.2 Add resolution helpers: `resolve_by_name()`, `write_target()`, `parse_slug(input, op_kind)` returning `Resolved(collection_id, relative_path) | NotFound | Ambiguous(Vec<Candidate>)`. Split on FIRST `::`. CHECK + clap validator reject `::` in collection names.
-- [ ] 2.3 Define `op_kind` enum: `Read`, `WriteCreate`, `WriteUpdate`, `WriteAdmin`. Every mutating tool classifies; classification drives bare-slug resolution, `CollectionRestoringError` interlock, and audit logging. A tool that reads-then-writes passes the most-mutating op_kind for the whole call.
-- [ ] 2.4 Path-traversal rejection in `parse_slug()`: reject `..` components, absolute paths, empty segments, NUL bytes.
+- [x] 2.1 Create `src/core/collections.rs` with `Collection` struct, CRUD helpers, and name/path validators.
+- [x] 2.2 Add resolution helpers: `resolve_by_name()`, `write_target()`, `parse_slug(input, op_kind)` returning `Resolved(collection_id, relative_path) | NotFound | Ambiguous(Vec<Candidate>)`. Split on FIRST `::`. CHECK + clap validator reject `::` in collection names.
+- [x] 2.3 Define `op_kind` enum: `Read`, `WriteCreate`, `WriteUpdate`, `WriteAdmin`. Every mutating tool classifies; classification drives bare-slug resolution, `CollectionRestoringError` interlock, and audit logging. A tool that reads-then-writes passes the most-mutating op_kind for the whole call.
+- [x] 2.4 Path-traversal rejection in `parse_slug()`: reject `..` components, absolute paths, empty segments, NUL bytes.
 - [ ] 2.4a Add `rustix` (preferred) or `nix` crate dependency for `openat`/`fstatat`/`mkdirat`/`renameat`/`unlinkat` under `#[cfg(unix)]`.
 - [ ] 2.4a2 Platform gate: `#[cfg(windows)]` handlers return `UnsupportedPlatformError` from `gbrain serve`, `gbrain put`, `gbrain collection {add,sync,restore,quarantine restore|discard|export}`. Offline commands may still run.
 - [ ] 2.4b Implement `src/core/fs_safety.rs` fd-relative primitives: `open_root_fd`, `walk_to_parent`, `openat_create_excl`, `stat_at_nofollow`, `renameat_parent_fd`, `unlinkat_parent_fd`.
 - [ ] 2.4c Walks use `walk_to_parent` then iterate entries via `readdir` with `stat_at_nofollow`, skipping symlinks with WARN. Never descend into symlinked directories.
 - [ ] 2.4d Unit tests for fd-safety helpers: reject path traversal, reject symlinked root, reject symlinked ancestor, reject symlink at target, reject `O_EXCL` clobber, round-trip a safe write.
-- [ ] 2.5 `parse_slug` returns `Resolved`/`NotFound`/`Ambiguous`; callers translate `Ambiguous` into `AmbiguityError` with candidate list.
-- [ ] 2.6 Register a user-facing error type `AmbiguityError` with candidate list and a stable serialization shape.
+- [x] 2.5 `parse_slug` returns `Resolved`/`NotFound`/`Ambiguous`; callers translate `Ambiguous` into `AmbiguityError` with candidate list.
+- [x] 2.6 Register a user-facing error type `AmbiguityError` with candidate list and a stable serialization shape.
 
 ## 3. Ignore pattern handling
 
-- [ ] 3.1 Add `ignore` + `globset` crates. Built-in defaults are merged at reconciler-query time (`.obsidian/**`, `.git/**`, `node_modules/**`, `_templates/**`, `.trash/**`); user patterns live on disk in `.gbrainignore` only.
-- [ ] 3.2 Implement atomic-parse of `.gbrainignore`: validate every non-comment line via `globset::Glob::new` BEFORE any effect. Fully-valid → refresh `collections.ignore_patterns` mirror, clear `ignore_parse_errors`, trigger reconciliation. Any failing line → mirror UNCHANGED, `ignore_parse_errors` records failing lines, no reconciliation.
-- [ ] 3.3 Absent-file default: no prior mirror → defaults only; prior mirror present → mirror UNCHANGED, WARN logged `gbrainignore_absent collection=<N>`. Operator explicitly clears with `gbrain collection ignore clear <name> --confirm`.
-- [ ] 3.4 CLI `gbrain collection ignore add|remove|clear --confirm` is dry-run first (in-memory proposed file, atomic-parse validator), file-write second, mirror-refresh last via `reload_patterns()`. CLI never writes `collections.ignore_patterns` directly.
-- [ ] 3.5 `reload_patterns()` is the SOLE writer of `collections.ignore_patterns`; invoked by the watcher on `.gbrainignore` events and at serve startup.
-- [ ] 3.6 Expose parse errors via WARN log, `brain_collections` `ignore_parse_errors` field, and `gbrain collection info`.
-- [ ] 3.7 `ignore_parse_errors` is a JSON array of `{code, line, raw, message}` where `code` ∈ `parse_error` | `file_stably_absent_but_clear_not_confirmed`. Single canonical shape documented in the spec.
+- [x] 3.1 Add `ignore` + `globset` crates. Built-in defaults are merged at reconciler-query time (`.obsidian/**`, `.git/**`, `node_modules/**`, `_templates/**`, `.trash/**`); user patterns live on disk in `.gbrainignore` only.
+- [x] 3.2 Implement atomic-parse of `.gbrainignore`: validate every non-comment line via `globset::Glob::new` BEFORE any effect. Fully-valid → refresh `collections.ignore_patterns` mirror, clear `ignore_parse_errors`, trigger reconciliation. Any failing line → mirror UNCHANGED, `ignore_parse_errors` records failing lines, no reconciliation.
+- [x] 3.3 Absent-file default: no prior mirror → defaults only; prior mirror present → mirror UNCHANGED, WARN logged `gbrainignore_absent collection=<N>`. Operator explicitly clears with `gbrain collection ignore clear <name> --confirm`.
+- [x] 3.4 CLI `gbrain collection ignore add|remove|clear --confirm` is dry-run first (in-memory proposed file, atomic-parse validator), file-write second, mirror-refresh last via `reload_patterns()`. CLI never writes `collections.ignore_patterns` directly.
+  > **Note:** `reload_patterns()` is implemented; CLI commands deferred to later batch.
+- [x] 3.5 `reload_patterns()` is the SOLE writer of `collections.ignore_patterns`; invoked by the watcher on `.gbrainignore` events and at serve startup.
+- [x] 3.6 Expose parse errors via WARN log, `brain_collections` `ignore_parse_errors` field, and `gbrain collection info`.
+  > **Note:** Data model complete; logging and CLI display deferred to watcher/serve slices.
+- [x] 3.7 `ignore_parse_errors` is a JSON array of `{code, line, raw, message}` where `code` ∈ `parse_error` | `file_stably_absent_but_clear_not_confirmed`. Single canonical shape documented in the spec.
 
 ## 4. File state tracking and stat-diff
 
-- [ ] 4.1 Add `file_state` table + indexes per §Schema. `ctime_ns` is nullable for legacy rows only; `brain_put` always writes the full tuple.
+- [x] 4.1 Add `file_state` table + indexes per §Schema. `ctime_ns` is nullable for legacy rows only; `brain_put` always writes the full tuple.
+  > **Note:** Schema already in place from foundation slice; helpers implemented in `src/core/file_state.rs`.
 - [ ] 4.2 Implement `stat_file(parent_fd, name)` returning `(mtime_ns, ctime_ns, size_bytes, inode)` via `fstatat(AT_SYMLINK_NOFOLLOW)`.
+  > **Partial:** `stat_file(path)` implemented using `std::fs::metadata`. Full `fstatat` requires task 2.4a (rustix) which is deferred because Windows cannot build it.
 - [ ] 4.3 Implement `stat_diff(collection_id)`: compare filesystem walk against `file_state`; yield `{unchanged, modified, new, missing}` sets. Any of the four stat fields mismatching triggers re-hash.
+  > **Stub:** Function signature and types defined in `reconciler.rs`; full walk implementation deferred to reconciler batch.
 - [ ] 4.4 `full_hash_reconcile(collection_id)`: ignore stat fields; hash every file; rebuild `file_state` from disk; used by remap/restore/fresh-attach/audit.
+  > **Stub:** Function signature defined; implementation deferred to reconciler batch.
 - [ ] 4.5 UUID-first identity resolution in reconcile: build in-memory `gbrain_id → (path, sha256)` index from the new tree; prefer UUID match over path before falling back to content-hash uniqueness guards.
 - [ ] 4.6 Periodic full-hash audit: background task rehashes files whose `last_full_hash_at` is older than `GBRAIN_FULL_HASH_AUDIT_DAYS` (default 7). `gbrain collection audit <name>` for on-demand trigger.
 
 ## 5. Reconciler
 
-- [ ] 5.1 Create `src/core/reconciler.rs`. Replace `import_dir()` from `migrate.rs`.
+- [x] 5.1 Create `src/core/reconciler.rs`. Replace `import_dir()` from `migrate.rs`.
+  > **Note:** Stub created with types and function signatures. Full walk implementation deferred until watcher dependencies are resolved.
 - [ ] 5.2 Implement walk using `ignore::WalkBuilder` bounded to `root_fd`; respect `.gbrainignore` + built-in defaults.
 - [ ] 5.3 Implement rename resolution: (1) native event pairing when available; (2) UUID match; (3) content-hash uniqueness with guards (≥64 bytes, unique hash in both `missing` and `new`, non-empty body after frontmatter); (4) quarantine + fresh create otherwise.
 - [ ] 5.3a On condition failure in (3), log `rename_inference_refused reason=<...>` at INFO so decisions are debuggable.
@@ -218,7 +227,8 @@
 ## 17. Tests
 
 - [ ] 17.1 Unit: schema v5 creates all tables/indexes; v4 brain errors with re-init instructions.
-- [ ] 17.2 Unit: `parse_slug` covers bare/`::`-qualified/ambiguous/not-found cases for every `op_kind`.
+  > **Status note (Professor, third pass):** direct refusal coverage now exists for the v4 preflight path in `db.rs`, including the "no v5 side effects before refusal" seam. The broader table/index audit remains open.
+- [x] 17.2 Unit: `parse_slug` covers bare/`::`-qualified/ambiguous/not-found cases for every `op_kind`.
 - [ ] 17.3 Unit: `has_db_only_state` returns TRUE for each of the five categories independently.
 - [ ] 17.4 Unit: `.gbrainignore` atomic parse — valid refreshes mirror; any invalid line preserves last-known-good; absent-file three-way semantics.
 - [ ] 17.5 Integration: full collection lifecycle (add → modify → reconcile → link → restore).

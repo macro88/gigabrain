@@ -314,7 +314,7 @@ fn insert_page(db: &Connection, entry: &ParsedEntry) -> Result<()> {
              (slug, type, title, summary, compiled_truth, timeline, \
               frontmatter, wing, room, version) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1) \
-         ON CONFLICT(slug) DO UPDATE SET \
+         ON CONFLICT(collection_id, slug) DO UPDATE SET \
              type = excluded.type, \
              title = excluded.title, \
              summary = excluded.summary, \

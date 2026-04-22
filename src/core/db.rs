@@ -10,7 +10,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const LEGACY_SMALL_MODEL_NAME: &str = "bge-small-en-v1.5";
 
 pub struct OpenDb {
@@ -87,6 +87,7 @@ pub fn open(path: &str) -> Result<Connection, DbError> {
 pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<OpenDb, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
+    preflight_existing_schema(path)?;
     let conn = open_connection(path)?;
 
     if !existed_before || path == ":memory:" {
@@ -104,6 +105,12 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 
     let effective_model = match read_brain_config(&conn)? {
         Some(stored) => {
+            // Check schema version — refuse to open v4 or older
+            if stored.schema_version < SCHEMA_VERSION {
+                return Err(DbError::Schema {
+                    message: format_schema_reinit_message(stored.schema_version, path),
+                });
+            }
             if stored.model_id != requested_model.model_id {
                 return Err(DbError::ModelMismatch {
                     message: format_model_mismatch(&stored, &requested_model, path),
@@ -133,6 +140,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
+    preflight_existing_schema(path)?;
     let conn = open_connection(path)?;
 
     if let Some(stored) = read_brain_config(&conn)? {
@@ -160,6 +168,25 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     Ok(conn)
 }
 
+fn preflight_existing_schema(path: &str) -> Result<(), DbError> {
+    if path == ":memory:" || !Path::new(path).exists() {
+        return Ok(());
+    }
+
+    let conn = Connection::open(path)?;
+    let Some(schema_version) = read_existing_schema_version(&conn)? else {
+        return Ok(());
+    };
+
+    if schema_version < SCHEMA_VERSION {
+        return Err(DbError::Schema {
+            message: format_schema_reinit_message(schema_version, path),
+        });
+    }
+
+    Ok(())
+}
+
 fn open_connection(path: &str) -> Result<Connection, DbError> {
     let db_path = Path::new(path);
     if let Some(parent) = db_path.parent() {
@@ -175,8 +202,23 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(include_str!("../schema.sql"))?;
     set_version(&conn)?;
+    ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+/// Ensure a collection with id=1 exists in the database.
+///
+/// All legacy INSERT INTO pages statements that omit collection_id rely on
+/// `DEFAULT 1` routing them to this collection.  Called at every
+/// `open_connection()` so test-only in-memory databases are also covered.
+fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO collections \
+             (id, name, root_path, state, writable, is_write_target) \
+         VALUES (1, 'default', '', 'active', 1, 1);",
+    )?;
+    Ok(())
 }
 
 fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
@@ -324,6 +366,42 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     Ok(exists.is_some())
 }
 
+fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbError> {
+    for (table, key) in [("brain_config", "schema_version"), ("config", "version")] {
+        if !table_exists(conn, table)? {
+            continue;
+        }
+
+        let value: Option<String> = conn
+            .query_row(
+                &format!("SELECT value FROM {table} WHERE key = ?1"),
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(value) = value else {
+            continue;
+        };
+
+        let schema_version = value.parse::<i64>().map_err(|_| DbError::Schema {
+            message: format!("{table}.{key} must be an integer"),
+        })?;
+        return Ok(Some(schema_version));
+    }
+
+    Ok(None)
+}
+
+fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
+    format!(
+        "Database schema version {} is older than required version {}. \
+         GigaBrain v5 requires re-initialization. \
+         Backup your data, then run: rm {} && gbrain init",
+        schema_version, SCHEMA_VERSION, path
+    )
+}
+
 fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path: &str) -> String {
     let requested_dim = if requested.embedding_dim == 0 {
         "unknown".to_owned()
@@ -394,6 +472,37 @@ mod tests {
     use super::*;
     use crate::core::inference::resolve_model;
 
+    fn seed_existing_db(path: &Path, schema_version: i64) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE brain_config (
+                 key   TEXT PRIMARY KEY NOT NULL,
+                 value TEXT NOT NULL
+             ) STRICT;
+             CREATE TABLE config (
+                 key   TEXT PRIMARY KEY NOT NULL,
+                 value TEXT NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+        let model = default_model();
+        write_brain_config(
+            &conn,
+            &BrainConfig {
+                model_id: model.model_id.clone(),
+                model_alias: model.alias.clone(),
+                embedding_dim: model.embedding_dim,
+                schema_version,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('version', ?1)",
+            [schema_version.to_string()],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn open_creates_all_expected_tables() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -415,9 +524,12 @@ mod tests {
         let expected = [
             "assertions",
             "brain_config",
+            "collections",
             "config",
             "contradictions",
+            "embedding_jobs",
             "embedding_models",
+            "file_state",
             "import_manifest",
             "ingest_log",
             "knowledge_gaps",
@@ -440,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_4() {
+    fn open_sets_user_version_to_5() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_brain.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -448,7 +560,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -488,7 +600,54 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn open_with_model_rejects_v4_database_before_creating_v5_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        seed_existing_db(&db_path, 4);
+
+        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect_err("v4 database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("schema version 4"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let stored_version: String = conn
+            .query_row(
+                "SELECT value FROM brain_config WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_version, "4");
+    }
+
+    #[test]
+    fn init_rejects_v4_database_before_creating_v5_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        seed_existing_db(&db_path, 4);
+
+        let err = init(db_path.to_str().unwrap(), &default_model())
+            .expect_err("v4 database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "4");
     }
 
     #[test]
@@ -560,7 +719,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 4);
+        assert_eq!(config.schema_version, 5);
     }
 
     #[test]
@@ -576,7 +735,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 4,
+                schema_version: 5,
             }
         );
     }

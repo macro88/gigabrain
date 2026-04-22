@@ -1,4 +1,4 @@
--- brain.db schema — GigaBrain v4
+-- brain.db schema — GigaBrain v5
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -14,11 +14,38 @@ CREATE TABLE IF NOT EXISTS brain_config (
 ) STRICT;
 
 -- ============================================================
+-- collections: named groupings with their own root, ignore patterns
+-- ============================================================
+CREATE TABLE IF NOT EXISTS collections (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT    NOT NULL UNIQUE,
+    root_path           TEXT    NOT NULL,
+    state               TEXT    NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'detached', 'restoring')),
+    writable            INTEGER NOT NULL DEFAULT 1,
+    is_write_target     INTEGER NOT NULL DEFAULT 0,
+    ignore_patterns     TEXT    DEFAULT NULL,
+    ignore_parse_errors TEXT    DEFAULT NULL,
+    needs_full_sync     INTEGER NOT NULL DEFAULT 0,
+    last_sync_at        TEXT    DEFAULT NULL,
+    created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_write_target
+    ON collections(is_write_target) WHERE is_write_target = 1;
+
+-- ============================================================
 -- pages: the core content table
 -- ============================================================
 CREATE TABLE IF NOT EXISTS pages (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug            TEXT    NOT NULL UNIQUE,
+    -- DEFAULT 1 routes legacy inserts to the default collection (id=1).
+    -- A matching ensure_default_collection() call in db.rs guarantees the row exists.
+    collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+    slug            TEXT    NOT NULL,
+    -- NULL until UUID lifecycle (tasks 5a.*) is fully wired; allows NULL so
+    -- legacy INSERT helpers that omit uuid continue to work.
+    uuid            TEXT    DEFAULT NULL,
     type            TEXT    NOT NULL,
     -- Valid types: person, company, deal, yc, civic, project, concept, original,
     --              source, media, decision, commitment, action_item
@@ -30,17 +57,24 @@ CREATE TABLE IF NOT EXISTS pages (
     wing            TEXT    NOT NULL DEFAULT '',
     room            TEXT    NOT NULL DEFAULT '',
     version         INTEGER NOT NULL DEFAULT 1,
+    quarantined_at  TEXT    DEFAULT NULL,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(collection_id, slug)
 );
 
+-- Partial index: SQLite allows multiple NULLs in unique indexes, but being
+-- explicit here avoids confusion when uuid is still unset.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pages_collection ON pages(collection_id);
 CREATE INDEX IF NOT EXISTS idx_pages_type     ON pages(type);
-CREATE INDEX IF NOT EXISTS idx_pages_slug     ON pages(slug);
+CREATE INDEX IF NOT EXISTS idx_pages_slug     ON pages(collection_id, slug);
 CREATE INDEX IF NOT EXISTS idx_pages_updated  ON pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_pages_wing     ON pages(wing);
 CREATE INDEX IF NOT EXISTS idx_pages_wing_room ON pages(wing, room);
+CREATE INDEX IF NOT EXISTS idx_pages_quarantined ON pages(quarantined_at) WHERE quarantined_at IS NOT NULL;
 
 -- ============================================================
 -- page_fts: full-text search over compiled_truth + timeline
@@ -57,7 +91,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS page_fts USING fts5(
 
 CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
     INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
-    VALUES (new.id, new.title, new.slug, new.compiled_truth, new.timeline);
+    SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
+    WHERE new.quarantined_at IS NULL;
 END;
 
 CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
@@ -69,7 +104,8 @@ CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
     INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
     VALUES ('delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline);
     INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
-    VALUES (new.id, new.title, new.slug, new.compiled_truth, new.timeline);
+    SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
+    WHERE new.quarantined_at IS NULL;
 END;
 
 -- ============================================================
@@ -126,6 +162,7 @@ CREATE TABLE IF NOT EXISTS links (
     to_page_id      INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     relationship    TEXT    NOT NULL DEFAULT 'related',
     context         TEXT    NOT NULL DEFAULT '',
+    source_kind     TEXT    NOT NULL DEFAULT 'programmatic' CHECK(source_kind IN ('wiki_link', 'programmatic')),
     valid_from      TEXT    DEFAULT NULL,
     valid_until     TEXT    DEFAULT NULL,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -135,6 +172,7 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE INDEX IF NOT EXISTS idx_links_from    ON links(from_page_id);
 CREATE INDEX IF NOT EXISTS idx_links_to      ON links(to_page_id);
 CREATE INDEX IF NOT EXISTS idx_links_current ON links(valid_until);
+CREATE INDEX IF NOT EXISTS idx_links_source  ON links(source_kind);
 
 -- ============================================================
 -- assertions: heuristic contradiction detection
@@ -231,17 +269,56 @@ CREATE TABLE IF NOT EXISTS import_manifest (
 );
 
 -- ============================================================
--- ingest_log: idempotency audit trail
+-- ingest_log: per-file SHA-256 idempotency audit trail.
+-- Kept for compatibility with the import/ingest/embed commands;
+-- will be removed when the reconciler slice replaces gbrain import.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ingest_log (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ingest_key    TEXT    NOT NULL UNIQUE,
-    source_type   TEXT    NOT NULL,
-    source_ref    TEXT    NOT NULL,
-    pages_updated TEXT    NOT NULL DEFAULT '[]',
-    summary       TEXT    NOT NULL DEFAULT '',
-    completed_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingest_key   TEXT    NOT NULL UNIQUE,   -- SHA-256 of raw file bytes
+    source_type  TEXT    NOT NULL,          -- 'file' | 'stdin'
+    source_ref   TEXT    NOT NULL DEFAULT '',
+    pages_updated TEXT   NOT NULL DEFAULT '[]',
+    summary      TEXT    NOT NULL DEFAULT '',
+    completed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_ingest_log_key ON ingest_log(ingest_key);
+
+-- ============================================================
+-- file_state: stat-based change detection for vault sync
+-- ============================================================
+CREATE TABLE IF NOT EXISTS file_state (
+    collection_id   INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    relative_path   TEXT    NOT NULL,
+    page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    mtime_ns        INTEGER NOT NULL,
+    ctime_ns        INTEGER DEFAULT NULL,
+    size_bytes      INTEGER NOT NULL,
+    inode           INTEGER DEFAULT NULL,
+    sha256          TEXT    NOT NULL,
+    last_seen_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    last_full_hash_at TEXT  NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (collection_id, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_state_sha256 ON file_state(sha256);
+CREATE INDEX IF NOT EXISTS idx_file_state_audit ON file_state(last_full_hash_at);
+CREATE INDEX IF NOT EXISTS idx_file_state_page ON file_state(page_id);
+
+-- ============================================================
+-- embedding_jobs: persistent queue for async embedding work
+-- ============================================================
+CREATE TABLE IF NOT EXISTS embedding_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    priority    INTEGER NOT NULL DEFAULT 0,
+    enqueued_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at  TEXT    DEFAULT NULL,
+    UNIQUE(page_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue ON embedding_jobs(priority DESC, enqueued_at);
 
 -- ============================================================
 -- config: mutable runtime defaults
@@ -252,7 +329,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '4'),
+    ('version',               '5'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
@@ -265,7 +342,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
 CREATE TABLE IF NOT EXISTS contradictions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id       INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
-    other_page_id INTEGER REFERENCES pages(id) ON DELETE SET NULL,
+    other_page_id INTEGER REFERENCES pages(id) ON DELETE CASCADE,
     type          TEXT    NOT NULL,
     description   TEXT    NOT NULL,
     detected_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -273,6 +350,7 @@ CREATE TABLE IF NOT EXISTS contradictions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contradictions_page       ON contradictions(page_id);
+CREATE INDEX IF NOT EXISTS idx_contradictions_other_page ON contradictions(other_page_id);
 CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resolved_at)
     WHERE resolved_at IS NULL;
 
@@ -284,6 +362,7 @@ CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resol
 -- ============================================================
 CREATE TABLE IF NOT EXISTS knowledge_gaps (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id          INTEGER DEFAULT NULL REFERENCES pages(id) ON DELETE CASCADE,
     query_hash       TEXT    NOT NULL,   -- SHA-256 of original query, always stored
     query_text       TEXT    DEFAULT NULL,  -- raw text retained only after approval
     context          TEXT    NOT NULL DEFAULT '',
@@ -301,5 +380,6 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_gaps_query_hash ON knowledge_gaps(query_hash);
+CREATE INDEX IF NOT EXISTS idx_gaps_page ON knowledge_gaps(page_id) WHERE page_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_gaps_unresolved ON knowledge_gaps(resolved_at)
     WHERE resolved_at IS NULL;
