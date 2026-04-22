@@ -8,6 +8,30 @@
 ## Learnings
 
 - `docs\spec.md` is the primary product spec.
+- For a breaking schema change, the schema DDL update + test fixture update must be atomic.
+- When a spec replaces an entire ingest path (import.rs → reconciler.rs), the new path must be complete before removal.
+- IPC security surfaces need adversarial review (Nibbler) before implementation, not after.
+
+## Vault Sync Engine Breakdown — 2026-04-22
+
+**Session:** macro88 directed team to treat `openspec\changes\vault-sync-engine` as next major enhancement with >90% test coverage.
+
+**What was analyzed:**
+- Full `openspec/changes/vault-sync-engine` spec: proposal.md, design.md, tasks.md (370+ tasks, 18 groups), 3 sub-specs, current v4 schema.
+
+**Architecture decisions:**
+- v4→v5 is breaking schema change. Every test, every page-touching module, entire ingest path affected from first commit.
+- Keep as ONE OpenSpec change, implement in 3 gated PRs: Foundation (Waves 1–2) → Live Engine (Waves 3–5) → Full Surface (Waves 6–7, 9).
+- Critical path: Schema → Collections → Reconciler → Watcher+brain_put → Commands/Serve → MCP.
+- Highest-risk: two-phase restore/remap defense (task 5.8), brain_put crash-safety/IPC security (task 12.6), watcher overflow constraint (task 6.7a).
+
+**First execution batch (PR A foundation):** Tasks 1.1–1.6, 2.1–2.6, 2.4a–d, 3.1–3.7, 4.1–4.4, 5a.1–5a.4a, 17.1–17.4. Scope: ~1 week, Fry owns. Does NOT touch watcher, reconciler, brain_put, MCP handlers.
+
+**10 open questions with recommendations:** branch strategy (fresh feature branches), active in-flight work (resolve v0.9.3/v0.9.4 first), Windows CI gate, Nibbler IPC pre-review, raw_imports audit, macOS CI, Cargo.toml deps, import removal lint, coverage hard gate `cargo llvm-cov --fail-under-lines 90`, user v4 migration messaging.
+
+**Team routing:** Nibbler reviews IPC security (12.6c–g) before Wave 5. Bender + Scruffy track 90%+ coverage every PR. Resolve 10 questions before/during Wave 1.
+
+**Artifact:** `.squad/decisions/inbox/leela-vault-sync-breakdown.md` (305 lines, complete execution roadmap)
 
 ## Core Context
 

@@ -3239,3 +3239,220 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 - ✅ PR #33 open and ready for merge
 
 **Status:** Ready for merge and v0.9.1 release
+
+---
+
+## 2026-04-22: User Directive — Vault-Sync-Engine as Next Major Enhancement
+
+**By:** macro88 (via Copilot)
+
+**What:** Treat `openspec\changes\vault-sync-engine` as the direction for GigaBrain's next major enhancement. Plan the work to achieve above 90% overall test coverage.
+
+**Why:** User request — captured for team memory and routing to Leela/Scruffy exploration.
+
+**Status:** Routed to Leela (decomposition) and Scruffy (coverage assessment).
+
+---
+
+## 2026-04-22: Vault-Sync-Engine Execution Breakdown — Leela Analysis
+
+**By:** Leela
+
+**What:** Complete decomposition of the `vault-sync-engine` OpenSpec change (370+ tasks, 18 groups, v4→v5 breaking schema change) into 9 implementation waves with 3 gated PRs.
+
+**Findings:**
+
+1. **Architecture:** Schema v5 is the foundation; Waves 1–2 (schema + collections model + FS safety + UUID + ignore) must land before Waves 3–5 (reconciler + watcher + brain_put). Waves 6–7 (MCP/CLI/commands) depend on 1–5. Wave 8 (testing) runs in parallel. Wave 9 (legacy removal + docs) is last.
+
+2. **Critical path:** Schema → Collections → Reconciler → Watcher+brain_put → Commands/Serve → MCP. Waves 3, 4, 5 are highest-risk.
+
+3. **Highest-risk items:**
+   - Wave 3 (task 5.8): two-phase restore/remap defense — multi-phase restore with lease coordination, stability checks, fence diffs. Single most complex algorithm in spec.
+   - Wave 5 (task 12.6): brain_put crash-safety + IPC socket security. 13-step rename-before-commit, recovery sentinel lifecycle, 5 attack scenarios.
+   - Wave 4 (task 6.7a): watcher overflow real-time constraint (needs_full_sync → full_hash_reconcile within ~1s).
+   - Wave 6 (tasks 11.1–11.9): RCRT (Restoring-Collection Retry Task) + online restore handshake.
+
+4. **Implementation slicing:** Keep as ONE OpenSpec change (internally consistent), but implement in 3 gated PRs:
+   - **PR A — Foundation:** Waves 1–2 (schema v5, collections CRUD, fs_safety, UUID lifecycle, ignore patterns, foundation tests). Exit gate: `cargo test` passes; v5 schema; collection CRUD works; parse_slug unit tests pass.
+   - **PR B — Live Engine:** Waves 3–5 (reconciler, watcher, brain_put, engine tests). Exit gate: crash-safety tests pass; watcher 2s latency test passes; reconciler integration tests pass.
+   - **PR C — Full Surface:** Waves 6–7, 9 (commands, serve, MCP awareness, legacy removal, docs). Exit gate: `gbrain collection add <vault>` → MCP query returns fresh content within 2s; 90%+ coverage gate; import.rs removed.
+
+5. **First execution batch (PR A foundation):** Tasks 1.1–1.6, 2.1–2.6, 2.4a–2.4d, 3.1–3.7, 4.1–4.4, 5a.1–5a.4a, 17.1–17.4. Scope: ~1 week, Fry owns implementation. Does NOT touch watcher, reconciler, brain_put, or MCP handlers.
+
+6. **Open questions with recommendations:**
+   - Branch strategy: cut fresh feature branches from contributor's branch (spec source).
+   - Active in-flight work: resolve v0.9.3/v0.9.4 BEFORE starting vault-sync-engine to avoid schema merge conflicts.
+   - Windows CI: add `cargo check --target x86_64-pc-windows-gnu` in PR A to verify platform gate compiles.
+   - IPC security: Nibbler pre-implementation adversarial review (tasks 12.6c–g) before Wave 5 begins.
+   - raw_imports audit: explicit callsite audit pass (task 5.4d) before Wave 3.
+   - macOS CI: add macOS runner for vault-sync test suite (fd-relative syscalls behave differently).
+   - Cargo.toml deps: dry-run `cargo add` for conflicts (notify, ignore, globset, rustix, uuid v7).
+   - Import removal lint: CI verifies no `.md` references to `gbrain import` unless `import.rs` exists (gate on task 15.4).
+   - Coverage hard gate: add `cargo llvm-cov --fail-under-lines 90` as hard CI gate in PR A.
+   - User v4 migration: re-init error should be loud, mention `gbrain export` escape hatch for existing vaults.
+
+**Decision:** Implement as 1 OpenSpec in 3 gated PRs. Start with PR A foundation batch (~1 week). Nibbler reviews IPC security (12.6) before Wave 5 begins. Bender + Scruffy track 90%+ coverage with every PR. Resolve 10 open questions before/during Wave 1.
+
+---
+
+## 2026-04-22: Vault-Sync-Engine Coverage Assessment — Scruffy Analysis
+
+**By:** Scruffy
+
+**What:** Assessed current CI/coverage surface against `vault-sync-engine` requirements; flagged ambiguity in >90% coverage denominator; recommended practical coverage bar.
+
+**Findings:**
+
+1. **Current baseline:** `cargo llvm-cov report` shows `src/**` at **88.71% line coverage**. CI job is informational only (no enforced threshold, uploads to Codecov with `fail_ci_if_error: false`). Biggest legacy sinks: `src/main.rs`, `src/commands/call.rs`, `src/commands/timeline.rs`, `src/commands/query.rs`, `src/commands/skills.rs`.
+
+2. **Vault-sync surfaces:** New stateful surfaces (watchers, reconciliation, restore/finalize, write-through recovery, collection routing) can achieve 90%+ line coverage on their seams (unit + deterministic integration).
+
+3. **Coverage denominator ambiguity:** User requirement ">90% overall" is undefined in 3 dimensions:
+   - **Denominator:** `src` only vs all Rust including tests?
+   - **Feature scope:** default only vs default + online-model channels?
+   - **OS scope:** Ubuntu-only coverage vs unsupported Windows paths (`#[cfg(unix)]` fd-relative syscalls)?
+
+4. **Repo-wide gate cost:** Promising repo-wide >90% without legacy backfill would force unrelated cleanup (CLI orchestration files are ~11% coverage). Cannot be done without explicit backfill scope or denominator restriction.
+
+5. **Practical recommendation — two-tier approach:**
+   - **Tier 1 (per-PR for new/touched vault-sync surfaces):** ≥90% line coverage at seam (unit + deterministic integration).
+   - **Tier 2 (repo-wide reporting):** Continue informational coverage reporting. Do NOT promise hard repo-wide gate unless team explicitly accepts:
+     - Legacy backfill work (likely 0.5–1 day to get CLI files to 90%), OR
+     - Denominator restriction (e.g., "src only, not tests", or "default features only")
+
+**Decision:** Treat >90% overall as ambiguous until scope is explicitly defined. Add `cargo llvm-cov --fail-under-lines 90` hard gate in PR A (configurable denominator per scope decision). Define scope: backfill or denominator restriction?
+
+---
+
+## 2026-04-19: PR #46 Final Validation — Bender
+
+**By:** Bender (Tester)
+
+**What:** Final test/validation review of Scruffy's revision (1da8443) — install profile flow. The fake seam is gone.
+
+**Findings:** Old T19 tested a copied `detect_profile()` function body. New T19 re-sources `install.sh`, creates a real unwritable directory (`chmod 500`), sets `HOME` to it, calls `main()` — the real entry path. Production `detect_profile` runs, hits the real filesystem constraint, and fails genuinely.
+
+**Verification:** 25/25 tests pass. CI (commit 1da8443) all 12 check runs green. Codecov 86.98%, no regression. Profile file NOT created in unwritable directory. Installer failure-path contract proven end-to-end through real `main()` function with real filesystem constraints.
+
+**Decision:** ✅ APPROVE. Cleared for merge.
+
+---
+
+## 2026-04-19: PR #47 Validation — Blocker Status (Bender)
+
+**By:** Bender
+
+**What:** Validation against Professor and Nibbler review blocking findings for PR #47 (configurable embedding model).
+
+**Blocker Status:** Three HIGH blockers remain unfixed (commit `96807dd`):
+
+1. **Atomic active-model registry transition is non-atomic** (`src/core/db.rs:182-207`). Two separate autocommit statements can have zero active models between them. Risk: concurrent reader sees broken state; crash leaves DB permanently broken. Fix: wrap both statements in single transaction (same pattern as `write_brain_config`).
+
+2. **Shared temp-file race on concurrent cold-start downloads** (`src/core/inference.rs:659-702`). Downloads use fixed temp file names (e.g., `config.json.download`). Two concurrent processes can clobber each other. Fix: use unique temp file names (append thread ID/random suffix) OR per-model download lock.
+
+3. **Online-model CI tests are not hermetic** (`.github/workflows/ci.yml:70-71`). No `GBRAIN_FORCE_HASH_SHIM=1` env var in CI online-model job. Tests attempt real Hugging Face downloads (300s timeouts), making CI flaky/slow. Fix: set `GBRAIN_FORCE_HASH_SHIM=1` in online-model test job environment.
+
+**Validation Plan:** Once fixes land, verify:
+- `cargo test db::tests::ensure_embedding_model_registry` passes (atomic)
+- `cargo test concurrent_download_safety` or manual check temp-file uniqueness (safety)
+- CI online-model job completes in <60s with no network calls (hermetic)
+
+**Recommendation to Fry:** Apply in order: atomic registry flip (easiest) → hermetic CI (low-risk) → concurrent download safety (most complex). Re-run tests after each fix. Ping Bender for full validation once all three close.
+
+**Decision:** BLOCKED. High-severity defects must be fixed before merge.
+
+---
+
+## 2026-04-19: PR #46 Revision — Install Profile Flow (Bender re-re-revision)
+
+**By:** Bender (Tester)
+
+**What:** Re-re-revision of PR #46 after Fry, Leela, Mom revisions. Three categories of defect corrected:
+
+1. **T10–T13 tested copied function.** `detect_profile()` was pasted into test file instead of re-sourced from `install.sh`. If production code changed, tests would silently pass against stale logic. Fixed: re-source `install.sh` to restore ALL production functions.
+
+2. **No end-to-end `GBRAIN_NO_PROFILE=1` → `main()` coverage.** T16 verified env-var-to-variable propagation; T14 verified `--no-profile` through `main()`. But no test ran `main()` with the env var set. Fixed: new T17 re-sources `install.sh` with `GBRAIN_NO_PROFILE=1`, applies stubs, calls `main()`, asserts profile is empty.
+
+3. **Env vars on wrong side of `curl ... | sh` pipe.** Five examples and two hints placed `GBRAIN_VERSION`, `GBRAIN_CHANNEL`, `GBRAIN_INSTALL_DIR` on `curl` side (which ignores them) rather than `sh` side (which reads them). Fixed: all six examples + hints corrected to `curl ... | VAR=val sh`.
+
+**Verification:** 21/21 shell tests pass (was 20, +1 new T17). All cargo tests pass. No remaining `GBRAIN_*` env vars on `curl` side of any executable example.
+
+**Scope:** Test fidelity and doc correctness only. No production logic changed. OpenSpec tasks.md A.2/A.3/A.4 aligned with actual `write_profile_line(profile, line)` signature.
+
+**Decision:** MERGED. Test seams eliminated; doc examples correct.
+
+---
+
+## 2026-04-16: PR #32 Decision — npm Bin Wrapper Pattern (Fry)
+
+**By:** Fry
+
+**What:** PR #32 review flagged that `bin/gbrain` didn't exist at npm install time, causing bin-linking failures. Decision: ship a committed POSIX shell wrapper at `packages/gbrain-npm/bin/gbrain` that:
+1. Checks for `gbrain.bin` (native binary downloaded by postinstall.js)
+2. If found, `exec`s it with all arguments forwarded
+3. If not found, prints clear manual-install fallback message to stderr and exits 1
+
+**Rationale:** npm creates bin symlinks before postinstall runs — target file must exist at pack time. Wrapper gracefully handles postinstall skip (unsupported platform, network failure, CI). Users get actionable error instead of "command not found".
+
+**Implementation:** postinstall.js writes downloaded binary to `bin/gbrain.bin` (not `bin/gbrain`), so wrapper is never overwritten. `.gitignore` tracks `gbrain.bin` and `gbrain.download`; wrapper itself is version-controlled.
+
+**Scope:** `packages/gbrain-npm/` package only. No impact on shell installer or Cargo binary.
+
+**Decision:** MERGED. npm bin wrapper pattern locked.
+
+---
+
+## 2026-04-17: PR #33 CI Feedback — Mutually Exclusive Features (Fry)
+
+**By:** Fry
+
+**What:** PR #33 CI failure on `release/v0.9.1-dual-release`. Problem: `cargo clippy --all-features` and `cargo llvm-cov --all-features` enable both `embedded-model` and `online-model` simultaneously, hitting `compile_error!()` guard in `src/core/inference.rs`. Features are mutually exclusive compile-time channels.
+
+**Decision:**
+1. **Clippy:** Run two separate passes — one with default features (airgapped), one with `--no-default-features --features bundled,online-model` (online). Validates both channels independently.
+2. **Coverage:** Run with default features only. Full coverage of both channels requires two separate coverage runs; deferred unless needed.
+3. **BERT truncation:** `embed_candle()` now truncates tokenizer output to 512 tokens (BGE-small-en-v1.5 `max_position_embeddings`). Prevents OOB panics on long BEIR documents without changing embedding quality for short inputs.
+
+**Impact:**
+- CI Check job passes on both channels
+- BEIR regression job no longer crashes on long documents
+- Coverage job runs default features only (slightly less coverage, but no false failure)
+
+**For Bender:** Re-check (1) both clippy steps pass in CI, (2) BEIR regression job completes without index-select crash, (3) `install.sh` mktemp behavior on macOS (the `-t` fallback flag).
+
+**Decision:** MERGED. Dual-channel CI pattern locked.
+
+---
+
+## 2026-04-19: v0.9.3 Routing — DAB Benchmark Triage to v0.9.4 (Leela)
+
+**By:** Leela (Lead)
+
+**What:** Doug's DAB v1.0 benchmark run (issue #56) on GigaBrain v0.9.1 scored 133/200. Issues #52, #53, #54, #55, #38 filed. Mapping each issue to proposal lane, cross-check against current repo state (v0.9.2 main), and defining v0.9.4 ship gates.
+
+**Lane Decisions:**
+
+1. **`fts5-search-robustness` (covers #52, #53)** — NEW lane. Root cause: `sanitize_fts_query` applied only in `hybrid_search` path (`gbrain query`). `gbrain search` calls `search_fts` raw, as does MCP `brain_search` tool. Both still crash on `?`, `'`, `%`. Fix: apply sanitizer in `src/commands/search.rs` (default on, `--raw` flag bypass); apply in MCP `brain_search` handler; emit `{"error":...}` JSON on raw errors. Gate: `gbrain search "what is CLARITY?"` and `gbrain search --json "gpt-5.4 codex model"` must pass.
+
+2. **`assertion-extraction-tightening` (covers #38, conditional #55)** — EXISTING. Root cause: `extract_from_content` in `src/core/assertions.rs` runs regex across entire `compiled_truth` body. Any prose matching `is_a`, `works_at`, or `founded` patterns becomes contradiction participant. Fix Phase A: scope to `## Assertions` section + frontmatter fields only; add min object-length guard; frontmatter tier-1 extraction. Phase E (semantic gate for #55) is CONDITIONAL: rerun benchmark after Phase A lands; only implement if false-positive rate remains material. Routing: Professor implements, Nibbler does adversarial review (high risk — changes runtime extraction).
+
+3. **#54 — CLOSED** — `import-type-inference` fully implemented in v0.9.2 (PR #48). PARA type inference works. Close issue #54.
+
+**Near-complete lanes to include in v0.9.4:**
+- `configurable-embedding-model` (2/29 tasks remaining)
+- `bge-small-dual-release-channels` (2/14 tasks remaining)
+- `simplified-install` (1/18 tasks remaining)
+
+**v0.9.4 Ship Gates:**
+1. `gbrain search "what is CLARITY?"` → exits 0
+2. `gbrain search --json "gpt-5.4 codex model"` → exits 0, valid JSON
+3. `gbrain check --all` on 350+ page PARA vault → zero contradiction floods
+4. `gbrain import` on PARA vault → type distribution reflects folder structure
+5. Full `cargo test` green on `release/v0.9.3`
+6. Three near-complete lanes complete or confirmed merged
+
+**Branch strategy:** `release/v0.9.3` = implementation branch (all v0.9.4 fixes land here, created from main v0.9.2). `release/v0.9.4` = tagged from v0.9.3 after gates pass.
+
+**Semantic/Hybrid quality note:** Doug's crypto/finance paraphrase misses are model quality issue, not vault-sync. `configurable-embedding-model` lets users switch to `bge-base` or `bge-m3` for higher recall. Future benchmark lane (`kif-model-comparison`) should run DAB against small/base/m3 to establish baselines. Do NOT gate v0.9.4 on §4 improvement.
+
+**Decision:** Route five issues to lanes; resolve in v0.9.4 ship gates; complete near-complete lanes.

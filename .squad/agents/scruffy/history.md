@@ -10,13 +10,33 @@
 - The team wants high unit-test coverage, not token test presence.
 - Proposal-first work helps define the invariants tests must guard.
 - Coverage depth is a first-class role in this squad.
-- Coverage review is not just artifact existence; README/docs must point to the same free GitHub coverage surface, and status wording must stay synchronized across repo docs.
-- Benchmark reproducibility review needs two layers: rerun offline gates twice for stable pass/fail behavior, then verify the pinned-data story is real (lockfile consumed, hashes finalized, baselines established).
-- For CI-gated benchmark reproducibility, compare pass/ignore counts across reruns and treat wall-clock durations as noise unless the harness explicitly gates latency.
-- `scripts/install.sh` must stay LF-normalized; CRLF line endings break POSIX `sh` execution under WSL before any installer logic runs.
-- Cross-platform installer validation from Windows works best with repo-scoped `TMPDIR` paths in WSL plus PATH-injected fake tools for shell error branches, and small Node harnesses with platform overrides for `postinstall.js` network branches.
-- `packages/gbrain-npm/package.json` currently targets the unscoped public package name `gbrain`, but npm already serves `gbrain@1.3.1`, so `npm publish --dry-run` rejects `gbrain@0.9.0` before token handling.
-- `packages/gbrain-npm/scripts/postinstall.js` currently hardcodes `v${package.version}` as its release tag target; with no `v0.9.0` GitHub Release present in `macro88/gigabrain`, supported-platform installs would currently 404.
+- Vault-sync adds large new stateful surfaces (watchers, reconciliation, restore/finalize, collection routing) — must track separately from repo legacy backfill.
+- Coverage denominator ambiguity (src only? all Rust? which features? which platforms?) blocks hard gate enforcement — scope must be explicit first.
+
+## 2026-04-22 Vault-Sync-Engine Coverage Assessment
+
+**Session:** macro88 directed team to treat `openspec\changes\vault-sync-engine` as next major enhancement with >90% test coverage.
+
+**Coverage baseline audit:** Current `cargo llvm-cov report` shows `src/**` at **88.71% line coverage**. CI job is informational only (no enforced threshold). Biggest legacy sinks: `src/main.rs`, `src/commands/call.rs`, `src/commands/timeline.rs`, `src/commands/query.rs`, `src/commands/skills.rs`.
+
+**Vault-sync surfaces:** New stateful surfaces (watchers, reconciliation, restore/finalize, write-through recovery, collection routing) can achieve ≥90% line coverage on their seams (unit + deterministic integration).
+
+**Coverage denominator ambiguity — FLAGGED:** User requirement ">90% overall" is undefined in 3 dimensions:
+- **Denominator:** `src` only vs all Rust including tests?
+- **Feature scope:** default only vs default + online-model channels?
+- **OS scope:** Ubuntu-only (current CI) vs unsupported Windows paths (`#[cfg(unix)]` fd-relative syscalls)?
+
+**Repo-wide gate cost:** Promising >90% without legacy backfill would force unrelated cleanup (CLI orchestration files ≈11% coverage). Requires explicit backfill scope or denominator restriction.
+
+**Two-tier coverage approach recommended:**
+1. **Tier 1 (per-PR for new/touched vault-sync surfaces):** ≥90% line coverage at seam (unit + deterministic integration).
+2. **Tier 2 (repo-wide reporting):** Continue informational coverage reporting. Do NOT promise hard repo-wide gate unless explicit scope decision: backfill work (0.5–1 day) OR denominator restriction (src only? default features only?).
+
+**CI gate recommendation:** Add `cargo llvm-cov --fail-under-lines 90` hard gate in PR A (configurable denominator per scope decision).
+
+**Decision:** Treat >90% overall as ambiguous until scope explicitly defined. Recommend two-tier approach with per-PR seam coverage (≥90%) and deferred repo-wide scope decision.
+
+**Artifact:** `.squad/decisions/inbox/scruffy-vault-sync-coverage.md` (24 lines, flags ambiguity with practical recommendations)
 
 ## 2026-04-16 Phase 3 — Benchmark Reproducibility Review (Task 8.4)
 
