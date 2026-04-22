@@ -7,6 +7,8 @@
 
 ## Learnings
 
+- **Batch B repair (2026-04-22):** Safety-critical stubs must fail explicitly. `has_db_only_state` returning `Ok(false)` is worse than returning an error — it grants a "safe to delete" verdict for every page silently. Prefer `Err("not yet implemented")` over any success-shaped default on a predicate that gates data destruction. This is the Rust-best-practices "explicit error behavior, no success-shaped stubs for safety paths" rule in concrete form.
+- **Framing discipline:** "replaces X" in a module header comment creates false expectations if X is still live. The honest framing is "will replace X once tasks N–M land". Review every new-module header comment for present-tense claims that aren't yet true before gate approval.
 - Third-author gate verification: when Professor claims "no-side-effects" on legacy refusal, verify by checking that v5 DDL tables are absent post-rejection, not just that an error was returned.
 - Gate approval requires `cargo test` + `cargo clippy -- -D warnings` both clean; `cargo fmt` is implicitly validated when clippy passes.
 - After a foundation approval, route Groups 3–5 (ignore patterns, file state, reconciler) as the next implementation batch; 2.4a (`rustix` dep) must arrive with or before 4.2 since `stat_file` needs `fstatat`.
@@ -15,6 +17,8 @@
 - When a spec replaces an entire ingest path (import.rs → reconciler.rs), the new path must be complete before removal.
 - IPC security surfaces need adversarial review (Nibbler) before implementation, not after.
 - When a foundation slice is rejected with 181 test failures, a focused repair pass (not a full rewrite) can fix all blockers in one coordinated cycle if: legacy defaults are prioritized, schema compatibility shims are kept, and all write paths (upsert/filter) are wired together.
+- Batch gate claims "test suites passed" but the gate also requires `cargo clippy -- -D warnings` clean. New scaffolding modules (not yet wired to commands) must include `#![allow(dead_code)]` — the same pattern reconciler.rs uses — or clippy will reject the build with unused-item errors. Verify both independently; don't conflate test-pass with gate-pass.
+- When a scaffold batch honestly admits stubs (reconciler returns empty stats, has_db_only_state returns false), APPROVE if: the stubs are clearly marked with comments citing the task IDs for full implementation, no live code path calls the stub in a way that silently degrades behavior, and the contract types are correct. False-positive quarantine suppression from a non-functional reconciler is not a risk until the reconciler walk is wired.
 
 ## 2026-04-22 Vault Sync Foundation Repair Pass
 
@@ -716,3 +720,24 @@ Key lessons:
 - A schema change adding NOT NULL FKs is never complete until ALL write paths supply the column. Use DEFAULT or nullable when lifecycle is incomplete.
 - Removing a table that existing code depends on is two-step: (1) replace dependents, (2) drop table. Never in one step.
 - Marking tasks as done when downstream insert sites are incomplete is an integrity violation. Reviewers treat checkboxes as verified guarantees.
+
+## 2026-04-22 Vault Sync Batch B Narrow Repair
+
+**Session:** 20260422-191436 (Leela narrow repair pass)
+
+**What happened:**
+- Professor gated Batch B on two safety-critical issues: has_db_only_state() returning Ok(false) (success-shaped default on a delete-protecting predicate) and module header claiming reconciler "replaces" import_dir when migrate::import_dir() is still live.
+- Leela applied focused repair: changed has_db_only_state() to return explicit Err("not yet implemented..."), updated module header to "WILL replace" with clarifying timeline, updated task 5.1 completion note for consistency.
+
+**Three decisions recorded:**
+1. **D1: has_db_only_state Error Semantics** — Safety-critical stub returns Err, forcing explicit error handling instead of silent "safe to delete" assumption
+2. **D2: Module Documentation Accuracy** — "Will replace" + timeline vs. "replaces"; clarifies which path is live
+3. **D3: Task 5.1 Truthfulness** — Completion note separates "file created" (✅ complete) from "replace logic wired" (Batch C/task 5.5)
+
+**Outcome:**
+- cargo test: 0 failures (442 lib + 40 integration, both channels)
+- Batch B gate now clean
+- Decisions merged to canonical ledger
+- Inbox cleared; orchestration and session logs written
+
+**Key learning:** Safety-critical predicates must not have success-shaped defaults when unimplemented. Explicit error failure mode is self-documenting and prevents accidental wiring before completion. This reinforces Rust best practices: deferred work must be loudly failed, not silently safe.

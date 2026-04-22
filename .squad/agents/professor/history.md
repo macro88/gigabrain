@@ -15,6 +15,8 @@
 - A repair pass is still rejectable when `tasks.md` is updated but proposal/design artifacts continue to describe a different contract; reviewer truthfulness is proposal-first, not task-note-first.
 - Full green tests do not clear a schema slice if legacy-open paths still mutate an old database before refusing it; preflight safety must happen before any v5 DDL side effects.
 - When a foundation slice keeps a temporary compatibility shim, proposal/design text must say so explicitly; a repair note in tasks.md is not enough to clear truthfulness review.
+- A batch can be truthful about partial implementation and still be rejectable if a public scaffold on a safety-critical path returns benign success values instead of making deferral explicit.
+- For vault-sync work, stubbed reconciler entry points should fail loudly or stay clearly unwired; returning empty stats or `false` for DB-only-state checks is too easy to mistake for real behavior.
 
 ## 2026-04-14 Update
 
@@ -168,3 +170,19 @@
 - Result: 181 test failures → **0 failures**, foundation ready for follow-on implementation.
 
 **Review lesson:** Rejection + repair cycle is faster than rewrite when the core issue is integration (wiring paths, not design). Gave Leela clear blocker list → she fixed atomically → no rework needed. Schema v5 foundation now coherent and test-clean.
+
+## 2026-04-22 Batch B Narrow Repair Gate Clear
+
+**Session:** Scribe decision merge + Leela narrow repair completion logging
+
+**Review outcome:**
+- Professor's gating feedback on Batch B (safety-critical reconciler semantics + documentation accuracy) was resolved via focused repair pass by Leela.
+- Repair scope: strict reconciler scaffold surface (reconciler.rs, tasks.md). No Batch C logic, no expand of approved groups.
+- Safety semantics fix: has_db_only_state() now returns explicit Err instead of Ok(false), forcing caller error handling.
+- Documentation fix: module header now accurately describes "will replace" (future) vs. "replaces" (completed).
+
+**Decision ledger:**
+- Leela's three repair decisions merged to canonical decisions.md (gate decision, repair decision, original review decision now in record)
+- Decisions inbox cleared; Scribe orchestration/session logs written
+
+**Batch B status:** ✅ Gate clean, ready for Batch C implementation planning. Professor can now sign off on Group 3 (ignore_patterns), Group 4 (file_state), and Group 5.1 scaffold landing.
