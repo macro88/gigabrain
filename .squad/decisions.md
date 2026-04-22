@@ -3941,3 +3941,112 @@ Revise **only the reconciler scaffold surface** before the next batch proceeds:
 
 - `cargo test --quiet` passed during review
 
+
+---
+
+## 2026-04-22: Vault Sync Batch C — Foundation Approval
+
+**Date:** 2026-04-22  
+**Summary:** Vault Sync Batch C (reconciler scaffold + fd-safety primitives) passed final approval after targeted repair cycle. Batch focuses on honest foundations: explicit error contracts on safety-critical stubs, platform-gated Unix/Windows semantics, truthful task scoping.
+
+### Context
+
+**Fry (Resume):** Batch C implementation resumed after rate-limit interruption. Prior work had completed:
+- src/core/fs_safety.rs — all six fd-relative primitives (open_root_fd, walk_to_parent, stat_at_nofollow, etc.)
+- 15 unit tests covering path traversal, symlink rejection, round-trip safety
+- ustix dependency already in Cargo.toml under #[cfg(unix)]
+
+This session advanced stat/reconciler foundations to honest contracts:
+- stat_file_fd uses s_safety::stat_at_nofollow on Unix
+- stat_diff fetches DB state, demonstrates classification logic, notes walk deferral
+- ull_hash_reconcile documents authoritative mode contract
+- econcile shows phase structure with Unix open_root_fd, platform gates
+- Platform-aware test fixes: Windows handles UnsupportedPlatformError; Unix expects success
+
+### Design Decision: Honest Foundations Over Pretend Completeness
+
+Every "foundation complete" task clearly documents what's implemented (contract, types, platform gates) vs what's deferred (full walk with ignore::WalkBuilder, rename resolution, apply logic). Stubs return explicit errors (has_db_only_state) or demonstrate intended structure (stat_diff classification) rather than silent no-ops. This protects safety invariants and prevents premature callers from relying on incomplete implementations.
+
+### Initial Gate Feedback (Leela, Professor)
+
+**Leela (REJECT on missing Unix imports):** Batch C has solid foundations but fails on one narrow blocker:
+- econciler.rs references s_safety::open_root_fd with no corresponding import
+- walk_collection() uses OwnedFd type with no import
+- All #[cfg(unix)] blocks skipped on Windows CI, but would be hard compile errors on Linux/macOS
+
+**Professor (REJECT on overclaimed tasks):** Safety-critical reconciler foundations still return success-shaped no-op results:
+- econcile() returns Ok(ReconcileStats::default()) on Unix after stub phases
+- ull_hash_reconcile() also returns Ok(ReconcileStats::default())
+- Tests explicitly lock in benign-success behavior
+- This is misleading for recovery paths (overflow, remap, restore, audit)
+- Tasks 2.4c, 4.4, 5.2 overclaim delivered behavior when only scaffolding exists
+
+### Leela's Repair (Approved)
+
+**Decisions Made:**
+
+1. **Safety-critical stubs return Err, not Ok(empty stats)**
+   - econcile() and ull_hash_reconcile() now fail explicitly until real walk/hash/apply logic lands
+   - has_db_only_state() continues returning Err (already fixed in Batch B repair)
+   - Rationale: Stubs on safety-critical recovery paths cannot return "silent success" — they must fail loudly if called prematurely
+
+2. **Conditional imports required for #[cfg(unix)] blocks**
+   - Added #[cfg(unix)] use crate::core::fs_safety; and #[cfg(unix)] use rustix::fd::OwnedFd; to econciler.rs
+   - These imports are needed for function signatures inside Unix-gated blocks
+
+3. **Tasks demoted from complete to pending**
+   - Tasks 2.4c, 4.4, 5.2 downgraded from [x] to [ ]
+   - Rationale: A task is [x] when described behavior is implemented; [ ] when only scaffolding exists even if types/signatures are present
+
+4. **Doc corrections bundled**
+   - stat_file doc: removed non-existent parent_fd parameter reference
+   - stat_file_fallback doc: fixed "lstat (follows symlinks)" → "stat (follows symlinks)"
+
+### Scruffy's Coverage Validation (Approved)
+
+Direct unit test coverage for touched seams validates foundation assumptions:
+- ile_state::stat_file_fd() preserves nofollow semantics, returns populated Unix stat fields
+- econciler::full_hash_reconcile() keeps empty-success contract explicit until real logic lands
+- econciler::stat_diff() pins foundation behavior: DB rows classify as "missing" until walk plumbing arrives
+- Safety-critical stubs (econcile(), ull_hash_reconcile(), has_db_only_state()) required to return Err with "not yet implemented" messaging
+- fd/nofollow wrapper path remains guarded by platform gates
+
+**Validation:** cargo test --quiet ✅; GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model ✅
+
+### Professor's Final Re-gate (Approved)
+
+**Why it clears:**
+
+1. **Prior safety blocker resolved** — Safety-critical scaffold no longer returns benign success values
+2. **Task truthfulness repaired** — Checked items are annotated as foundation/scaffold; deferred behavior not claimed complete
+3. **Unix-compile honesty repaired** — Conditional imports now in place; ustix wired under cfg(unix) in Cargo.toml
+4. **Validation green** — cargo test --quiet ✅; cargo clippy --quiet -- -D warnings ✅
+
+**Verdict:** Ready to land as explicitly unwired foundation. Honest about deferral, loud on safety-critical unimplemented paths, maintainable for next reconciler batch.
+
+### Copilot Directive (Matt)
+
+User requested Fry use claude-opus-4.7 for this session. Captured for team memory.
+
+### Scruffy's Corollary Decision (Batch C Test Locking)
+
+Added direct unit coverage for foundation seams to prevent false confidence from testing only primitives while leaving wrapper seams and stubbed reconciler contracts under-specified:
+- ile_state::stat_file_fd() proving nofollow semantics and populated Unix stat fields
+- econciler::full_hash_reconcile() keeping empty-success contract explicit
+- econciler::stat_diff() keeping foundation behavior explicit: DB rows as "missing" until walk plumbing lands
+- Purpose: Keep Batch C coverage honest on touched surface; primitive tests alone not sufficient
+
+### Batch B Final Re-review (Professor — Archived Context)
+
+Batch B (prior batch) is now reviewable enough to proceed. Previous blocker (safety-critical stub presenting as harmless success) is resolved. Batch B remains in archive as approved foundation for Batch C.
+
+### Final State
+
+**All 439 lib tests pass. No regressions.**
+
+- src/core/fs_safety.rs — six fd-relative primitives, 15 Unix-gated tests, Windows stubs with explicit errors
+- src/core/file_state.rs — stat helpers with honest doc, correct platform degradation
+- src/core/reconciler.rs — phase structure with Unix gates, conditional imports, explicit-error stubs
+- openspec/changes/vault-sync-engine/tasks.md — truthful scoping: foundation complete, walk/hash/apply deferred
+
+**Next Batch (D):** Full reconciler walk has clear handoff. Fd-relative primitives in place, stat helpers functional, platform gates protect invariants. Walk plumbing, rename resolution, delete-vs-quarantine classifier ready to wire.

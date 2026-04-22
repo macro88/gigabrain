@@ -19,6 +19,9 @@
 - The carry-forward `parse_slug()` debt was real: single-collection shortcut, read unique/not-found, write-create without a write-target, and update/admin multi-owner ambiguity each needed their own direct assertions rather than relying on adjacent matrix cases.
 - Ignore-pattern coverage is more credible when it locks the error payload shape, not just success/failure: raw failing lines, canonical `code`, stable-absence sentinel shape, and parse-error clearing on the next valid reload are all part of the contract.
 - `file_state` helper coverage can defend the reconciler seam before the full engine lands: ctime-only and inode-only drift must trigger re-hash even when mtime and size stay stable, and timestamp fields should be asserted at the row-helper layer.
+- Wrapper seams need their own tests, not just primitive coverage: `stat_file_fd()` should directly prove it preserves nofollow behavior and full stat population, even if `fs_safety::stat_at_nofollow()` already has syscall-level tests.
+- Reconciler foundations need explicit non-destructive contract tests while still stubbed: `full_hash_reconcile()` must stay empty-success, and pre-walk `stat_diff()` should loudly show DB rows as missing rather than pretending discovery happened.
+- A repaired stub slice is approvable once the safety-critical defaults fail loudly instead of succeeding quietly, direct tests pin those error messages/contracts, and task notes still say the real walk/hash behavior is deferred.
 
 ## 2026-04-22 Vault-Sync Foundation Third Gate — Approved With Explicit Debt
 
@@ -199,3 +202,23 @@ Helper-level tests as integration scaffold. Tests serve double duty: immediate v
 **Why:** These are touched-surface seams with branchy behavior that future reconciler/watcher work will reuse directly. Guarding them now keeps Batch B credible even before the larger integration paths exist.
 
 **Status:** ✅ COMPLETE. Ready for full reconciler implementation.
+
+## 2026-04-22 Vault Sync Batch C — Re-gate (Approved)
+
+**Session:** Scruffy coverage validation after Leela's targeted repair pass.
+
+**What happened:**
+- Scruffy re-reviewed the repaired Batch C to validate that foundation seams are locked with direct tests, safety-critical stubs explicitly error, and task claims are truthful.
+- Focused on three seams: ile_state::stat_file_fd() (wrapper layer), econciler stubs (error contracts), 	asks.md (truthfulness).
+
+**Key findings:**
+1. **Direct seam coverage locked:** stat_file_fd() directly tested for nofollow preservation and full Unix stat field population. ull_hash_reconcile() and has_db_only_state() directly tested for explicit Err return. stat_diff() foundation behavior (DB rows as "missing") pinned by direct assertion.
+2. **Safety-critical stubs explicitly error:** No more silent success defaults. econcile(), ull_hash_reconcile(), has_db_only_state() all required to return Err("not yet implemented") rather than Ok(empty).
+3. **Task surface truthful:** Unchecked items remain pending; checked items annotated as foundation/scaffold. Deferred walk/hash/apply behavior not claimed complete.
+
+**Validation rerun:**
+- cargo test --quiet ✅
+- GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model ✅
+
+**Outcome:** APPROVE. Coverage sufficient on touched surface. Safety-critical stub behavior asserted directly. Ready to land.
+

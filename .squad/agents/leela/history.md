@@ -19,6 +19,10 @@
 - When a foundation slice is rejected with 181 test failures, a focused repair pass (not a full rewrite) can fix all blockers in one coordinated cycle if: legacy defaults are prioritized, schema compatibility shims are kept, and all write paths (upsert/filter) are wired together.
 - Batch gate claims "test suites passed" but the gate also requires `cargo clippy -- -D warnings` clean. New scaffolding modules (not yet wired to commands) must include `#![allow(dead_code)]` — the same pattern reconciler.rs uses — or clippy will reject the build with unused-item errors. Verify both independently; don't conflate test-pass with gate-pass.
 - When a scaffold batch honestly admits stubs (reconciler returns empty stats, has_db_only_state returns false), APPROVE if: the stubs are clearly marked with comments citing the task IDs for full implementation, no live code path calls the stub in a way that silently degrades behavior, and the contract types are correct. False-positive quarantine suppression from a non-functional reconciler is not a risk until the reconciler walk is wired.
+- **Batch C gate (2026-04-22):** `cargo test` and `cargo clippy` passing on Windows does not guarantee Unix compilation. `#[cfg(unix)]` blocks are skipped entirely on Windows. When a task note claims "Unix path uses X", verify that X is actually imported under `#[cfg(unix)]` — missing conditional imports are invisible to Windows CI and will cause hard compile errors on Linux/macOS. This is a new class of overstatement: code that references the right symbols but doesn't compile on target.
+- **Doc comment discipline for platform-split functions:** When a function has `#[cfg(unix)]` and `#[cfg(not(unix))]` variants, the public doc must describe what the ACTUAL function body does, not what a hypothetical future version might do. A doc that says "prefers fd-relative fstatat when parent_fd is provided" on a function whose signature is `fn f(path: &Path)` is an overstatement regardless of intent. Also: `lstat` does NOT follow symlinks; `stat` does. Do not confuse them in comments.
+- **Batch C repair (2026-04-22):** The "success-shaped stub" anti-pattern applies beyond predicates — stub functions that return `Ok(ReconcileStats::default())` are equally dangerous on safety-critical recovery paths (restore, remap, audit). Any function called by a restore or remap path that returns zeroed success stats silently turns a non-existent reconciliation into an apparent clean pass. Extend the explicit-error rule: if a function is on a restore/remap/audit call path and is not yet implemented, it returns `Err`, not `Ok(empty)`.
+- **Conditional imports for `#[cfg(unix)]` blocks must be declared at module level with matching `#[cfg(unix)]` guards.** Rustix is a Unix-only dep (`[target.'cfg(unix)'.dependencies]`); any use of its types (e.g. `OwnedFd`) in function signatures inside `#[cfg(unix)]` blocks requires a matching `#[cfg(unix)] use rustix::fd::OwnedFd;` at the top. Windows CI will silently skip these blocks; missing imports only surface on Linux/macOS cross-compilation.
 
 ## 2026-04-22 Vault Sync Foundation Repair Pass
 
@@ -698,6 +702,34 @@
 
 ## Vault Sync Foundation Repair -- 2025-07-18
 
+## Vault Sync Batch C Gate — 2026-04-22
+
+**Session:** Leela gate review of Batch C (tasks 2.4a/2.4b/2.4c/2.4d/4.2/4.3/4.4/5.2).
+
+**Verdict: REJECT**
+
+**What was solid:**
+- `rustix` dependency: correctly platform-gated in `[target.'cfg(unix)'.dependencies]`.
+- `fs_safety.rs`: all six fd-relative primitives correct — O_NOFOLLOW, O_DIRECTORY, AT_SYMLINK_NOFOLLOW semantics sound. Windows stubs return `UnsupportedPlatformError` (not success-shaped).
+- `stat_file_fd`: correctly wraps `fs_safety::stat_at_nofollow`. Direct tests cover success + nofollow on Unix.
+- `has_db_only_state`: returns `Err` (not `Ok(false)`) — the critical safety fix from Batch B.
+- `stat_diff`, `full_hash_reconcile`, `reconcile`: honest stubs, correctly scoped, tests pin the contracts.
+- `tasks.md`: truthful about what's deferred.
+
+**Blocking finding — Gate Rule 1 (Overstatement):**
+`reconciler.rs` references `fs_safety::open_root_fd` and `OwnedFd` inside `#[cfg(unix)]` blocks with no corresponding conditional imports. On Windows (where CI runs), `#[cfg(unix)]` blocks are skipped entirely, so tests and clippy both pass. On Linux/macOS, these are hard compile errors. Task 5.2 claims "Foundation complete: Unix path uses `fs_safety::open_root_fd` for bounded walk root" — but code that doesn't compile on Unix is not foundation-complete on Unix.
+
+**Secondary findings (doc errors, not individually blocking):**
+- `stat_file` doc says "Prefers fd-relative fstatat when both parent_fd and name are provided" — but the signature is `fn stat_file(path: &Path)`. No `parent_fd` parameter exists. Doc describes a hypothetical API.
+- `stat_file_fallback` says "uses lstat (follows symlinks)" — `lstat` does NOT follow symlinks. The function uses `fs::metadata()` equivalent to `stat()`. Comment has the two syscalls confused.
+
+**Fix path (Fry, targeted, sub-30-min):**
+1. Add `#[cfg(unix)] use crate::core::fs_safety;` to `reconciler.rs`
+2. Add `#[cfg(unix)] use rustix::fd::OwnedFd;` to `reconciler.rs`
+3. Bundle doc fixes in `file_state.rs` in the same pass
+
+**Decision artifact:** `.squad/decisions/inbox/leela-vault-sync-batch-c-gate.md`
+
 What happened: Professor rejected Fry's foundation slice. 181 tests were failing. Fry locked out; Leela owned the repair pass.
 
 Root causes found:
@@ -741,3 +773,23 @@ Key lessons:
 - Inbox cleared; orchestration and session logs written
 
 **Key learning:** Safety-critical predicates must not have success-shaped defaults when unimplemented. Explicit error failure mode is self-documenting and prevents accidental wiring before completion. This reinforces Rust best practices: deferred work must be loudly failed, not silently safe.
+
+## 2026-04-22 Vault Sync Batch C — Repair Pass (Approved)
+
+**Session:** Leela repair owner after Batch C initial rejection by Professor and Scruffy on missing Unix imports and overclaimed task completion.
+
+**What happened:**
+- Initial gate feedback identified two blockers: missing #[cfg(unix)] use declarations for s_safety and OwnedFd in econciler.rs, and overclaimed task completion (2.4c, 4.4, 5.2 checked when only scaffolding existed).
+- Leela made four targeted fixes: added conditional imports, demoted tasks from complete to pending, removed non-existent parent_fd parameter from stat_file doc, fixed lstat vs stat semantics in stat_file_fallback doc.
+- No new functionality, no feature expansion — pure rectification of overstatement.
+
+**Key decisions:**
+1. **Safety-critical stubs fail explicitly:** econcile() and ull_hash_reconcile() return Err("not yet implemented") until real walk/hash/apply logic lands. Rationale: stubs on recovery paths cannot return Ok(empty stats) — that silently grants "reconciliation ran successfully" when no reconciliation actually happened.
+2. **Conditional imports required:** #[cfg(unix)] use declarations are syntactically required at module scope for Unix-gated function signatures that reference Unix-only types. Windows CI skips these blocks silently; missing imports cause hard compile errors on Linux/macOS.
+3. **Task demotion for honesty:** Tasks 2.4c (walk semantics), 4.4 (full_hash_reconcile), 5.2 (reconcile phase structure) downgraded from [x] to [ ] because only scaffolding types/signatures exist, not the described behavior.
+4. **Doc fixes bundled:** Platform-split function docs must describe actual implementation, not hypothetical future versions. Fixed two isolated doc errors in ile_state.rs.
+
+**Validation:** All 439 lib tests pass. No regressions. Ready for re-gate.
+
+**Outcome:** Scruffy and Professor both approved after validation. Foundation seams locked with direct tests. Ready to land as explicitly unwired base for Batch D.
+

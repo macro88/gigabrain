@@ -1,0 +1,21 @@
+chore(scribe): merge vault-sync batch B decisions and session logs
+
+Session summary:
+- Orchestration logs: Fry (Batch B implementation), Scruffy (Batch B coverage)
+- Session log: Vault-Sync Batch B completion with architectural decisions
+- Decision inbox: Merged 4 entries into canonical decisions.md; deleted inbox files
+- Cross-agent updates: Appended batch completion notes to Fry and Scruffy histories
+- Batch B deliverables:
+  * Fry: Group 3 (ignore patterns), partial Group 4 (file state), Group 5.1 (reconciler)
+  * Scruffy: Seam-level coverage on parse_slug routing, ignore error shapes, file_state drift
+  * Both approved for integration; all gates green
+
+Decisions merged:
+- 2026-04-22: Vault-Sync Batch B — Fry Implementation Completion
+- 2026-04-22: Vault-Sync Batch B — Scruffy Coverage Completion
+- 2026-04-22: Vault-Sync Foundation — Leela Lead Review Gate (Professor + Scruffy approval)
+- Related logs and orchestration records archived
+
+All decision inbox files deleted after merge. Team memory updated.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

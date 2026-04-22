@@ -2,8 +2,8 @@
   "version": 1,
   "defaultModel": "claude-sonnet-4.6",
   "agentModelOverrides": {
-    "Fry": "claude-opus-4.6",
-    "Bender": "claude-opus-4.6",
+    "Fry": "claude-opus-4.7",
+    "Bender": "claude-sonnet-4.6",
     "Professor": "gpt-5.4",
     "Nibbler": "gpt-5.4",
     "Scruffy": "gpt-5.4"

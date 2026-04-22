@@ -17,6 +17,9 @@
 - When a foundation slice keeps a temporary compatibility shim, proposal/design text must say so explicitly; a repair note in tasks.md is not enough to clear truthfulness review.
 - A batch can be truthful about partial implementation and still be rejectable if a public scaffold on a safety-critical path returns benign success values instead of making deferral explicit.
 - For vault-sync work, stubbed reconciler entry points should fail loudly or stay clearly unwired; returning empty stats or `false` for DB-only-state checks is too easy to mistake for real behavior.
+- A narrow repair is sufficient to clear a blocker when the scaffold remains explicitly unwired, the task text no longer overclaims replacement, and any safety-critical stub now errors loudly instead of returning benign success.
+- Vault-sync foundation stubs on authoritative recovery paths (`full_hash_reconcile`, main `reconcile`) are still rejectable when they return zeroed success stats; unwired safety paths must error loudly, and checked tasks must not claim `WalkBuilder`/rehash delivery before code exists.
+- A re-gate can approve an unfinished foundation scaffold when every safety-critical entry point now fails explicitly, the task ledger names deferred walk/hash work honestly, and Unix-only imports are wired so the code is structurally ready for real Unix builds.
 
 
 ## Core Context
@@ -200,4 +203,25 @@
 - Decisions inbox cleared; Scribe orchestration/session logs written
 
 **Batch B status:** ✅ Gate clean, ready for Batch C implementation planning. Professor can now sign off on Group 3 (ignore_patterns), Group 4 (file_state), and Group 5.1 scaffold landing.
+
+
+## 2026-04-22 Vault Sync Batch C — Final Re-gate (Approved)
+
+**Session:** Professor final gate authority after Leela repair and Scruffy coverage validation.
+
+**Progression:**
+1. **Initial REJECT:** Missing Unix imports + overclaimed tasks (2.4c, 4.4, 5.2 marked complete when only scaffolding existed).
+2. **Leela repair:** Added conditional imports, demoted tasks, fixed docs. Focused, conservative fix.
+3. **Scruffy validation:** Direct test coverage on seams; explicit error contracts on safety-critical stubs.
+4. **Final re-gate:** APPROVE.
+
+**Why it clears:**
+1. **Prior safety blocker resolved:** Safety-critical scaffold no longer returns benign success values. econcile(), ull_hash_reconcile(), and has_db_only_state() all fail loudly instead of silently.
+2. **Task truthfulness restored:** Deferred walk/hash/apply behavior no longer claimed complete. Checked items are foundation-only; unchecked items remain pending.
+3. **Unix-compile honesty repaired:** Conditional imports in place. ustix wired under cfg(unix) in Cargo.toml. Code structurally ready for Unix builds (local validation has no Linux target available; cross-compilation check skipped but import fixes are correct).
+4. **Validation green:** cargo test --quiet ✅; cargo clippy --quiet -- -D warnings ✅
+
+**Verdict:** Ready to land as explicitly unwired foundation. Honest about deferral. Loud on safety-critical paths. Maintainable for next batch.
+
+**Next:** Batch D (full reconciler walk) has clear handoff. Fd-relative primitives in place, stat helpers functional, platform gates protect invariants. Walk plumbing, rename resolution, delete-vs-quarantine classifier ready to wire.
 

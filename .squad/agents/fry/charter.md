@@ -30,7 +30,7 @@
 
 ## Model
 
-- **Preferred:** claude-opus-4.6
+- **Preferred:** claude-opus-4.7
 - **Rationale:** highest-quality implementation for complex core code
 
 ## Collaboration
