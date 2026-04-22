@@ -228,3 +228,51 @@ Helper-level tests as integration scaffold. Tests serve double duty: immediate v
 
 **Outcome:** APPROVE. Coverage sufficient on touched surface. Safety-critical stub behavior asserted directly. Ready to land.
 
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E Coverage Lane
+
+**Session:** Lock honest Batch E test coverage on real seams
+
+**Coverage strategy:**
+
+Do not add tests that would accidentally bless incomplete implementation or imply finished behavior. Focus on gbrain_id round-trip fidelity and ingest safety.
+
+**Tests added (and locked):**
+
+1. **gbrain_id frontmatter round-trip:**
+   - parse_frontmatter() preserves gbrain_id
+   - render_page() re-emits when present
+   - import/export round-trip fidelity
+   - serde serialization preserves the field
+
+2. **Ingest non-rewrite behavior:**
+   - Default ingest does not modify source markdown
+   - Generated UUIDs stored in DB only, not in file
+   - Git worktree stays clean after import
+
+3. **Explicit delete-vs-quarantine outcomes:**
+   - Quarantine classification on ambiguous/trivial cases
+   - Delete predicate respects source_kind boundaries
+
+**Tests explicitly NOT added:**
+
+- Rename inference (native events, UUID matching, hash pairing) — these are deferred to Batch F apply pipeline
+- Frontmatter write-back (brain_put UUID preservation) — deferred to later batch
+- Watcher-produced rename events — Group 6 deferred entirely
+
+**Why this matters:**
+
+- gbrain_id is already a data-fidelity guard even before pages.uuid becomes fully non-optional
+- Honest coverage prevents accidental false confidence in incomplete rename logic
+- Round-trip tests survive rename implementation without false-positive regressions
+
+**Validation:**
+
+- cargo test --quiet: all 439 tests pass
+- cargo clippy --quiet -- -D warnings: clean
+- Default model validation: green
+- Online-model validation: green
+
+**Next coverage focus:**
+- Batch F: direct tests for rename inference outcomes (UUID → page_id preservation, hash ambiguity → quarantine)
+- Later: watcher-native event seam once Group 6 lands

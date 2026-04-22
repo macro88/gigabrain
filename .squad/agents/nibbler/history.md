@@ -42,3 +42,37 @@
 
 **Decision:** nibbler-phase3-core-review.md merged to decisions.md  
 **Task 8.2:** Not marked complete; different revision author required (reviewer lockout).
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E Adversarial Review (Initial Rejection → Approval)
+
+**Initial verdict:** REJECT
+
+**Why initially blocked:**
+
+The conservative hash-rename guard in src/core/reconciler.rs was optimistic for trivial/template notes with large frontmatter and tiny body. A template note with 200+ bytes of frontmatter and a trivially small body (e.g., 'Hi\n') could pass the ≥64-byte size check and be incorrectly paired as a rename, carrying the old page_id onto unrelated content once the apply pipeline lands.
+
+**The exploit:** hash_refusal_reason() checked total file size instead of post-frontmatter body size. Large frontmatter satisfied the byte threshold while the actual human-authored body remained trivial.
+
+**Repair delivered by Leela:**
+
+1. MissingPageIdentity.body_size_bytes = compiled_truth.trim().len() + timeline.trim().len()
+2. NewTreeIdentity.body_size_bytes = body.trim().len() (post-frontmatter)
+3. hash_refusal_reason() gates on body_size_bytes < 64, not whole-file size
+4. Refusal reason strings renamed for clarity
+
+**Re-verdict:** APPROVE
+
+**Why this is sufficient:**
+
+- Note can no longer satisfy 64-byte threshold by stuffing bytes into frontmatter
+- Refusal path tested directly at helper boundary
+- Classification path tested end-to-end: whole-file-large / body-tiny note → hash_renamed = 0, quarantine
+- Surrounding scope remains honest: tasks.md says native pairing is interface-only, apply/hash pipeline deferred
+
+**Key learning for future batches:**
+
+The 64-byte threshold in content-hash identity guards ALWAYS refers to body content after frontmatter delimiter. Whole-file size MUST NOT be used as a proxy. This is consistent with spec language in tasks 5.8a0 and 5.8e.
+
+**Next adversarial focus:**
+- Batch F apply pipeline: ensure quarantine semantics are not silently bypassed
+- Batch F rename inference: test ambiguous cases stay quarantined (don't flip to false positives)

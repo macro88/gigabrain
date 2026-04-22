@@ -7,6 +7,10 @@
 
 ## Learnings
 
+- **Batch F scoping (2026-04-22):** After Batch E, the reconciler can classify every file (unchanged/modified/new/missing/renamed/quarantined-ambiguous) but cannot mutate anything — every reconcile pass is still read-only. Batch F closes this gap with raw_imports rotation (5.4d/e/g/h) + apply pipeline (5.5/5.6/5.7) + quarantine lifecycle tests (17.5g–j) + raw_imports invariant tests (17.5xx–17.5aaa1). Gate: `gbrain collection sync` produces real DB mutations on first pass and zero on second pass; every write-path test asserts exactly one active raw_imports row per page. Three tasks.md wording fixes required before Batch F starts: 5.4d batch-tx boundary clarification, 5.5 Unix-only + re-evaluate-at-apply-time note, 4.4 explicit "Batch G" deferral note. Deferred: 5.4f (daily sweep needs serve), 4.4 + 5.8* (restore/remap Batch G), 5a.5+ (UUID write-back needs Group 12 first), Group 6 (watcher), Group 12 (brain_put rename-before-commit).
+- **raw_imports rotation atomicity is a data-loss surface (Batch F):** The `is_active` flip (prior→0, new→1) and inline GC (5.4e) must be inside the same SQLite tx as the pages/file_state upsert. If split, a crash between transactions can leave a page with zero active raw_imports rows — making it permanently unrestorable via `gbrain collection restore`. The batch-of-500 commit (5.6) is the tx boundary; raw_imports rotation is per-file within each batch chunk, never outside it. Nibbler adversarial review required before merge, covering: (a) re-ingest produces exactly one active row; (b) GC cap never deletes the newly-inserted active row; (c) KEEP_ALL=1 bypasses GC without touching the active row; (d) simulated tx rollback after is_active=0 but before new row insert leaves the prior active row intact.
+- **Quarantine-vs-hard-delete verdict at apply time (Batch F):** The apply pipeline (5.5) must re-evaluate `has_db_only_state` at apply time, not use the classification-time snapshot. Between classification and apply, a concurrent agent might remove the last programmatic link, changing the verdict from quarantine to hard-delete. Re-evaluating is the conservative, correct behavior. This must be explicit in the tasks.md 5.5 note so the implementer doesn't accidentally cache the snapshot.
+
 - **Batch E repair — body-size vs whole-file-size in hash-rename guard (2026-04-22):** The ≥64-byte threshold in the conservative hash-rename guard (`hash_refusal_reason`) MUST apply to body bytes after frontmatter, not whole-file size. Using `file_state.size_bytes` (whole-file) allows large-frontmatter / tiny-body template notes to satisfy the threshold and be incorrectly paired as renames. Fix: replace `size_bytes` fields in `MissingPageIdentity` and `NewTreeIdentity` with `body_size_bytes` computed from parsed body content (not filesystem stat). This is consistent with spec language in tasks 5.8a0 and 5.8e which explicitly say "body size ≤ 64 bytes after frontmatter". Rule: any ≥64-byte content guard in a rename/identity context measures body bytes, never whole-file bytes.
 
 - **Batch E scoping (2026-04-22):** After Batch D, the reconciler can walk + quarantine-classify but cannot resolve identity across rename events. The natural next slice is UUID lifecycle (5a.1–5a.4, 5a.4a) + rename resolution (4.5, 5.3, 5.3a) + tests (17.5b–f). This batch answers "what is the identity of every file in the walk?" without yet acting on the answer. The gate is crisp: all three rename-detection paths work (UUID, content-hash, quarantine-on-ambiguity); default ingest is read-only with respect to user bytes. The apply pipeline (5.5–5.7), raw_imports rotation (5.4d–g), and full_hash_reconcile (4.4) are correctly deferred to Batch F — they act on the classification Batch E produces. Three tasks.md wording fixes required before Batch E starts: 5.3 native-events scope note, 5a.3 construction-site cascade warning, 4.5 dependency on 5a.1–5a.4.
@@ -806,3 +810,42 @@ Key lessons:
 
 **Outcome:** Scruffy and Professor both approved after validation. Foundation seams locked with direct tests. Ready to land as explicitly unwired base for Batch D.
 
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E Repair
+
+**Session:** Narrow repair pass after Nibbler's adversarial rejection
+
+**Problem identified:**
+
+Hash-rename guard in src/core/reconciler.rs used whole-file size for ≥64-byte threshold, allowing template notes with large frontmatter and tiny body to incorrectly satisfy the check and inherit the wrong page_id.
+
+**Repair (narrow scope):**
+
+Modified only MissingPageIdentity, NewTreeIdentity, load_missing_page_identities, load_new_tree_identities, and hash_refusal_reason:
+
+1. Replace size_bytes fields with body_size_bytes computed from trimmed parsed content
+2. MissingPageIdentity.body_size_bytes = compiled_truth.trim().len() + timeline.trim().len()
+3. NewTreeIdentity.body_size_bytes = body.trim().len() (post-frontmatter)
+4. hash_refusal_reason() now checks body_size_bytes < 64, not whole-file size
+5. Refusal strings renamed: missing_below_min_bytes → missing_below_min_body_bytes
+
+**Tests added:**
+
+One regression test: template_note_with_large_frontmatter_and_tiny_body_is_never_hash_paired
+- Proves large-frontmatter note cannot satisfy 64-byte body threshold
+- Verifies quarantine classification (not hash_renamed pairing)
+
+**Validation:**
+
+- No new structs, functions, or Batch E scope expansion
+- Surrounding docs/comments remain honest about deferred work
+- cargo test --quiet: all 439 tests pass
+- cargo clippy: clean
+
+**Gate outcome:**
+
+Nibbler's prior blocker resolved. Batch E is landable.
+
+**Rule for future implementers:**
+
+The 64-byte threshold in content-hash identity guards ALWAYS refers to body content after frontmatter. Whole-file size is NOT a proxy. Consistent with spec tasks 5.8a0 and 5.8e which explicitly say 'body size ≤ 64 bytes after frontmatter'.

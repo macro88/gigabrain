@@ -228,3 +228,51 @@
 
 **Next:** Batch D (full reconciler walk) has clear handoff. Fd-relative primitives in place, stat helpers functional, platform gates protect invariants. Walk plumbing, rename resolution, delete-vs-quarantine classifier ready to wire.
 
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E Gate Review
+
+**Gate verdict:** APPROVE
+
+**Why it clears:**
+
+1. **UUID / gbrain_id wiring is truthful for this slice:**
+   - parse_frontmatter() preserves gbrain_id
+   - render_page() re-emits it when present
+   - ingest/import adopt frontmatter UUIDs or generate UUIDv7 server-side
+   - put / MCP write paths resolve persisted identity explicitly (no placeholders)
+
+2. **Page.uuid is non-optional at the type seam:**
+   - Page struct requires uuid: String
+   - Typed read paths fail loudly on NULL rows (no fabricated defaults)
+   - All 15+ Page construction sites audited and updated
+
+3. **Default ingest remains read-only on source bytes:**
+   - Compatibility ingest/import path stores generated UUIDs only in pages.uuid
+   - Tests prove source markdown unchanged
+   - Git worktree stays clean
+
+4. **Rename classification is conservative and correctly staged for Batch E:**
+   - Native rename pairs apply through explicit interface seam only
+   - UUID matching works correctly
+   - Guarded hash matching includes INFO refusal logging on ambiguous/trivial cases
+
+5. **tasks.md is honest about the boundary:**
+   - Checked items describe implemented classification/identity slice
+   - Watcher-produced native events explicitly deferred
+   - Apply-time quarantine/create mutations explicitly deferred
+   - brain_put/admin write-back explicitly deferred
+
+6. **Coverage is sufficient to merge this slice:**
+   - Direct tests on gbrain_id parse/render/import round-trips
+   - Read-only ingest behavior proven
+   - Non-optional Page.uuid seam covered
+   - Native/UUID/hash rename boundaries tested
+   - cargo test --quiet: 439 tests pass
+   - cargo clippy --quiet -- -D warnings: clean
+
+**Landing note:** This is a narrow Batch E identity/reconciliation slice, not full write-back or watcher-native completion. Remaining work is clearly isolated in later tasks rather than hidden behind permissive defaults.
+
+**Next review focus:**
+- Batch F apply pipeline must preserve quarantine classifications
+- Batch F full_hash_reconcile must use identity from Batch E
+- Later: Batch F raw_imports rotation and GC

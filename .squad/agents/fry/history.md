@@ -596,3 +596,41 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - Wire the same walk/classify output into rename resolution and the later apply pipeline
 - Add the eventual extracted-link insertion path with explicit `source_kind='wiki_link'` when that ingest code lands
 
+
+### 2026-04-22 17:02:27 - Vault-Sync Batch E (UUID lifecycle + rename resolution)
+
+**What worked:**
+- UUID generation (UUIDv7) server-side only when frontmatter lacks gbrain_id — no file rewrite drift
+- Reconciler rename classification: native event interface → UUID match → conservative content-hash uniqueness with guards → quarantine + fresh create
+- Hash-rename guard: body_size_bytes (post-frontmatter trimmed) instead of whole-file size closes template-note exploit
+- All 15+ Page construction sites audited and updated for non-optional uuid: String type
+- INFO logging on rename inference refusal guards against silent hash-pair failures
+
+**Key decisions locked:**
+1. pages.uuid non-optional across ingest, CLI writes, MCP writes, export/import — authoritative page identity
+2. If gbrain_id in frontmatter: adopt only if real UUID and no conflict with stored UUID
+3. If no gbrain_id: generate UUIDv7 server-side, store in pages.uuid only (read-only ingest by default)
+4. Reconciler rename: strict order (native → UUID → hash), guard on body ≥64 bytes after frontmatter, quarantine on ambiguity
+
+**Tests added:**
+- No self-write on default ingest (gbrain_id preserved)
+- Rename via native events preserves pages.id
+- Rename via UUID match preserves pages.id across directory reorganization
+- Rename via content-hash uniqueness preserves pages.id
+- Ambiguous hash-pair refusal quarantines old, creates new
+- Trivial-content (empty body post-frontmatter) never hash-paired
+
+**Validation:**
+- cargo test --quiet: all 439 tests pass
+- cargo clippy --quiet -- -D warnings: clean
+- Default model validation: green
+- Online-model validation: green
+
+**Gate results:**
+- Professor: APPROVE (UUID wiring truthful, Page.uuid non-optional, defaults safe)
+- Nibbler: REJECT initial → APPROVE after Leela repair (body-size guard now safe)
+- Leela repair: narrowly fixed hash-rename guard (template-note exploit closed)
+
+**Next:**
+- Merge Batch E PR
+- Move to Batch F: apply pipeline + raw_imports rotation + full_hash_reconcile
