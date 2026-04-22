@@ -171,6 +171,23 @@
 
 - Submitted complete T14–T19 artifact with T18/T19 closed as done and decision note queued.
 - Bender validation: 3 findings reported. Single-slug embed implemented ✅; query budget scoping accepted (Phase 1 design); inference shim status documented as Phase 2 blocker.
+
+## Vault-Sync Engine Foundation A (2026-04-22)
+
+**OpenSpec Change:** `openspec/changes/vault-sync-engine/`
+
+- Implemented schema v5 foundation (tasks 1.1–1.6): Breaking migration from v4 to v5 with version detection and v4 rejection. New tables: `collections`, `file_state`, `embedding_jobs`. Extended `pages` with `collection_id`, `uuid`, `quarantined_at`. Modified `links` to add `source_kind` for provenance tracking. Modified `contradictions.other_page_id` to `ON DELETE CASCADE`. Added `knowledge_gaps.page_id` for slug-bound gap tracking. Removed `ingest_log` (replaced by file_state + collection sync model).
+
+- Implemented collections module (tasks 2.1–2.6): Created `src/core/collections.rs` with validators (`validate_collection_name()`, `validate_relative_path()`), CRUD operators (`get_by_name()`, `get_write_target()`), and slug resolution via `parse_slug()` with `OpKind` classification. Path traversal protection rejects `..`, absolute paths, NUL bytes, empty segments. Slug resolution by intent: Read (exactly-one or ambiguous), WriteCreate (zero→write-target; one owner AND write-target→that; else ambiguous), WriteUpdate/WriteAdmin (exactly-one or ambiguous/not-found). Ambiguity error carries structured `Vec<AmbiguityCandidate>` for user-facing resolution hints.
+
+- Schema tests: 19 updated to expect v5 schema, all pass. Collections unit tests: 8 new tests for validators and resolution logic. All gates pass: `cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`.
+
+- Decisions merged into canonical ledger: Schema v5 evolution, collections module structure, slug resolution by OpKind, ambiguity error user-facing type. Deferred items: platform-specific fd-safety (needs `#[cfg(unix)]`), knowledge_gaps.page_id wiring (needs gaps.rs integration), command wiring (needs reconciler + watcher).
+
+- Decision note: `.squad/decisions/inbox/fry-vault-sync-foundation-a.md` → merged to `decisions.md`.
+- Orchestration log: `.squad/orchestration-log/20260422T091053Z-fry.md`.
+- Session log: `.squad/log/20260422T091053Z-vault-sync-foundation-a.md`.
+- Ready for git commit.
 - Professor code review: REJECTION issued on three grounds:
   1. Inference shim SHA-256 placeholder not explicitly documented in module — public API misleading on semantic guarantees
   2. Embed CLI mixed-mode validation missing — accepts `SLUG + --all` instead of rejecting per contract
@@ -463,3 +480,25 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - The mutual exclusion pattern (`compile_error!` when both `embedded-model` and `online-model` are active) is a solid safety gate but relies on developers running `cargo check` with all feature combinations. CI should test this explicitly.
 - Release workflows should never depend on `Cargo.toml` defaults for feature flags — always use explicit `--no-default-features --features X` so CI is isolated from developer-ergonomic defaults.
 - Post-install scripts that write binaries should write to a separate path (`bin/gbrain.bin`) not overwriting a committed wrapper. This lets npm's bin-linking succeed at pack time.
+
+## Learnings
+
+### 2026-04-22 17:03:19 - Vault-Sync Foundation (v5 Schema)
+
+**What worked:**
+- Clean schema evolution: v5 adds collections, file_state, embedding_jobs, and extends pages with collection_id, uuid, and quarantined_at
+- Version detection in db::open() cleanly rejects v4 DBs with actionable error message
+- FTS triggers now exclude quarantined pages via WHERE clause — efficient and correct
+- Collections module structure: validators -> CRUD -> parse_slug pipeline is testable independently
+- OpKind enum centralizes resolution logic for Read/WriteCreate/WriteUpdate/WriteAdmin operations
+
+**Challenges:**
+- Many existing tests assumed v4 schema — updated version assertions and expected table lists
+- Need to defer knowledge_gaps.page_id wiring until later slice (gaps.rs integration)
+- Platform-specific fd-safety primitives (rustix/nix) deferred to follow-on slice
+
+**Next:**
+- Wire collections into actual commands (init, serve, get, put, etc.)
+- Implement reconciler and watcher pipeline
+- Add platform-gated fs-safety module for Unix
+

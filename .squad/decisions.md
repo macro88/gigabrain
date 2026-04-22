@@ -3456,3 +3456,56 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 **Semantic/Hybrid quality note:** Doug's crypto/finance paraphrase misses are model quality issue, not vault-sync. `configurable-embedding-model` lets users switch to `bge-base` or `bge-m3` for higher recall. Future benchmark lane (`kif-model-comparison`) should run DAB against small/base/m3 to establish baselines. Do NOT gate v0.9.4 on §4 improvement.
 
 **Decision:** Route five issues to lanes; resolve in v0.9.4 ship gates; complete near-complete lanes.
+
+### 2026-04-22: Vault-Sync Foundation A — Schema v5 + Collections Module
+
+**By:** Fry (implementation), macro88 (via vault-sync-engine OpenSpec)
+
+**What:** Implemented the first coherent foundation slice of the vault-sync-engine OpenSpec change. Established v5 schema with breaking changes and created collections.rs abstraction module for multi-collection support.
+
+**Key Decisions:**
+
+1. **Schema v5 Evolution — Breaking by Design**
+   - v5 rejects v4 databases with actionable error message
+   - Zero users = clean redesign opportunity
+   - Added tables: `collections`, `file_state`, `embedding_jobs`
+   - Extended `pages` with `collection_id`, `uuid`, `quarantined_at`
+   - Modified `links` to add `source_kind` for provenance tracking
+   - Modified `contradictions.other_page_id` to `ON DELETE CASCADE`
+   - Added `knowledge_gaps.page_id` for slug-bound gap tracking
+   - Removed `ingest_log` (replaced by `file_state` + collection sync model)
+
+2. **Collections Module Structure**
+   - Created `src/core/collections.rs` with validators → CRUD → slug parsing pipeline
+   - Validators: `validate_collection_name()`, `validate_relative_path()`
+   - CRUD: `get_by_name()`, `get_write_target()`
+   - Slug resolution: `parse_slug()` with `OpKind` classification (Read, WriteCreate, WriteUpdate, WriteAdmin)
+   - Path traversal protection: reject `..`, absolute paths, NUL bytes, empty segments
+
+3. **Slug Resolution by OpKind**
+   - Explicit form `<collection>::<slug>` always resolves to that collection
+   - Bare slug resolution varies by operation intent:
+     - **Read:** Exactly-one match or Ambiguous
+     - **WriteCreate:** Zero owners → write-target; one owner AND is write-target → that collection; else Ambiguous
+     - **WriteUpdate/WriteAdmin:** Exactly-one match or Ambiguous/NotFound
+   - Prevents silent wrong-collection writes
+
+4. **AmbiguityError User-Facing Type**
+   - `SlugResolution::Ambiguous` carries `Vec<AmbiguityCandidate>` with serializable shape
+   - Enables MCP clients and CLI to surface structured resolution hints
+
+**Implementation Status:**
+- Tasks 1.1–1.6 (v5 schema) complete
+- Tasks 2.1–2.6 (collections module) complete
+- Schema tests: 19 updated to expect v5, all pass
+- Collections unit tests: 8 new tests for validators and resolution logic
+- All gates pass: `cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`
+
+**Deferred to Later Slices:**
+- Platform-specific fd-safety primitives (`rustix`/`nix`) — needs `#[cfg(unix)]` gating
+- `knowledge_gaps.page_id` wiring — requires `gaps.rs` integration
+- Command wiring (init, serve, get, put) — requires reconciler + watcher
+
+**Why:** This slice is schema + foundation types only, kept coherent and testable independently. Later slices will wire collections into commands and implement the reconciler pipeline. Deferral avoids premature platform dependencies and keeps each slice focused.
+
+**Next Steps:** Slice B will wire collections into commands (init creates default collection, get/put/search become collection-aware) and update MCP tool signatures for collection context.
