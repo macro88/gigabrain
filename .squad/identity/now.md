@@ -1,5 +1,5 @@
-updated_at: 2026-04-24T18:22:00Z
-focus_area: vault-sync-engine post-M2c next-slice selection
+updated_at: 2026-04-24T18:41:00Z
+focus_area: vault-sync-engine post-M3a next-slice selection
 active_issues: []
 active_branch: spec/vault-sync-engine
 ---
@@ -8,13 +8,14 @@ active_branch: spec/vault-sync-engine
 
 **Active change (vault-sync-engine):**
 
-1. `vault-sync-engine` — Batch M2c closed; next slice not yet selected.
+1. `vault-sync-engine` — Batch M3a closed; next slice not yet selected.
    Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
    - M1b-i closed the real write-interlock refusal seam for `17.5s2-s5`
    - M1b-ii closed Unix precondition/CAS hardening for `12.2`, `12.3`, `12.4a`, `17.5l-s`
    - M2a-prime closed the Windows platform gate for current vault-sync CLI handlers and truthfully narrowed `12.5` / `17.16a` to vault-byte entry points only
    - M2b-prime closed the same-slug within-process mutex + narrow mechanical write-through proof seam (`12.4`, narrow `17.5k`, `17.17e`)
    - M2c closed the explicit finalize-caller proof seam (`17.17b`) with a test-only invariant over production finalize helper call sites
+   - M3a closed `2.4c` as a reconciler-specific wording/closure note: `ignore::WalkBuilder` enumeration with fd-relative revalidation and WARN-skip symlink behavior, not a generic `readdir` walk claim
    - Pick the next truthful slice before widening into routing, IPC, watcher surfaces, or broader mutator coverage
 
 **Completed in this branch:**
@@ -31,6 +32,7 @@ active_branch: spec/vault-sync-engine
 - Batch M2a-prime — Windows platform gate + vault-byte read-only closure notes
 - Batch M2b-prime — same-slug mutex + narrow mechanical ordering proof
 - Batch M2c — explicit finalize-caller proof
+- Batch M3a — reconciler symlink-walk wording closure
 
 **Explicitly deferred after M1b:**
 - Online restore handshake, IPC socket work, and the `17.5pp` / `17.5qq*` series that depend on IPC security design

@@ -2,6 +2,11 @@
 
 ## Active Decisions
 
+### 2026-04-24: Vault-sync-engine Batch M3a final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch M3a for landing as the reconciler-specific `2.4c` wording/closure note only.
+**Why:** The updated task truth now matches the code that exists today: the reconciler enumerates candidates with `ignore::WalkBuilder` and `follow_links(false)`, treats walker metadata as advisory only, revalidates each candidate with `walk_to_parent` + `stat_at_nofollow`, WARN-skips symlinked entries and ancestors, and never descends symlinked directories on that reconciler path. No `readdir` claim, generic fd-relative walk primitive, watcher/IPC surface, or startup-healing widening is approved here.
+
 ### 2026-04-24: Vault-sync-engine Batch M2c final approval
 **By:** Professor + Nibbler + Scruffy (recorded via Copilot)
 **What:** Approved Batch M2c for landing as the proof-only `17.17b` slice.
