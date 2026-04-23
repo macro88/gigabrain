@@ -4514,3 +4514,220 @@ Deferred to later batch (requires 5a.5 + Group 12):
 
 **Status:** Approved for landing. All implementation + test gates green. Authorization contract explicit. Coverage landmarks clear. repair closes bootstrap seam. Ready to merge to main and begin next-batch planning.
 
+---
+
+## 2026-04-23: Batch K1 Final Approval Sequence (Professor & Nibbler)
+
+**Session:** 2026-04-23T08:54:00Z — Vault-Sync Batch K1 Final Approval  
+**Status:** Completed and merged
+
+### Session Arc
+
+Vault-Sync Batch K1 (collection add + shared read-only gate) pre-gating completed 2026-04-23:
+- Professor approved narrowed K1 boundary as fresh-attach + read-only scaffolding
+- Nibbler pre-gate approved only the narrowed attach/read-only slice with hard adversarial seams
+- Scruffy partial-approval requiring leela repairs for full proof surface
+- Leela completed repairs; Scruffy regate approved
+
+Final approval sequence 2026-04-23:
+- Professor verified K1 stays inside approved boundary; read-only gate honestly scoped; required caveat attached
+- Nibbler confirmed all adversarial seams now acceptably controlled; pre-gate conditions met; approval issued with mandatory caveat on narrowed scope
+
+### Fry — Vault Sync Batch K1
+
+**Verdict:** Implementation complete
+
+**Decision:** Keep the K1 read-only gate narrow and truthful.
+
+- `collection add` validates root + `.gbrainignore` before any row insert, then uses detached fresh-attach + short-lived lease cleanup.
+- `collections.writable` is operator truth from the capability probe and is surfaced in `collection list` / `collection info`.
+- `CollectionReadOnlyError` only gates vault-byte-facing write surfaces in K1 (`gbrain put` / `brain_put` path), while DB-only mutators keep the existing restoring interlock without being newly blocked on `writable=0`.
+
+**Why:** Professor/Nibbler pre-gates required the shared restoring interlock to remain intact without over-claiming that all DB-only mutators are read-only-blocked. This preserves the approved K1 boundary: real attach/list truth, fail-before-row-creation validation, and no accidental widening into K2 proof claims.
+
+### Professor — Vault Sync Batch K1 Pre-gate
+
+**Status:** APPROVED
+
+**Scope:** OpenSpec `vault-sync-engine` K1 slice (`1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, `17.5qq11`).
+
+**Decision:** K1 is the right next safe boundary. It isolates two real unfinished seams already visible in code — `gbrain collection add/list` does not exist yet, and the read-only root contract is not enforced anywhere — without pretending the deferred offline-restore integrity matrix is already truthful. Keep the destructive-path identity/finalize proof items in K2.
+
+**Why this boundary is safe:**
+- `src\commands\collection.rs` currently exposes only `info`, `sync`, `restore`, `restore-reset`, and `reconcile-reset`; K1 adds the missing ordinary operator surface without reopening restore integrity claims.
+- `src\core\vault_sync.rs` still lacks any `CollectionReadOnlyError` branch; `ensure_collection_write_allowed()` only checks `state='restoring'` / `needs_full_sync=1`.
+- `src\core\vault_sync.rs::begin_restore()` offline path still does not persist `restore_command_id`, and `restore_reset()` still clears state unconditionally, so K2 remains the correct home for offline-restore proof closure.
+
+**Non-negotiable implementation / review constraints:**
+1. **Fail before row creation.** `collection add` must reject invalid names (`::`), duplicate names, symlinked roots / `O_NOFOLLOW` failures, invalid `.gbrainignore`, and read-only probe failure when the user requested a root-mutating flag before inserting any `collections` row or starting any walk.
+2. **Fresh-attach path must stay honest.** Initial attach must run through `full_hash_reconcile_authorized(... FreshAttach, AttachCommand { ... })` against a detached row; do not bypass this by marking the row active first or by reusing the active-lease authorization path that `reconciler.rs` explicitly rejects for fresh attach.
+3. **Short-lived lease discipline only.** The add command may borrow collection ownership only for the duration of initial attach/reconcile. It must clean up lease/session residue on success, error, and panic/unwind; no lingering owner claim after the command exits.
+4. **Read-only by default is behavioral, not cosmetic.** Default attach succeeds on `EACCES`/`EROFS` with `collections.writable=0`, performs the read-only initial reconcile, and surfaces the state in `collection info/list`. It must not mutate vault bytes unless the user explicitly chose a root-writing path.
+5. **Do not smuggle `9.2a` into K1.** If `--write-gbrain-id` behavior is not fully implemented and covered, keep it out of the user-facing K1 surface. A parsed-but-inert flag or an undocumented partial write-back path is not acceptable.
+6. **Scope the shared read-only gate correctly.** `CollectionReadOnlyError` should be a shared helper for operations that need to mutate collection-root bytes (`brain_put`/`gbrain put`, UUID migration, ignore file mutation, add-time opt-in write-back). Do **not** widen it to DB-only mutators like `brain_gap`, `brain_link`, `brain_check`, `brain_raw`, or other metadata-only writes; those remain governed by the restoring / `needs_full_sync` interlock.
+7. **Preserve the K1/K2 truth boundary.** No K1 artifact or test may claim offline restore identity persistence, manifest-tamper closure, or CLI finalize integrity closure. Those remain K2.
+
+**Minimum proof required for honest landing:**
+- Direct command tests for `collection add` success on a writable root and success-on-read-only-root (`writable=0`) with no vault-byte mutation in the default path.
+- Direct refusal tests proving invalid `.gbrainignore`, invalid name, duplicate name, and read-only + root-writing-flag combinations fail before row creation.
+- A proof that fresh attach uses the detached + `AttachCommand` authorization seam and leaves no short-lived lease residue after completion/failure.
+- `collection list` proof for the promised fields at minimum: `name | state | writable | write_target | root_path | page_count | last_sync_at | queue_depth`.
+- Focused gate tests showing root-writing paths raise `CollectionReadOnlyError`, while slug-less `brain_gap` remains read-shaped and slug-bound `brain_gap` still only takes the restoring interlock from `1.1c`.
+
+### Nibbler — Vault Sync Batch K1 Pre-gate
+
+**Status:** APPROVED
+
+**Verdict:** **APPROVE** the proposed K1 boundary **only as the narrowed attach/read-only slice**:
+- `1.1b`
+- `1.1c`
+- `9.2`
+- `9.2b`
+- `9.3`
+- `17.5qq10`
+- `17.5qq11`
+
+This approval does **not** extend to offline restore integrity closure, originator-identity persistence, manifest tamper handling, Tx-B residue proofs, or `17.11`. Any attempt to treat K1 as partial restore certification reopens the success-shaped claim seam that forced the original Batch K rejection.
+
+**Concrete review seams:**
+
+1. **Add-time lease ownership**
+   - The initial reconcile inside `collection add` must use the same short-lived `collection_owners` authority as plain sync.
+   - No dual truth is acceptable: `collection_owners` stays authoritative; mirror columns like `active_lease_session_id` must only reflect it, never substitute for it.
+   - Abort paths must leave **no** owner residue, heartbeat residue, or fake "serve owns collection" state.
+
+2. **Fresh-attach probe artifacts**
+   - Capability probing must not leave `.gbrain-probe-*` files behind on success or failure.
+   - Probe tempfiles must not be visible to the initial reconcile, counted in diagnostics, or misread as user content.
+   - Cleanup failures are not "read-only" signals; they are attach failures unless explicitly proven to be the same permission-class refusal being reported.
+
+3. **Root / ignore validation before row creation**
+   - Invalid collection name, root symlink / unreadable root, and `.gbrainignore` atomic-parse failure must all refuse **before** any `collections` row is created.
+   - "Create row first, then mark failed" is a soft attach claim and is not acceptable for precondition failures.
+   - `.gbrainignore` absence is allowed only in the true no-prior-mirror fresh-attach case; parse errors stay fail-closed.
+
+4. **Writable misclassification**
+   - Downgrade to `writable=0` only for true permission / read-only signals (`EACCES` / `EROFS` class).
+   - Other probe failures (`ENOSPC`, cleanup failure, unexpected I/O, wrong-root behavior, symlink surprise) must abort attach rather than silently relabel the collection read-only.
+   - Any future write-requiring attach flag must refuse on a read-only root rather than silently "attach anyway".
+
+5. **Shared read-only gate bypasses**
+   - `CollectionReadOnlyError` must be enforced at the shared mutator gate, not patched into a subset of callers.
+   - Current mutating surfaces that already route through `ensure_collection_write_allowed()` or `ensure_all_collections_write_allowed()` are exactly where bypass risk lives: CLI `put`, `link`, `tags`, `timeline`, `check`, legacy `ingest` / `import_dir`, and MCP `brain_put`, `brain_check`, `brain_raw`, `brain_link`, `brain_link_close`, slug-bound `brain_gap`.
+   - K1 fails if any one of those paths can still mutate when `writable=0` is persisted.
+
+**Mandatory fail-closed behaviors:**
+1. `collection add` must not report success until: root validation passes, `.gbrainignore` validation passes, probe artifacts are cleaned up, initial reconcile completes, short-lived lease is released, final persisted state is truthful.
+2. Any invalid root or invalid `.gbrainignore` must fail with: no row created, no lease created, no reconcile started.
+3. Any post-insert attach failure must stay non-success-shaped: no success exit, no active state, no stale lease residue, no leftover probe artifact.
+4. `writable=0` must block **every** mutator before filesystem or DB mutation.
+5. Slug-bound `brain_gap` must remain a `WriteUpdate` interlocked path; slug-less `brain_gap` must remain the read-only carve-out during restore.
+6. K1 must make **no** broader offline-restore claim. No wording, tests, or task updates may imply manifest/originator/Tx-B closure is now certified.
+
+### Scruffy — Vault Sync Batch K1 (Initial Proof Lane)
+
+**Status:** PARTIAL APPROVAL
+
+K1 now has credible proof for:
+- `1.1c` — slug-less `brain_gap` stays read-shaped during restore, while slug-bound `brain_gap` still takes the write interlock; I also tightened proof that the slug-bound form binds `knowledge_gaps.page_id`.
+- `9.2` — direct command tests already prove invalid root / invalid `.gbrainignore` fail before row creation, and fresh attach cleans up short-lived lease/session residue on success.
+- `9.3` — CLI truth is now directly exercised for `collection info --json` and `collection list --json`, including persisted read-only surfaces.
+- `17.5qq10` — permission-class probe downgrade to read-only already has direct command proof, and probe-temp cleanup is covered.
+
+K1 is **not** honestly provable as complete for:
+- `1.1b` in full: storage behavior exists, but list/resolve response shape still does not prove the full page-bound gap surface end to end.
+- `9.2b` / `17.5qq11` in full: `CollectionReadOnlyError` is only proven through `put` right now. `check`, `link`, `tags`, `timeline`, and MCP write handlers still call the restoring-only gate (`ensure_collection_write_allowed`) instead of the read-only gate (`ensure_collection_vault_write_allowed`).
+
+**Decision:** Do not mark the broader shared read-only gate done yet. Repairs required: `1.1b` MCP surface completion, `9.2b`/`17.5qq11` comprehensive mutator coverage.
+
+### Leela — Vault Sync Batch K1 (Repairs & Rescope)
+
+**Status:** APPROVED AFTER REPAIR
+
+After targeted repairs, the K1 claim surface is now honestly supported for exactly:
+- `1.1b` — `brain_gap` now returns `page_id` in its direct response
+- `1.1c` — slug-less `brain_gap` still succeeds while restoring; slug-bound form still refuses
+- `9.2` — invalid root / `.gbrainignore` fail before row creation; fresh attach cleans short-lived lease
+- `9.2b` — truthfully scoped to vault-byte writers only; DB-only mutators remain on restoring interlock
+- `9.3` — CLI truth surfaced; persisted read-only state observable
+- `17.5qq10` — permission-class probe + cleanup proof
+- `17.5qq11` — both CLI and MCP refusal proofs present
+
+**Repairs made:**
+1. `brain_gap` response shape test: `brain_gap_with_slug_response_includes_page_id` + `brain_gap_without_slug_response_has_null_page_id`
+2. `9.2b` task honest scoping: explicitly says read-only gate covers only K1 vault-byte writers
+3. `17.5qq11` dual-proof: CLI refusal + MCP refusal in code
+
+### Scruffy — Vault Sync Batch K1 (Final Re-gate)
+
+**Status:** APPROVE
+
+After Leela's repair, the K1 claim surface is now honestly supported for exactly:
+- `1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, `17.5qq11`
+
+No further downgrade is needed.
+
+**Why the repaired slice is now credible:**
+1. `1.1b` is now complete at the MCP boundary — `brain_gap` returns `page_id`
+2. `1.1c` remains directly proven — slug-less succeeds, slug-bound refuses
+3. `9.2b` is now truthfully scoped — vault-byte writers only; DB mutators keep restoring interlock
+4. `17.5qq11` now has both required proofs — CLI refusal + MCP refusal
+
+**Validation:**
+- Targeted repaired proofs passed
+- `cargo test --quiet`: passed on default lane
+- Online-model probe: Windows dependency compilation issue (environmental, not K1-caused)
+
+### Professor — Vault Sync Batch K1 Final Review
+
+**Verdict:** APPROVE
+
+K1 now stays inside the approved boundary. `collection add` validates root/name/ignore state before row creation, persists a detached row, routes fresh attach through the `FreshAttach` + `AttachCommand` seam, and clears the short-lived lease/session residue on success, failure, and panic-tested unwind. `collection list` and `collection info` surface the promised K1 truth, and the capability probe downgrades permission-denied roots to `writable=0` without leaving probe residue.
+
+The read-only gate is now honestly scoped. `CollectionReadOnlyError` is shared only for K1 vault-byte writers (`gbrain put` / MCP `brain_put`), while slug-bound `brain_gap` and other DB-only mutators still use the restoring / `needs_full_sync` interlock instead of falsely claiming full read-only coverage. `brain_gap` now returns `page_id` in the MCP response, so `1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, and `17.5qq11` are supportable from code and tests in-tree.
+
+**Required caveat for landing:** Keep K1 described as **default attach + list/info truth + vault-byte refusal only**. `--write-gbrain-id`, broader collection-root mutators, and offline restore-integrity closure remain deferred to later batches, and the Windows `online-model` lane is still blocked by the known pre-existing dependency compilation crash rather than K1 behavior.
+
+### Nibbler — Vault Sync Batch K1 Final Review
+
+**Verdict:** APPROVE
+
+The adversarial seams named in pre-gate are now acceptably controlled for the narrowed K1 slice:
+
+1. **Add-time lease ownership / cleanup**
+   - `collection add` validates name, root, and `.gbrainignore` before inserting any `collections` row.
+   - Fresh attach runs from `state='detached'` through `fresh_attach_collection()` under a short-lived `collection_owners` lease.
+   - The lease/session cleanup path is RAII-backed, and the command deletes the newly inserted row if fresh attach fails.
+
+2. **Writable/read-only truth**
+   - Capability probe only downgrades on permission/read-only class refusal and aborts on other probe failures.
+   - Probe tempfiles are removed on both success and refusal/error paths.
+   - `collection info` / `collection list` surface `writable` truthfully.
+
+3. **Shared refusal paths are honestly scoped**
+   - Vault-byte writers route through `ensure_collection_vault_write_allowed()` with direct refusal proof.
+   - Slug-bound `brain_gap` remains a write-interlocked DB mutation, not a read-only-gated vault-byte writer.
+   - Task ledger explicitly says DB-only mutators are out of the `CollectionReadOnlyError` claim.
+
+4. **Task honesty**
+   - `tasks.md` keeps `9.2a` and `17.11` deferred and does not pretend K1 certifies offline restore integrity or CLI finalize closure.
+   - Repair notes match actual code and proof surface.
+
+**Required caveat:** This approval covers **only** the narrowed K1 attach/read-only slice: collection add/list truth, validation-before-row-creation, short-lived lease cleanup, truthful `writable=0`, vault-byte refusal for `gbrain put` / `brain_put`, and restoring-gated slug-bound `brain_gap`.
+
+It does **not** certify offline restore integrity, RCRT/CLI finalize end-to-end closure, broader DB-only mutator read-only blocking, or any K2 destructive-path proof.
+
+---
+
+## Batch K1 Status Summary
+
+**Batch K1 APPROVED FOR LANDING:**
+- ✅ Pre-gate approvals confirmed (Professor + Nibbler)
+- ✅ Final approvals confirmed (Professor + Nibbler)
+- ✅ Narrowed boundary preserved (attach + read-only scaffolding only)
+- ✅ Vault-byte refusal gate established
+- ✅ Caveats explicit (K2 deferred: `9.2a`, `17.11`, offline restore, finalize closure)
+- ✅ Team memory synchronized
+
+**Why:** Approved narrowed boundary is fresh-attach + persisted writability truth + shared vault-byte refusal, not offline-restore certification or broader mutator blocking. K2 will be the home for destructive-path proof closure.
+
