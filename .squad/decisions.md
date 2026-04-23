@@ -2,6 +2,11 @@
 
 ## Active Decisions
 
+### 2026-04-24: Vault-sync-engine Batch M2c final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch M2c for landing as the proof-only `17.17b` slice.
+**Why:** The added invariant test is scoped only to production `finalize_pending_restore(...)` call sites, excludes the test module, and proves each real caller passes an explicit `FinalizeCaller` variant (`ExternalFinalize`, `StartupRecovery`, or `RestoreOriginator`). No production finalize logic, restore/runtime behavior, watcher/IPC surface, startup-healing path, or broader `17.17*` claim changed here.
+
 ### 2026-04-24: Vault-sync-engine Batch M2b-prime final approval
 **By:** Professor + Nibbler + Scruffy (recorded via Copilot)
 **What:** Approved Batch M2b-prime for landing as the narrow mutex + mechanical ordering proof slice: `12.4`, narrow `17.5k`, and `17.17e`.

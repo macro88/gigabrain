@@ -3095,6 +3095,16 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn production_vault_sync_source() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("core")
+            .join("vault_sync.rs");
+        let source = std::fs::read_to_string(path).unwrap();
+        let test_module_start = source.rfind("#[cfg(test)]").unwrap();
+        source[..test_module_start].to_owned()
+    }
+
     fn manifest_json_for_directory(root: &Path) -> String {
         serde_json::to_string(&build_restore_manifest_for_directory(root).unwrap()).unwrap()
     }
@@ -3735,6 +3745,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, FinalizeOutcome::Deferred);
+    }
+
+    #[test]
+    fn finalize_pending_restore_production_callers_pass_explicit_finalize_caller_variants() {
+        let source = production_vault_sync_source();
+        let callsites = source
+            .match_indices("finalize_pending_restore(")
+            .map(|(index, _)| index)
+            .filter(|index| !source[..*index].ends_with("fn "))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            callsites.len(),
+            4,
+            "expected exactly four production finalize_pending_restore call sites"
+        );
+
+        for callsite in callsites {
+            let snippet_end = std::cmp::min(callsite + 240, source.len());
+            let snippet = &source[callsite..snippet_end];
+            assert!(
+                snippet.contains("FinalizeCaller::ExternalFinalize")
+                    || snippet.contains("FinalizeCaller::StartupRecovery")
+                    || snippet.contains("FinalizeCaller::RestoreOriginator"),
+                "production finalize call site must pass an explicit FinalizeCaller variant: {snippet}"
+            );
+        }
     }
 
     #[test]
