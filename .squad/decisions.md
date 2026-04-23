@@ -3075,6 +3075,145 @@ This approval covers CLI truth seam for Batch J narrowed slice only. Does not af
 
 ---
 
+## 2026-04-23: Vault-Sync Batch L1 — Restore-Orphan Startup Recovery Narrowed Slice
+
+### Fry — Batch L1 Implementation Boundary
+
+**Date:** 2026-04-23  
+**Decision:** Batch L1 narrowed to startup restore-orphan recovery only.
+
+**Scope:**
+- `gbrain serve` startup order: stale-session sweep → register own session → claim ownership → run RCRT recovery → register supervisor bookkeeping
+- Registry-only half of task 11.1 (`supervisor_handles` + dedup bookkeeping)
+- Sentinel-directory work (11.1b) deferred to L2
+- One shared 15s stale-heartbeat threshold for all startup recovery decisions
+- Recovery gated through `finalize_pending_restore(..., FinalizeCaller::StartupRecovery { session_id })`
+
+**Claims:**
+- 11.1a: registry-only startup scaffolding
+- 17.5ll: shared 15s heartbeat gate, exact-once finalize, fresh-heartbeat defer, collection_owners ownership truth
+- 17.13: real crash-between-rename-and-Tx-B recovery (not fixture)
+
+**Deferred:** 11.1b, 11.4, 17.12, 2.4a2 → L2+
+
+**Why:** Keeps L1 honest: closes restore-orphan startup recovery after Tx-B residue without claiming sentinel healing, generic `needs_full_sync`, remap attach, or broader handshake closure.
+
+**Status:** ✅ Implementation complete. Validation: default lane ✓, online-model lane ✓.
+
+---
+
+### Scruffy — Batch L1 Proof Lane Confirmation
+
+**Date:** 2026-04-23  
+**Decision:** Treat Batch L1 as honestly supported only on restore-orphan startup lane.
+
+**Proof Coverage:**
+- 11.1a via startup-order evidence: serve startup acquires ownership, runs orphan recovery, no supervisor-ack residue
+- 17.5ll via direct tests: shared 15s heartbeat gate, stale-orphan exact-once startup finalize, fresh-heartbeat defer, collection_owners beats stale/foreign serve_sessions
+- 17.13 via real `start_serve_runtime()` crash-between-rename-and-Tx-B recovery path (not fixture shortcut)
+
+**Scope Guardrail:** Do NOT cite this proof lane as support for generic `needs_full_sync`, remap startup attach, sentinel recovery, or "serve startup heals dirty collections" claims. Tests intentionally scoped to restore-owned pending-finalize state.
+
+**CLI Truth:** L1 surface CLI-only; MCP deferred per Fry decision.
+
+**Status:** ✅ Proof lane complete. All tests pass.
+
+---
+
+### Professor — Batch L1 Pre-Implementation Gate
+
+**Date:** 2026-04-23  
+**Verdict:** APPROVE (restore-orphan startup recovery slice only)
+
+**Boundary:**
+- L1 registry-only startup work: 11.1a (RCRT/supervisor-handle registry + dedup), 17.5ll, 17.13
+- Out of scope: 11.1b (sentinel), 11.4, 17.12, 2.4a2, online-handshake, IPC, broader supervisor-lifecycle
+
+**Non-Negotiable Implementation Constraints:**
+1. Fixed startup order: registry init → RCRT → supervisor spawn (one explicit sequential path)
+2. Fatal registry init failure: process exits before any collection attach/spawn work
+3. Strict stale threshold: one shared named 15s threshold; no alternate timeout math
+4. Canonical finalize path only: `finalize_pending_restore(..., FinalizeCaller::StartupRecovery { ... })` + attach-completion seam; no inline SQL
+5. Fresh-heartbeat fail-closed: fresh `pending_command_heartbeat_at` returns deferred/blocked, not finalize
+6. No success-shaped lies: if startup recovery cannot finalize/attach, collection remains blocked and startup must not emit success-shaped recovery result
+7. Partial 11.1 explicit: split task text into 11.1a (registry-only) and 11.1b (sentinel directory) before code starts
+
+**Minimum Honest Proof:**
+1. Dead-orphan: stale heartbeat + pending restore ⇒ RCRT finalizes exactly once as StartupRecovery before supervisor spawn
+2. Fresh-heartbeat defer: fresh heartbeat ⇒ no finalize, collection remains blocked
+3. Startup-order: direct test or tight instrumentation proving registry init precedes RCRT precedes supervisor spawn
+4. Ownership: stale/foreign serve_sessions cannot authorize recovery; ownership truth from collection_owners
+5. No-broadening: 17.13 certifies only restore-orphan startup finalize/attach, not generic needs_full_sync/remap/sentinel
+6. Orphan-revert: state='restoring' + no pending_root_path + stale/open heartbeat ⇒ OrphanRecovered, revert to active/detached
+7. Blocked-state fail-closed: IntegrityFailed, manifest-incomplete, reconcile-halted do not get success-shaped recovery/attach
+
+**Anything Deferred to L2:** Yes — sentinel-directory half of 11.1 belongs in L2 and should be split out explicitly now. Nothing else needs to move back if constraints enforced.
+
+**Status:** ✅ Approved. Non-negotiables reaffirmed.
+
+---
+
+### Nibbler — Batch L1 Adversarial Pre-Implementation Gate
+
+**Date:** 2026-04-23  
+**Verdict:** APPROVE (restore-orphan startup recovery only)
+
+**Why This Boundary Is Safe:**
+- Narrowed slice keeps one authority surface: startup RCRT for collections in state='restoring', caller-scoped StartupRecovery path, real crash-between-rename-and-Tx-B proof, process-global registry init only
+- Does NOT claim broader dirty-state startup healing, sentinel cleanup, remap fallout, or generic needs_full_sync convergence
+
+**Required Adversarial Seams:**
+
+1. **Fresh-but-slow originator:** If live restore command survives long enough that restarted serve sees state='restoring' and tries to steal finalization:
+   - StartupRecovery MUST return Deferred while pending_command_heartbeat_at is fresh (unless exact RestoreOriginator { command_id } match)
+   - Deferred MUST leave collection blocked (no complete_attach, no clear pending_root_path/restore_command_id, no revert orphan)
+
+2. **Stale or foreign serve_sessions:** If startup recovery trusts any live-ish/stale serve_sessions row and acts on wrong collection/session:
+   - Ownership truth MUST stay collection_owners scoped to specific collection
+   - Ambient/foreign serve_sessions rows MUST NOT authorize/block recovery for another collection
+   - Startup sweep may delete stale serve_sessions but authorization stays collection_owners
+
+3. **Premature RCRT firing:** If RCRT runs before startup established right session/ownership state:
+   - Startup order must stay: minimal registry init → sweep stale serve_sessions → register own session / claim ownership → run RCRT → spawn supervisors
+   - Supervisor must not get chance to write new ack or race the recovery decision before that RCRT pass
+
+4. **Fixed startup order dependency:** If 11.1 grows from "registry-only scaffolding" into hidden sentinel/generalized startup state work:
+   - L1 may include only minimal 11.1 work for RCRT/supervisor bookkeeping
+   - Sentinel-directory init/scanning/cleanup remain out of scope
+
+5. **Success-shaped startup-recovery claims:** If landing this is later cited as proof that startup broadly heals dirty collections:
+   - Approval covers ONLY restore-orphan startup recovery for collections already in restore flow
+   - Does NOT prove startup healing for generic needs_full_sync, brain_put crash sentinels, remap, or broad "serve makes vault consistent" story
+
+**Mandatory Proofs Before L1 Done:**
+1. Fresh-heartbeat defer: fresh pending_command_heartbeat_at + StartupRecovery caller ⇒ Deferred, pending restore fields intact
+2. Exact-originator-only bypass: non-matching caller/session cannot bypass fresh-heartbeat gate
+3. Collection-scoped ownership: startup recovery acts only after new serve owns collection via collection_owners
+4. Startup-order: registry init precedes RCRT precedes supervisor spawn for that collection
+5. Crash-between-rename-and-Tx-B (17.13): next serve start finalizes via StartupRecovery then attaches via post-finalize path
+6. Orphan-revert (17.5ll): state='restoring' + no pending_root_path + stale/open heartbeat ⇒ OrphanRecovered, revert active/detached
+7. Blocked-state fail-closed: IntegrityFailed/manifest-incomplete/reconcile-halted do not get success-shaped recovery/attach
+
+**Review Caveat:** If implementation/task wording tries to say "startup recovery clears dirty collections," "serve startup heals needs_full_sync," or smuggles sentinel recovery into this slice, the approval is void and batch should be re-gated.
+
+**Status:** ✅ Approved. Seams controlled. Guardrails explicit.
+
+---
+
+### 2026-04-23 Batch L1 Status Summary
+
+**Implementation:** ✅ Complete (Fry)  
+**Proof Lane:** ✅ Complete (Scruffy)  
+**Pre-Gate Reviews:** ✅ Approved (Professor + Nibbler)  
+**Decision Merge:** ✅ 4 decisions merged; zero conflicts  
+**Cross-Agent History:** ✅ Updated  
+
+**Gate Status:** ✅ **BATCH L1 APPROVED FOR LANDING** — restore-orphan startup recovery narrowed slice, all non-negotiables enforced, all mandatory proofs provided, scope boundaries explicit.
+
+**Explicitly Deferred:** 11.1b (sentinel-directory), 11.4 (broader sentinel recovery), 17.12 (sentinel proof), 2.4a2 (Windows platform gating), online-handshake, IPC, broader supervisor-lifecycle → L2+
+
+---
+
 ### 2026-04-17: Docs-site Phase 3 capabilities guide (Hermes)
 
 **Decision:** Create `/guides/phase3-capabilities/` as dedicated guide rather than appending to Phase 2 Intelligence Layer guide.

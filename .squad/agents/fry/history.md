@@ -7,6 +7,27 @@
 
 ## Learnings
 
+### 2026-04-23 23:30:00 - Vault-Sync Batch L1 (restore-orphan startup recovery narrowed slice) - APPROVED FOR LANDING
+
+**Scope:** L1 narrowed to startup restore-orphan recovery only after K2 proved the happy offline restore path.
+
+**Implementation complete:**
+- Fixed startup order: stale-session sweep → register own session → claim ownership via `collection_owners` → run RCRT recovery → register supervisor bookkeeping
+- Registry-only half of task 11.1 (`supervisor_handles` + dedup bookkeeping); 11.1b (sentinel-directory) deferred to L2
+- One shared 15s stale-heartbeat threshold for startup recovery decisions
+- Recovery callable only through `finalize_pending_restore(..., FinalizeCaller::StartupRecovery { session_id })`
+- Validation: ✅ default lane, ✅ online-model lane
+
+**Claims:**
+- 11.1a: registry-only startup scaffolding
+- 17.5ll: shared 15s heartbeat gate, exact-once finalize, fresh-heartbeat defer, `collection_owners` ownership truth
+- 17.13: real crash-between-rename-and-Tx-B recovery (not fixture)
+
+**Deferred:**
+- 11.1b (sentinel-directory), 11.4 (sentinel recovery), 17.12 (sentinel proof), 2.4a2 (Windows platform gating), online handshake, IPC, broader supervisor-lifecycle → L2+
+
+**Gate status:** ✅ Pre-implementation gates satisfied (Professor + Nibbler). L1 APPROVED FOR LANDING.
+
 ### 2026-04-23 20:40:00 - Vault-Sync Batch K2 (offline restore integrity closure)
 
 **What worked:**
@@ -708,3 +729,16 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 Offline restore integrity closure is now fully approved by both Professor and Nibbler. Fresh-attach + lease discipline from K1 maintained. Restore originator identity persisted and compared. Tx-B residue durable and auditable. Manifest retry/escalation/tamper behavior coherent. Reset/finalize surfaces truthful. CLI completion path via \sync --finalize-pending -> attach\ proven end-to-end.
 
 Ready for implementation and landing.
+
+## Learnings
+
+### 2026-04-23 22:15:00 - Vault-Sync Batch L1 (startup restore-orphan recovery)
+
+**What worked:**
+- Startup recovery stayed honest once `gbrain serve` did the real order synchronously: stale-session sweep, new session registration, lease claim, RCRT pass, then supervisor-handle bookkeeping.
+- Treating `supervisor_handles` as explicit startup bookkeeping made the L1 slice narrow enough to land without implying the deferred sentinel-directory recovery work.
+- Using the same 15s stale-heartbeat rule for startup recovery kept restore-orphan takeover fail-closed: fresh command heartbeats defer, stale ones recover.
+
+**Challenges:**
+- The pre-existing runtime loop was doing startup work lazily in the background, which made the approved startup order only incidental until the recovery path was pulled into `start_serve_runtime()`.
+- Windows test timing around spawned binaries can surface transient file-lock noise, so the exact required `cargo test --quiet` lane may need a rerun even when the code is correct.
