@@ -2862,6 +2862,69 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 
 **What:** Keep Batch J operator surfacing CLI-only. Do not widen into new `brain_collections` MCP contract. Mark `17.5oo3` complete for CLI `collection info` surface only; MCP deferred.
 
+---
+
+## 2026-04-23: Batch J Final Re-gate Approvals (Professor & Nibbler)
+
+**Session:** 2026-04-23T08:51:00Z — Batch J Final Approval Closeout  
+**Status:** Completed and merged
+
+### Professor — Batch J Re-gate Final Approval
+
+**Verdict:** APPROVE
+
+**Rationale**
+
+- Blocked finalize outcomes (`Deferred`, `ManifestIncomplete`, `IntegrityFailed`, `Aborted`, `NoPendingWork`) now fail closed with `FinalizePendingBlockedError`.
+- In `src\commands\collection.rs`, only `FinalizeOutcome::Finalized` and `FinalizeOutcome::OrphanRecovered` render success.
+- Non-zero exit on all previously misleading paths; CLI truth sufficient for narrow repair.
+- `tasks.md` remains honest: plain sync = active-root only; broader finalize/remap/MCP surfaces deferred.
+
+**CLI truth validation**
+
+- `tests\collection_cli_truth.rs`: 15 test cases prove two previously misleading paths (`NoPendingWork`, `Deferred`) now fail with non-zero exit.
+- Remaining non-final variants share single blocked arm in collection.rs.
+
+**Caveat**
+
+Batch J remains CLI-only proof point. MCP surfacing, destructive restore/remap paths, and full finalize/integrity matrix remain explicitly deferred.
+
+### Nibbler — Batch J Re-gate Final Approval
+
+**Verdict:** APPROVE
+
+**Controlled seam**
+
+`gbrain collection sync <name> --finalize-pending` no longer presents blocked finalize outcomes as success to automation:
+- Only `FinalizeOutcome::Finalized` and `FinalizeOutcome::OrphanRecovered` render success.
+- All other finalize outcomes fail closed with `FinalizePendingBlockedError` and explicit "remains blocked / was not finalized" wording.
+- CLI exit non-zero; no success-shaped behavior leaks.
+
+**Why this passes narrow re-gate**
+
+1. Blocked finalize outcomes no longer return exit 0 from CLI path under review.
+2. No non-final `--finalize-pending` outcome remains success-shaped in wording or status handling.
+3. Repair confined: CLI finalize branch + two CLI-truth tests + honest task-ledger repair note.
+4. `tasks.md` keeps repaired surface honest as CLI-only proof; MCP + destructive-path work deferred.
+
+**Required caveat**
+
+This approval covers CLI truth seam for Batch J narrowed slice only. Does not affirm MCP surfacing, destructive restore/remap paths, or full finalize/integrity matrix as complete.
+
+---
+
+## Batch J Status Summary
+
+**Batch J APPROVED FOR LANDING:**
+- ✅ Implementation complete (Fry)
+- ✅ Validation passed (Scruffy)
+- ✅ Pre-gate approvals confirmed (Professor + Nibbler)
+- ✅ Final re-gate approvals confirmed (Professor + Nibbler)
+- ✅ Fail-closed finalize gate established
+- ✅ CLI-only boundary preserved
+- ✅ Deferred work explicit in tasks.md + decisions
+- ✅ Team memory synchronized
+
 **Why:** Approved narrowed boundary is plain sync + reconcile-halt safety, not fresh agent/MCP review seam. MCP surface not in scope; CLI surface sufficient for this batch.
 
 ### Decision 6 (Scruffy proof lane)

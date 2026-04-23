@@ -7,7 +7,7 @@
 
 ## Learnings
 
-- Vault-sync-engine Batch J (2026-04-23): **RECONFIRMED NARROWED SLICE**. Professor rejected original Batch J (too large, proof-only misclaim), proposed narrower boundary: plain sync + reconcile-halt safety only. Current code shape supports it (hard-error sync still extant, fail-closed gates preserved, destructive paths separate). Reconfirmed that narrowed batch is safe: one new everyday behavior (plain sync on reconcile path) + minimum lease/halt proofs + no MCP widening. All non-negotiables affirmed: reconcile-entrypoint-only, fail-closed on five blocked states, lease singular+short-lived, halts terminal, surfaces truthful. Fry implementation complete; Scruffy proof lane complete; all 6 decisions merged. Next: implementation gate confirmation after Nibbler final adversarial review.
+- Vault-sync-engine Batch J (2026-04-23): **FINAL RE-GATE APPROVED FOR LANDING**. Failed original Batch J (too large, proof-only misclaim), proposed narrower boundary: plain sync + reconcile-halt safety only. Reconfirmed narrowed batch is safe: hard-error sync still extant, fail-closed gates preserved, destructive paths separate, all non-negotiables affirmed. Fry implementation complete; Scruffy proof lane complete; all 6 decisions merged. **2026-04-23 Final Re-gate:** APPROVE. Blocked finalize outcomes now fail closed with explicit wording and non-zero exit. Only `FinalizeOutcome::Finalized` and `FinalizeOutcome::OrphanRecovered` render success. CLI truth sufficient for narrow repair. Tasks.md honest (active-root only, broader finalize/remap/MCP deferred). Caveat: Batch J remains CLI-only proof point; broader finalize/integrity matrix deferred. **Batch J APPROVED FOR LANDING.**
 - This team expects explicit reviewer gating, not silent approval.
 - Maintainability and architectural coherence are key review criteria.
 - For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
@@ -34,6 +34,8 @@
 - A restore/remap repair is landable once legacy compatibility writers share the same OR write-gate, offline restore/remap stop at Tx-B plus `needs_full_sync`, and the task ledger keeps CLI→RCRT attach proof explicitly deferred.
 - When a proposed vault-sync batch mixes a new ordinary operator path with destructive-path proof closure, split it unless every listed "proof" item is already implemented; missing error surfaces and operator diagnostics mean the batch is still changing behavior, not just proving it.
 - The plain-sync follow-up is coherent once it is confined to active-root reconcile plus lease/terminal-halt honesty; keep handshake/reopen/finalize identity closure in the later destructive-path batch and do not smuggle new MCP surfaces into the narrower slice.
+- A narrowed plain-sync batch is still rejectable if adjacent `collection sync` recovery modes return exit-0 / `"status":"ok"` for deferred or integrity-blocked outcomes; blocked finalize paths must stay non-success-shaped even when the no-flag reconcile entrypoint is clean.
+- A narrow re-gate can clear that plain-sync blocker once `sync --finalize-pending` treats every non-final `FinalizeOutcome` as a hard error, only success-shapes `Finalized`/`OrphanRecovered`, and the task ledger keeps the CLI-only boundary explicit.
 
 
 ## Core Context
