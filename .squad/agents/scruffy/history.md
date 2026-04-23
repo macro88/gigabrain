@@ -7,6 +7,8 @@
 
 ## Learnings
 
+- Vault-sync-engine Batch J (2026-04-23): **PROOF LANE COMPLETE, VALIDATION PASSED**. Narrowed batch proof lane strengthened all 15 test cases in `tests/collection_cli_truth.rs` covering active-root reconcile path, all five blocked states (fail-closed gates), duplicate/trivial halt terminal behavior, lease acquire/heartbeat/release (panic-safe via RAII), and operator diagnostics on CLI `collection info --json`. All tests pass in default lane ✅ and online-model lane ✅. Scruffy decision: narrowed batch supported; CLI-only truthfulness; MCP deferred. All seven IDs + two proofs credible.
+- Batch H coverage is best anchored at `authorize_full_hash_reconcile()` and `hash_refusal_reason()` while the restore/remap pipeline is still forming: active tests can pin caller-identity gating and empty/trivial-body refusals now, and ignored seam tests should carry the exact blockers for phase ordering, 64-byte canonical reuse, and attach-completion write-gate sequencing until those helpers exist.
 - Batch G raw_imports repair is safest when `apply_reingest()` is pinned directly on both existing-page seams: explicit `existing_page_id` and slug-matched lookup must refuse zero-total history before any page/file_state mutation, while truly new pages may still bootstrap their first raw import row.
 - Batch G coverage stays honest when active tests pin the implemented reconcile/put boundaries (unchanged=no rotation, changed=rotation, stored UUID preserved) and deferred `full_hash_reconcile` / render-backfill behavior is locked behind ignored seam tests with exact task blockers.
 - Batch F coverage is most truthful when current-idempotency assertions stay live while raw_imports/apply invariants are locked as ignored seam tests with exact task blockers; otherwise the suite either blesses missing safety work or goes red before implementation exists.
@@ -32,6 +34,7 @@
 - Batch E frontmatter coverage is strongest at round-trip seams: lock `gbrain_id` through parse/render, import/export, and serde before UUID columns are fully wired.
 - When UUID adoption is only partially implemented, avoid tests that bless the placeholder state; cover source-byte non-rewrite and explicit quarantine outcomes instead, then call out the exact missing seam.
 - Batch E rename-guard coverage needs a direct adversarial template seam: large frontmatter plus a tiny non-empty body must still refuse hash pairing, while long-body hash/UUID positives stay named around what actually succeeds.
+- Batch J proof is most credible when plain sync is pinned at both layers: `vault_sync::sync_collection()` must prove active-root reconcile, short-lived lease lifetime, and terminal duplicate/trivial halts, while CLI tests must prove blocked-state diagnostics and fail-closed operator messaging stay truthful.
 
 ## 2026-04-22 Vault-Sync Foundation Third Gate — Approved With Explicit Debt
 

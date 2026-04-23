@@ -1,30 +1,25 @@
-updated_at: 2026-04-19T00:00:00Z
-focus_area: v0.9.3 implementation — fts5-search-robustness + assertion-extraction-tightening
-active_issues: [52, 53, 38, 55]
-active_branch: release/v0.9.3
+updated_at: 2026-04-23T07:32:00+08:00
+focus_area: vault-sync-engine Batch J — plain sync + restore/integrity proof closure
+active_issues: []
+active_branch: spec/vault-sync-engine
 ---
 
 # What We're Focused On
 
-**Active changes (v0.9.4 target):**
+**Active change (vault-sync-engine):**
 
-1. `fts5-search-robustness` — apply-ready (4/4 artifacts). Covers #52 + #53.
-   Owner: Fry. Reviewers: Leela, Professor.
-   - Apply `sanitize_fts_query` in `gbrain search` (default on, `--raw` to bypass)
-   - Apply sanitizer in MCP `brain_search` handler
-   - Emit `{"error":...}` JSON on raw FTS5 errors
+1. `vault-sync-engine` — Batch J pre-gated / queued for implementation.
+   Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy.
+   - Make plain `gbrain collection sync <name>` real without weakening the H/I restore/remap safety model
+   - Close the deferred restore/integrity proof set that must be real for honest landing claims
+   - Keep reopen fail-closed until RCRT and preserve singular ownership truth
 
-2. `assertion-extraction-tightening` — apply-ready (4/4 artifacts). Covers #38, conditional #55.
-   Owner: Professor. Reviewers: Leela, Nibbler.
-   - Scope extraction to `## Assertions` sections + frontmatter only (Phase A–D)
-   - Phase E (semantic similarity gate for #55) is CONDITIONAL on post-Phase-A benchmark rerun
+**Completed in this branch:**
+- Batch H — Phase 0-3 restore/remap safety helpers + fresh-connection full-hash activation
+- Batch I — restore/remap orchestration + ownership recovery, including legacy write-gating and RCRT-only reopen
 
-**Near-complete lanes to finish before v0.9.4:**
-- `configurable-embedding-model` (27/29 tasks)
-- `bge-small-dual-release-channels` (12/14 tasks)
-- `simplified-install` (17/18 tasks)
+**Explicitly deferred into Batch J or later:**
+- Plain `gbrain collection sync <name>` operator path
+- End-to-end offline CLI-to-RCRT proof and remaining restore/integrity closure tasks
 
-**Already fixed in v0.9.2:**
-- #54 PARA type inference → close issue
-
-**Gate:** All v0.9.4 ship gates documented in `.squad/decisions/inbox/leela-v093-routing.md`.
+**Gate:** Batch J requires Professor pre-implementation gate and mandatory Nibbler adversarial review before implementation.

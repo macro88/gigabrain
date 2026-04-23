@@ -2803,6 +2803,101 @@ The offline Rust test paths are stable, but the full reproducibility story for t
 
 **Scope caveat:** This rejection is for the graph slice only. It is not a restatement of the broader MCP write-surface review in issue #29.
 
+---
+
+## 2026-04-23: Vault Sync Batch J — Plain Sync + Reconcile-Halt Safety
+
+### Decision 1 (Professor pre-gate rejection + narrowed proposal)
+
+**By:** Professor
+
+**What:** Rejected original Batch J boundary (too large, mixed real behavior with destructive-path proofs). Proposed narrower boundary: plain `gbrain collection sync <name>` + reconcile-halt safety only. Deferred restore/remap/finalize/handshake closure to next batch.
+
+**Why:** Original batch hid fresh behavior inside "proof closure" label and created dishonest review surface. Narrower slice is one coherent unit: single new operator surface (`9.5`) with minimum lease/halt proofs to keep it honest.
+
+**Non-negotiables:**
+- No-flag sync is reconcile entrypoint, not recovery multiplexer
+- Fail-closed on restore-pending, restore-integrity, manifest-incomplete, reconcile-halted states
+- needs_full_sync cleared only by actual active-root reconcile
+- Offline CLI lease singular, short-lived, released on all exits
+- Duplicate/trivial halts terminal, not self-healing
+- Operator surfaces truthful; no success-claiming before reconcile completes
+- No new IPC/proxy/serve-handshake behavior
+- No fresh MCP boundary opened
+
+### Decision 2 (Leela rescope recommendation)
+
+**By:** Leela
+
+**What:** Turned Professor's narrower proposal into concrete task list: `9.5` + `17.5hh/hh2/hh3` + `17.5nn/oo/oo3` (make real in code) with mandatory non-regression proofs. Deferred all destructive-path items.
+
+**Why:** Batch I landed restore/remap orchestration but left plain sync hard-errored. Narrower boundary unblocks everyday operator path while keeping deferred items for separate destructive-path closure batch.
+
+### Decision 3 (Professor reconfirmation)
+
+**By:** Professor
+
+**What:** APPROVED the narrowed Batch J boundary after review of code shape. Reaffirmed all non-negotiables and implementation constraints.
+
+**Why:** Current code already preserves fail-closed gates. Narrowed batch is coherent because only new everyday behavior is plain sync on reconcile path; destructive paths already separate.
+
+### Decision 4 (Nibbler pre-gate + reconfirmation)
+
+**By:** Nibbler
+
+**What:** Original pre-gate APPROVED narrowed boundary only as combined slice. Later RECONFIRMED that the rescoped narrower split is safe if implementation stays on active-root reconcile path and does not use plain sync as recovery multiplexer.
+
+**Why:** Plain sync is not harmless UX polish; it creates the default operator entrypoint. Narrowed batch is safe only because deferred items (ownership/finalize/remap/handshake proofs) no longer hide inside same slice. Rescoped narrower split removes exploit shape if implementation keeps hard boundaries.
+
+**Adversarial non-negotiables:**
+1. Bare sync is active-root reconcile only
+2. Blocked states stay blocked and truthful
+3. Short-lived CLI ownership stays singular
+4. Reconcile halts stay terminal, not self-healing
+5. Operator surfaces stay honest
+
+### Decision 5 (Fry CLI boundary)
+
+**By:** Fry
+
+**What:** Keep Batch J operator surfacing CLI-only. Do not widen into new `brain_collections` MCP contract. Mark `17.5oo3` complete for CLI `collection info` surface only; MCP deferred.
+
+**Why:** Approved narrowed boundary is plain sync + reconcile-halt safety, not fresh agent/MCP review seam. MCP surface not in scope; CLI surface sufficient for this batch.
+
+### Decision 6 (Scruffy proof lane)
+
+**By:** Scruffy
+
+**What:** Narrowed batch supported in code for all seven IDs. CLI truthfulness scoped to `gbrain collection info --json` rather than new MCP surface. All 15 test cases pass in default and online-model lanes.
+
+**Why:** Unit coverage exists for vault_sync and reconciler. Added CLI-facing tests prove fail-closed behavior on all blocked states and lease lifecycle correctness. Operator diagnostics made truthful on existing CLI surface.
+
+---
+
+## Narrowed Batch J Closure Summary
+
+**Status:** ✅ Implementation complete. Validation passed. Decisions merged.
+
+**Coverage (7 IDs + 2 proofs):**
+- `9.5` plain sync — active-root reconcile path only; fail-closed on five blocked states
+- `17.5hh` multi-owner invariant — enforced via `collection_owners` PK at entry
+- `17.5hh2` CLI lease release — RAII guard releases on clean + panic exits
+- `17.5hh3` heartbeat — explicit renew loop during reconcile work
+- `17.5nn` duplicate UUID halt — terminal reconcile halt
+- `17.5oo` trivial content halt — terminal reconcile halt
+- `17.5oo3` operator diagnostics — CLI `collection info` with `integrity_blocked` + `suggested_command` (CLI-only)
+
+**Deferred to destructive-path batch (18 items):**
+- `17.5hh4`, `17.5ii*`, `17.5ii4-5`, `17.5kk3`, `17.5ll*`, `17.5mm`, `17.5pp`, `17.5qq*`, `17.9`-`17.13`
+- All restore/remap/finalize/handshake/ownership-change/manifest-state-machine/end-to-end proofs remain explicitly deferred
+
+**Validation (all passing):**
+- ✅ `cargo test --quiet` (default lane)
+- ✅ `GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model` (online-model lane)
+- ✅ Clippy + fmt clean
+
+**Next:** Final adversarial review (Nibbler gate 8.2) + implementation gate confirmation (Professor) before landing.
+
 ### 2026-04-16: Nibbler — graph slice final sign-off (tasks 1.1-2.5)
 
 **By:** Nibbler

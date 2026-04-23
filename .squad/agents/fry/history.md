@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Vault-sync-engine Batch J (2026-04-23): **IMPLEMENTATION COMPLETE, VALIDATION PASSED**. Narrowed Batch J (plain sync + reconcile-halt safety) implemented in four files: `src/commands/collection.rs` (sync command, fail-closed gates, CLI truth), `src/core/vault_sync.rs` (sync path with lease/entry checks), `src/core/reconciler.rs` (DuplicateUuidError + UnresolvableTrivialContentError halts terminal), `tests/collection_cli_truth.rs` (15 test cases, all pass). All five blocked states fail-closed; lease acquired/heartbeat/released via RAII; duplicate/trivial halts terminal; operator surfaces truthful. Validation: ✅ `cargo test --quiet` (default lane), ✅ online-model lane. Scruffy proof lane confirmed. All 6 decisions merged to canonical ledger. Next: Nibbler final adversarial review + Professor implementation gate.
 - Vault-sync-engine Batch G (2026-04-22): `full_hash_reconcile` now needs an explicit, closed mode/authorization contract validated against `collections.state` before any walk, and the hash-unchanged branch must self-heal only `file_state` metadata while preserving user bytes and `raw_imports`. The `render_page` seam now always re-emits persisted `pages.uuid` as `gbrain_id`, so agent updates cannot strip identity even when incoming markdown omits the field.
 - Vault-sync-engine Batch E (2026-04-22): Wired UUIDv7 lifecycle without file rewrite drift by making `Page.uuid` explicit, preserving `gbrain_id` through parse/render, and generating UUIDs server-side only when frontmatter lacks one. Reconciler rename classification now works in the intended order (native interface → UUID → conservative hash), and ambiguous/trivial hash matches fail closed into `quarantined_ambiguous` with INFO refusal logging instead of optimistic pairing.
 - Vault-sync-engine Batch C (2026-04-22): Resumed after rate-limit interruption. Prior run had completed fs_safety.rs implementation (all six primitives + 15 unit tests). Finished Batch C by: (1) marking rustix dependency complete (already in Cargo.toml), (2) advancing stat_file/stat_diff/full_hash_reconcile to honest foundations showing contracts, (3) advancing reconciler walk plumbing to demonstrate safe fd-relative structure with Unix/Windows platform gates, (4) fixing platform-specific test to handle Windows UnsupportedPlatformError. All 439 lib tests pass. Foundation is truthful: primitives work, contracts are clear, stubs explicitly note what's deferred to full reconciler batch.
@@ -618,6 +619,21 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - Rename via native events preserves pages.id
 - Rename via UUID match preserves pages.id across directory reorganization
 - Rename via content-hash uniqueness preserves pages.id
+
+### 2026-04-22 23:40:00 - Vault-Sync Batch H (restore/remap safety helpers)
+
+**What worked:**
+- The restore/remap safety slice is easiest to keep honest as callable core helpers: UUID-migration preflight, RO-mount gate, dirty/sentinel status, drift capture, stat-only stability, fence, and fresh-connection TOCTOU recheck each test cleanly when exposed as separate seams.
+- Closed authorization stays reviewable when the enum carries identity strings (`restore_command_id`, lease session id, attach command id) and validation happens before any root open or walk.
+- The trivial-content predicate should stay single-sourced with the rename guard (`body_size_bytes < 64 || empty`) so restore/remap preflights and rename inference cannot drift apart.
+
+**Challenges:**
+- Reconciler had two subtle double-read seams (`fs::read` plus `hash_file(path)`) that could split `raw_imports` bytes from stored sha256 under concurrent writes; hashing the in-memory bytes closed both.
+- Fresh-attach can be implemented honestly at core level now, but higher-level serve/supervisor choreography is still a separate slice and should not be over-claimed in task updates.
+
+**Next:**
+- Land Phase 4 remap verification and the real restore/remap execution/orchestration call sites on top of these helpers.
+- Wire the attach helper into the future serve/first-use-after-detach entry points without weakening the write gate.
 - Ambiguous hash-pair refusal quarantines old, creates new
 - Trivial-content (empty body post-frontmatter) never hash-paired
 
@@ -658,3 +674,16 @@ All 533 tests pass. cargo fmt, cargo test, cargo clippy all green.
 - `cargo clippy --all-targets --locked -- -D warnings`: green
 - `GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model`: green
 - `cargo clippy --all-targets --no-default-features --features bundled,online-model --locked -- -D warnings`: green
+### 2026-04-22 23:55:00 - Vault-Sync Batch I (restore/remap orchestration)
+
+**What worked:**
+- `collection_owners` + `serve_sessions` can stay the single live-ownership contract while still mirroring the current lease identity onto `collections.*_lease_session_id` for the existing full-hash authorization checks.
+- A lightweight serve runtime loop can satisfy the Batch I handshake/recovery seam without introducing watcher product scope: exact `(session_id, reload_generation)` acks, startup do-not-impersonate, and RCRT-style attach/finalize passes all live in one place.
+- Centralizing collection-aware slug resolution and the OR-composed write gate in shared helpers made it practical to harden CLI and MCP mutators together.
+
+**Challenges:**
+- Existing command/MCP code assumed global slug uniqueness; introducing collection-aware write routing required touching every mutator that resolves page IDs directly.
+- The CLI and MCP `brain_put` contracts differ: CLI still allows unconditional upsert, while MCP must fail closed unless `expected_version` is supplied for updates.
+
+**Next:**
+- Finish the remaining Batch I adversarial proofs (`17.5ii4`, `17.5pp`, `17.5qq2-8`, restore integrity escalation paths) before calling the batch fully closed.

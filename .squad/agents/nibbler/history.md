@@ -7,6 +7,11 @@
 
 ## Learnings
 
+- Vault-sync-engine Batch J (2026-04-23): **RECONFIRMED NARROWED SLICE AFTER RESCOPE**. Nibbler's original pre-gate approved narrowed batch only as combined slice with all 18 proof items attached. When Professor proposed rescoping to plain sync + 7-ID closure only, Nibbler reconfirmed: the narrowed split is safe **if** implementation keeps plain sync strictly on active-root reconcile lane and does NOT use it as recovery multiplexer. Current code shape supports it: bare sync still hard-errors, fail-closed gates already exist, destructive paths separate, ownership/lease primitives center on `collection_owners`, restore/remap stays behind restoring + needs_full_sync + RCRT attach. Adversarial non-negotiables reaffirmed: active-root reconcile only, blocked states blocked and truthful, CLI ownership singular, reconcile halts terminal, operator surfaces honest. Fry implementation complete; Scruffy proof lane complete; all decisions merged. Next: implementation gate confirmation before landing.
+- Narrowed Batch J is safe to implement next only if bare `collection sync` stays an active-root reconcile entrypoint, never a recovery multiplexer: no implicit finalize, remap, or write-reopen, and no new MCP surface just to report blocked states.
+- Batch J is safe as one slice only if plain `collection sync` lands inseparably with lease/ack/finalize/integrity proof closure; enabling the default sync surface before those proofs turns normal operator traffic into a success-shaped reopen path.
+- Once plain sync works, `sync`, `sync --finalize-pending`, `restore-reset`, `reconcile-reset`, and `brain_collections` become one operator trust surface: every command must preserve fail-closed state truth and never imply writes reopened before RCRT or reset preconditions are actually satisfied.
+- Batch I re-gates cleanly only when legacy ingest/import honor the same global `state='restoring' OR needs_full_sync=1` interlock, offline restore/remap stop before attach, and the task ledger openly keeps plain sync plus offline CLI end-to-end recovery in deferred territory.
 - Phase 3 review confirmed that raw-data and gap endpoints are only acceptable once payload shape checks, overwrite intent, and transport-size caps are all closed together; one missing seam keeps the whole surface soft.
 - Adversarial review begins at the proposal, not only at the code diff.
 - This project values hidden-risk discovery and reviewer lockout discipline.
@@ -20,6 +25,14 @@
 - Deferred restore/full-hash and UUID writeback seams are acceptable only when tasks and code comments keep them explicit and error-shaped; success-shaped stubs would make the same slice rejectable.
 - Reconcile apply must distinguish true creates from existing-page updates before raw_import rotation; if an existing page reaches apply with zero total raw_import history, silent bootstrap is identity corruption, not healing.
 - Zero-total `raw_imports` is a different seam from zero-active history: the shared rotation helper may still allow first-write bootstrap, so existing-page apply paths need their own pre-mutation guard while truly new pages remain the only narrow row-count-zero bootstrap case.
+- Destructive bypass modes are not identity-scoped just because the API carries a string; if code only checks a non-empty `restore_command_id` or lease/session token without comparing it to persisted ownership state, any caller can forge the bypass.
+- Batch H re-gates cleanly once restore/remap full-hash authorization compares the caller token to persisted collection owner fields and fails closed on missing or mismatched owners; mode shape plus any non-empty string is no longer enough.
+- Batch I is only gateable as one slice if ownership, finalize, reattach, and write-gate land together; splitting them would leave a success-shaped destructive path with no trustworthy owner or reopen barrier.
+- `collection_owners` must stay the sole ownership truth; any fallback to `serve_sessions`, `supervisor_handles`, or restore-command residue for live-owner resolution reopens spoofed-release and split-brain restore.
+- The `(session_id, reload_generation)` ack is safe only if commands also fail closed on owner change, serve death, stale ack residue, and fresh-serve impersonation; matching one field is not enough.
+- `run_tx_b` and RCRT are separate authority boundaries: finalize may happen through the canonical helper, but reattach/open-writes must stay exclusive to the RCRT attach-completion path under single-flight.
+- Batch I credibility needs explicit tests for the OR write-gate and RCRT skip-on-halt behavior, even if those tests were not in the initial batch list; otherwise restore/remap can quietly reopen writes or bulldoze integrity blocks.
+- Batch I still fails gate if any offline or command path calls `complete_attach` directly; even with `run_tx_b` canonicalized, bypassing RCRT turns `needs_full_sync` into a transient bit instead of the promised reopen barrier.
 
 ## 2026-04-15 In Progress
 

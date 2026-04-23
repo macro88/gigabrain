@@ -7,7 +7,7 @@
 
 ## Learnings
 
-- Review work should start from the proposal and the accepted project constraints.
+- Vault-sync-engine Batch J (2026-04-23): **RECONFIRMED NARROWED SLICE**. Professor rejected original Batch J (too large, proof-only misclaim), proposed narrower boundary: plain sync + reconcile-halt safety only. Current code shape supports it (hard-error sync still extant, fail-closed gates preserved, destructive paths separate). Reconfirmed that narrowed batch is safe: one new everyday behavior (plain sync on reconcile path) + minimum lease/halt proofs + no MCP widening. All non-negotiables affirmed: reconcile-entrypoint-only, fail-closed on five blocked states, lease singular+short-lived, halts terminal, surfaces truthful. Fry implementation complete; Scruffy proof lane complete; all 6 decisions merged. Next: implementation gate confirmation after Nibbler final adversarial review.
 - This team expects explicit reviewer gating, not silent approval.
 - Maintainability and architectural coherence are key review criteria.
 - For CLI review, validate behavior from more than one working directory; path-dependent “embedded” resources can look correct at repo root while failing the shipped-binary contract.
@@ -26,6 +26,14 @@
 - A reconciliation apply slice is landable when raw-import rotation is shared across every in-scope writer, DB-only-state is re-checked inside the apply transaction, and later restore/full-hash seams stay explicitly deferred instead of being papered over.
 - A full-hash recovery slice is landable only when its API makes authorization explicit, separates stat self-heal from content-changing reingest, and treats zero-active `raw_imports` as a typed invariant failure rather than a recoverable convenience case.
 - A follow-on full-hash gate is landable when the unchanged-hash path is provably metadata-only, the changed/new path reuses the existing atomic apply seam, and the task ledger names `brain_put` UUID preservation as a render seam rather than pretending passive reconcile now writes files.
+- A restore/remap pre-destruction slice is landable only when the drift-capture bypass is authorized by explicit caller identity (lease or restore-command token), the trivial-content predicate is shared with rename resolution, and writes stay blocked until attach completion clears `needs_full_sync`.
+- A closed authorization enum is still too weak for destructive safety bypasses if the supplied token is only checked for presence; the code must compare it to persisted owner identity, not just caller class.
+- A narrow repair clears a destructive-bypass blocker once authorization compares caller identity to persisted collection ownership before any root walk, keeps fresh-attach on its own seam, and adds direct match/mismatch tests in every supported validation lane.
+- The next restore/remap batch is coherent only if it lands the lease/handshake, canonical finalize path, RCRT attach handoff, and write-gate together; splitting those seams leaves destructive recovery either unreviewable or falsely "done."
+- A restore/remap batch is still rejectable if any compatibility writer bypasses the new OR write-gate or if a checked task claims a CLI recovery/sync path that still hard-errors; destructive-path review needs both contract closure and truthful operator surface claims.
+- A restore/remap repair is landable once legacy compatibility writers share the same OR write-gate, offline restore/remap stop at Tx-B plus `needs_full_sync`, and the task ledger keeps CLI→RCRT attach proof explicitly deferred.
+- When a proposed vault-sync batch mixes a new ordinary operator path with destructive-path proof closure, split it unless every listed "proof" item is already implemented; missing error surfaces and operator diagnostics mean the batch is still changing behavior, not just proving it.
+- The plain-sync follow-up is coherent once it is confined to active-root reconcile plus lease/terminal-halt honesty; keep handshake/reopen/finalize identity closure in the later destructive-path batch and do not smuggle new MCP surfaces into the narrower slice.
 
 
 ## Core Context

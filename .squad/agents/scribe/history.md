@@ -106,47 +106,44 @@ Scribe owns logs, orchestration records, and decision merging for GigaBrain.
 
 **Ready for git commit:** `.squad/orchestration-log/`, `.squad/log/`, `.squad/decisions.md` (merged), agent histories (updated).
 
-## 2026-04-17 Phase 3 Final Wrap-up Batch
+## 2026-04-23T08:18:25Z Vault Sync Batch J Orchestration Closeout
 
-**Spawn manifest (6 agents, Phase 3 completion):**
-- ✅ Leela | Archive closure + final reconciliation | Both Phase 3 proposals archived; both reviewer gates closed
-- ✅ Fry | Phase 3 CI integration final | CI benchmarks job verified; clippy fixed; all 8 skills production-ready
-- ✅ Amy | Documentation status alignment | Docs/roadmap/getting-started updated to v1.0.0; feature count accuracy fixed
-- ✅ Hermes | Docs-site Phase 3 capabilities | New guide created; Phase 3 tools documented; README "Features" section updated
-- ✅ Nibbler | MCP adversarial review (gate 8.2) | Approved 2026-04-16; zero blocking findings; 3 low-priority follow-ups noted
-- ✅ Scruffy | Benchmark reproducibility (gate 8.4) | Approved 2026-04-17; determinism verified; all suites reproduced identically
+**Session arc:**
+- Fry lane: Implementation complete. Four files updated: `src/commands/collection.rs` (sync command, fail-closed gates, CLI truth), `src/core/vault_sync.rs` (sync path, lease, entry checks), `src/core/reconciler.rs` (duplicate UUID + trivial content halts terminal), `tests/collection_cli_truth.rs` (15 test cases, all pass). Validation: ✅ default lane, ✅ online-model lane.
+- Scruffy lane: Proof lane complete. All 15 tests strengthen coverage for narrowed batch (seven IDs + two proofs). Scruffy decision: CLI-only truthfulness; MCP deferred. All validators pass.
+- Leela: Narrowed boundary recommendation → concrete task list (7 make-real + 2 mandatory proofs). All destructive-path items explicitly deferred.
+- Professor: Rejected original; proposed narrower (CLI-only, active-root reconcile only). Reconfirmed after rescope.
+- Nibbler: Original pre-gate approved narrowed batch as combined slice. Reconfirmed that rescoped narrower split is safe if implementation stays honest.
+- Fry decision (CLI-only): `17.5oo3` CLI surface; MCP deferred. Merged to decisions.md.
+- Scruffy decision (proof lane): Seven IDs + two proofs supported; CLI-only surface approved. Merged to decisions.md.
+- Leela decision (rescope recommendation): Narrowed boundary; seven tasks + two proofs. Merged to decisions.md.
+- Professor decisions (pre-gate rejection + reconfirm): Original rejected; narrowed slice approved. Merged to decisions.md.
+- Nibbler decisions (pre-gate + reconfirm): Approved narrowed slice with reaffirmed adversarial non-negotiables. Merged to decisions.md.
 
-**Orchestration log written:**
-- `2026-04-17T23-59-59Z-phase3-final-wrap.md` (all 6 agents, summary, gate status)
+**Orchestration logs written (2):**
+- `2026-04-23T08-18-25Z-fry.md` (implementation completion, all 7 IDs, validation, non-negotiables held)
+- `2026-04-23T08-18-25Z-scruffy.md` (proof lane completion, 15 tests, all validators pass)
 
-**Session log written:**
-- `2026-04-17-phase3-final-wrap.md` (Phase 3 completion outcome, decisions, follow-ups)
+**Session log written (1):**
+- `2026-04-23T08-18-25Z-vault-sync-batch-j.md` (session arc, decisions record, team memory updates, status)
 
 **Inbox decisions merged (7 → canonical decisions.md):**
-1. `amy-phase3-docs.md` (D1–D6: roadmap status ✅ Complete, version targets v1.0.0, MCP tools 12→16, benchmark CI caveat, skills production-ready, two OpenSpec proposals named)
-2. `fry-phase3-final.md` (CI integration: benchmarks job, BEIR workflow separate, reviewer gates open, ship gate 8 assessment)
-3. `hermes-phase3-site.md` (D1–D5: Phase 3 capabilities guide, both proposals archived atomically, CLI reference "Planned API" removed, MCP tools table expanded, README "Planned features" → "Features")
-4. `leela-phase3-archive.md` (first pass: p3-polish archived, p3-skills held pending gates 8.2/8.4, sprint-0 orphan cleaned)
-5. `leela-phase3-final-reconcile.md` (final pass: both gates closed, p3-skills archived, tasks.md reconciled, docs updated to reflect Phase 3 complete, PR #31 body rewritten)
-6. `nibbler-phase3-review.md` (gate 8.2 APPROVED: brain_gap/brain_gaps/brain_stats/brain_raw reviewed; zero blockers; 3 low-priority follow-ups)
-7. `scruffy-phase3-repro.md` (gate 8.4 APPROVED: offline suite reproduced twice; determinism verified; all suites passed identically)
-- All 7 inbox files deleted after merge; zero deduplication conflicts
-- Decisions now complete with full Phase 3 justification trail
+1. `fry-vault-sync-batch-j.md` (CLI-only boundary for `17.5oo3`)
+2. `scruffy-vault-sync-batch-j.md` (proof lane confirmation)
+3. `leela-vault-sync-batch-j-rescope.md` (narrowed boundary recommendation)
+4. `professor-vault-sync-batch-j-pregate.md` (original rejection + narrower proposal)
+5. `professor-vault-sync-batch-j-reconfirm.md` (approval of narrowed slice)
+6. `nibbler-vault-sync-batch-j-pregate.md` (original pre-gate with split caveats)
+7. `nibbler-vault-sync-batch-j-reconfirm.md` (reconfirmation of narrowed slice)
+- Zero deduplication conflicts; all 7 files staged for deletion
 
 **Cross-agent history updates:**
-- Leela: Archive closure, final reconciliation, both gates narrative
-- Fry: Phase 3 CI integration, ship gate 8 validation
-- All other agents: Implicit via decision merge and orchestration log reference
+- Fry: Batch J completion outcome; narrowed boundary; all 7 IDs covered; deferred items preserved
+- Scruffy: Proof lane completion; 15 tests; all validators pass; seven IDs + two proofs
+- Professor: Rejection + reconfirmation flow; narrowed boundary approved; non-negotiables reaffirmed
+- Nibbler: Reconfirmation after rescope; narrowed slice safe; adversarial non-negotiables preserved
+- Leela: (implicit via decision merge and orchestration log reference)
+- Scribe (this log): Batch J orchestration complete; decision merge applied; team memory synchronized
 
-**Phase 3 final status:**
-- 🔄 → ✅ **Engineering:** Complete (all tasks checked in openspec)
-- 🔄 → ✅ **Reviewer gate 8.2 (Nibbler):** APPROVED 2026-04-16 (zero blockers)
-- 🔄 → ✅ **Reviewer gate 8.4 (Scruffy):** APPROVED 2026-04-17 (determinism verified)
-- 🔄 → ✅ **Documentation:** Aligned (roadmap, README, getting-started, docs-site all reflect Phase 3 complete)
-- 🔄 → ✅ **Archival:** Both OpenSpec proposals in archive with honest status (complete)
-- 🔄 → ✅ **PR #31:** Body updated with final truth; ready for merge + v1.0.0 tagging
-
-**Ready for git commit:** `.squad/` changes only (orchestration-log, log, decisions.md merged, agent histories updated).
-
-**Next:** Git commit, merge PR #31, tag v1.0.0.
+**Status:** ✅ Implementation complete. Validation passed. Decisions merged. Team memory synchronized. Ready for git commit of all `.squad/` changes.
 
