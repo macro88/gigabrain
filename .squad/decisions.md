@@ -2,6 +2,23 @@
 
 ## Active Decisions
 
+### 2026-04-24: Vault-sync-engine Batch M1b-ii precondition split
+**By:** Fry
+**What:** Keep the Unix `gbrain put` / `brain_put` precondition gate split in two layers: a real `check_fs_precondition()` helper that can self-heal stat drift on hash match, and a no-side-effect pre-sentinel inspection path for actual writes.
+**Why:** Batch M1b-ii needed both truths at once: `12.2` requires a real self-healing filesystem precondition helper, but `12.4aa` and the M1b-ii gate require CAS/precondition failures to happen before sentinel creation with no DB mutation on the pre-sentinel branch. Reusing the self-healing helper directly in the write path would have violated that sentinel-failure truth by mutating `file_state` before the sentinel existed.
+**Consequences:** Unix write-through paths can fail closed on stale OCC or external-drift conflicts before any sentinel/tempfile work. The standalone helper remains available for direct proof and later reuse without widening this batch to the deferred happy-path or mutex scope. Any future full `12.1` closure must preserve the same ordering: pre-sentinel inspection first, sentinel creation before any write-path DB mutation.
+
+### 2026-04-24: Vault-sync-engine Batch M1b-i write-gate proof closure
+**By:** Bender
+**What:** Closed all four open items in the M1b-i batch (17.5s2–17.5s5) with test-only evidence. No production code was touched. All behavior was already implemented under task 11.8.
+**Why:** All five entry points already call `vault_sync::ensure_collection_write_allowed` before any mutation. The interlock is consistently implemented. No production-code truth bug was found. Added 6 new test functions to explicitly cover mutator matrix and all refusal conditions.
+**Evidence:** 11 total write-gate assertions (6 new + 5 pre-existing), all passing. Tests added for `brain_link`, `brain_check`, `brain_raw` refusal during restoring; `brain_gap` and `brain_put` refusal coverage pre-existed. Explicit mutator matrix proves both state=restoring and needs_full_sync=1 conditions.
+
+### 2026-04-24: Vault-sync-engine Batch M1a final approval
+**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
+**What:** Approved Batch M1a for landing as the narrow writer-side sentinel crash-core slice only: `12.1a`, `12.4aa`, `12.4b`, `12.4c`, `12.4d`, `17.5t`, `17.5u`, `17.5u2`, and `17.5v`.
+**Why:** `put` now durably creates and fsyncs the sentinel before vault mutation, hard-stops on parent-directory fsync failure, detects post-rename foreign replacement, retains the sentinel on post-rename failures, and uses best-effort fresh-connection `needs_full_sync` fallback while startup recovery consumes retained sentinels. The proof remains narrow and Unix-only: it does not cover full `12.1`, `12.2`, `12.3`, full `12.4`, `12.5`, `12.6*`, `12.7`, IPC/live routing, generic startup healing, or full happy-path write-through closure.
+
 ### 2026-04-24: Vault-sync-engine Batch M1a scope split
 **By:** Fry
 **What:** Split `12.1` before implementation and landed only `12.1a`, the pre-gated writer-side sentinel crash core. The implemented seam is limited to sentinel creation/durable ordering, tempfile rename, parent-directory fsync hard-stop, post-rename foreign-rename detection, retained sentinel on post-rename failure, and fresh-connection `needs_full_sync` best-effort fallback.

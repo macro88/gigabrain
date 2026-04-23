@@ -164,3 +164,23 @@ This dual-release cycle validated the full team workflow:
 - **CI hermetic testing requires global env vars, not per-test guards.** A test setting `GBRAIN_FORCE_HASH_SHIM=1` via `EnvVarGuard` does NOT make the entire CI job hermetic — the CI job itself must set the env var.
 - **Fix velocity ≠ fix correctness.** Fry produced 4+ fix commits in rapid succession, addressing many bot comments. But the three blockers (which require deeper concurrency reasoning) were not addressed. Volume of fixes is not the same as blocker closure.
 **Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
+
+## 2026-04-24 M1b-i Write-Gate Proof Closure
+
+- **Scope:** 17.5s2–17.5s5 — write-interlock proof batch (tests/evidence only, no production changes).
+- **Finding:** No missing behavior. All five MCP mutators (`brain_put`, `brain_link`, `brain_check`, `brain_raw`, `brain_gap` slug-bound) already call `ensure_collection_write_allowed` before any mutation. The gate is consistently wired under task 11.8.
+- **New tests (6):** `brain_put_refuses_when_collection_is_restoring`, `brain_link_refuses_when_collection_is_restoring`, `brain_link_refuses_when_collection_needs_full_sync`, `brain_check_refuses_when_collection_is_restoring`, `brain_check_refuses_when_collection_needs_full_sync`, `brain_raw_refuses_when_collection_is_restoring`. All 6 pass.
+- **Pre-existing tests that already covered remaining matrix cells (5):** `brain_put`/`brain_raw` + `needs_full_sync`, `brain_gap` slug ×2, `brain_gap` slug-less.
+- **17.5s2 mutator matrix:** 5 mutators × 2 conditions = 10 cells, all proved. `brain_gap` slug-less correctly excluded (Read carve-out).
+- **Tasks closed:** 17.5s2 ✅, 17.5s3 ✅, 17.5s4 ✅, 17.5s5 ✅
+- **Lesson:** When auditing write-gate coverage, build the explicit (mutator × condition) matrix first. Ad-hoc sampling by condition or by op alone will miss cells.
+
+## 2026-04-24 M1b-ii/M1b-i Session Completion
+
+- **M1b-i proof lane COMPLETE:** Write-gate restoring-state proof closure (tests-only). Found no missing behavior. All mutators already call `ensure_collection_write_allowed` before mutation.
+- **M1b-ii implementation lane COMPLETE (Fry):** Unix precondition/CAS hardening. Real `check_fs_precondition()` helper with self-heal; separate no-side-effect pre-sentinel variant for write path.
+- **Inbox decisions merged:** Bender M1b-i write-gate closure + Fry M1b-ii precondition split decision. Both entries now in canonical `decisions.md`.
+- **Orchestration logs written:** `2026-04-24T12-53-00Z-bender-m1b-i-proof-lane.md` + `2026-04-24T12-54-00Z-fry-m1b-ii-implementation-lane.md`.
+- **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
+- **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii.
+

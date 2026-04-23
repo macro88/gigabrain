@@ -328,3 +328,12 @@
 **Verdict:** APPROVE
 
 Offline CLI closure meets all gating criteria. Tx-B residue, originator identity, reset/finalize surfaces all truthfully proven. Startup/orphan recovery and online handshake deferred to K3+. K2 APPROVED FOR LANDING.
+
+## 2026-04-24 M1b-i/M1b-ii Session — Final Review in Progress
+
+- **M1b-i proof lane COMPLETE (Bender):** Write-gate restoring-state proof closure (tests-only). No production code changes. Found no missing behavior — all mutators already call `ensure_collection_write_allowed` before mutation. 11 write-gate assertions (6 new + 5 pre-existing), all passing.
+- **M1b-ii implementation lane COMPLETE (Fry):** Unix precondition/CAS hardening. Real `check_fs_precondition()` helper with self-heal; separate no-side-effect pre-sentinel variant for write path to preserve sentinel-failure truth. Scope: 12.2 + 12.4aa–12.4d.
+- **Inbox decisions merged:** Bender M1b-i proof closure + Fry M1b-ii precondition split decision. Both now in canonical `decisions.md`.
+- **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii before landing.
+
+

@@ -111,3 +111,12 @@ The 64-byte threshold in content-hash identity guards ALWAYS refers to body cont
 **Verdict:** APPROVE
 
 Adversarial seams reviewed and controlled. Identity theft, reset/finalize dishonesty, Tx-B residue loss, and manifest tamper all acceptably scoped within offline CLI boundary. K2 APPROVED FOR LANDING. Caveat remains: only offline CLI closure approved, not startup/orphan recovery, online handshake, or broader destructive surfaces.
+
+## 2026-04-24 M1b-i/M1b-ii Session — Final Review in Progress
+
+- **M1b-i proof lane COMPLETE (Bender):** Write-gate restoring-state proof closure (tests-only). No production code changes. Found no missing behavior — all 5 mutators (`brain_put`, `brain_link`, `brain_check`, `brain_raw`, `brain_gap` slug-bound) already call `ensure_collection_write_allowed` before mutation. 11 write-gate assertions proven (6 new + 5 pre-existing), all passing.
+- **M1b-ii implementation lane COMPLETE (Fry):** Unix precondition/CAS hardening. Real `check_fs_precondition()` helper with self-heal capability; separate no-side-effect pre-sentinel inspection variant for write path to preserve sentinel-failure truth. Scope: 12.2 + 12.4aa–12.4d.
+- **Inbox decisions merged:** Bender M1b-i proof closure + Fry M1b-ii precondition split decision. Both now in canonical `decisions.md`.
+- **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii before landing.
+
+

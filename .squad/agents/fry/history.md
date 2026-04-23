@@ -7,6 +7,12 @@
 
 ## Learnings
 
+### 2026-04-24 14:25:00 - Vault-Sync Batch M1b-ii (Unix put precondition/CAS slice)
+
+- Kept the slice honest and Unix-only: `gbrain put` / `brain_put` now reject missing-or-stale update `expected_version` and filesystem precondition conflicts before recovery-sentinel creation, without claiming the deferred mutex, IPC, or happy-path closure work.
+- Implemented `check_fs_precondition` as a real fast/slow-path helper with typed `ConflictError` branches plus self-heal, but the Unix write path uses a no-side-effect pre-sentinel inspection variant so sentinel-creation failure still guarantees no DB mutation.
+- Validation on this Windows host: `cargo test --quiet` passed after the slice landed, including the new Unix-gated precondition/CAS proofs.
+
 ### 2026-04-24 01:35:00 - Vault-Sync Batch M1a (pre-gated writer sentinel crash core)
 
 - Landed only the narrow writer-side sentinel crash seam: sentinel create+durability, tempfile rename, parent-fsync hard-stop, post-rename foreign-rename detection, retained sentinel on post-rename failure, and startup-recovery fallback when `collections.needs_full_sync` cannot be written.
@@ -748,3 +754,16 @@ Ready for implementation and landing.
 **Challenges:**
 - The pre-existing runtime loop was doing startup work lazily in the background, which made the approved startup order only incidental until the recovery path was pulled into `start_serve_runtime()`.
 - Windows test timing around spawned binaries can surface transient file-lock noise, so the exact required `cargo test --quiet` lane may need a rerun even when the code is correct.
+
+## 2026-04-24 M1b-ii/M1b-i Session Completion
+
+- **M1b-ii implementation COMPLETE:** Unix precondition/CAS hardening for `gbrain put` / `brain_put`. Real `check_fs_precondition()` helper with self-heal capability; separate no-side-effect pre-sentinel inspection variant for write path to preserve sentinel-failure truth ordering.
+- **Scope:** 12.2 + 12.4aa–12.4d only. CAS/precondition failures now rejected before sentinel creation with no DB mutation.
+- **Decision:** Kept two-layer precondition split per inbox decision (real helper for deferred full work; write-path uses separate no-side-effect variant). Future full `12.1` closure must preserve ordering: pre-sentinel inspection first, sentinel before any DB mutation.
+- **Validation:** ✅ `cargo test --quiet` passed (Windows default lane). Unix CAS/precondition proofs require cross-check on Linux CI.
+- **Inbox decision merged:** Fry M1b-ii precondition split decision now in canonical `decisions.md`.
+- **Orchestration log written:** `2026-04-24T12-54-00Z-fry-m1b-ii-implementation-lane.md`.
+- **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
+- **Status:** Awaiting final Professor + Nibbler gate approval for M1b-ii.
+
+
