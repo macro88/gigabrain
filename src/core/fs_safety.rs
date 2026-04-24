@@ -118,15 +118,12 @@ pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Resu
     }
 
     // Walk to parent directory
-    let mut current_fd = parent_fd
-        .as_fd()
-        .try_clone_to_owned()
-        .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
+    let mut current_fd = parent_fd.as_fd().try_clone_to_owned()?;
 
     let flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::RDONLY;
 
     for component in &components[..components.len().saturating_sub(1)] {
-        let next_fd = openat(&current_fd, component, flags, Mode::empty())
+        let next_fd = openat(&current_fd, Path::new(*component), flags, Mode::empty())
             .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
         current_fd = next_fd;
     }
@@ -189,8 +186,8 @@ pub fn stat_at_nofollow<Fd: AsFd>(parent_fd: Fd, name: &Path) -> io::Result<File
     let stat = statat(parent_fd, name, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
 
-    let mtime_ns = stat.st_mtime * 1_000_000_000 + stat.st_mtime_nsec;
-    let ctime_ns = stat.st_ctime * 1_000_000_000 + stat.st_ctime_nsec;
+    let mtime_ns = (stat.st_mtime as i64) * 1_000_000_000 + (stat.st_mtime_nsec as i64);
+    let ctime_ns = (stat.st_ctime as i64) * 1_000_000_000 + (stat.st_ctime_nsec as i64);
     let size_bytes = stat.st_size as i64;
     let inode = stat.st_ino as i64;
 
