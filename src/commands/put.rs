@@ -134,7 +134,7 @@ pub fn put_from_string(
         resolved.collection_id,
         &relative_path,
         || -> anyhow::Result<(PreparedPut, PutOutcome)> {
-            maybe_block_inside_write_lock();
+            maybe_block_inside_write_lock(db);
             let existing_row: Option<(i64, Option<String>)> = match db
                 .prepare("SELECT version, uuid FROM pages WHERE collection_id = ?1 AND slug = ?2")?
                 .query_row(rusqlite::params![resolved.collection_id, slug], |row| {
@@ -385,8 +385,9 @@ fn persist_with_vault_write(
         Path::new(&collection.root_path),
         &relative_path_buf,
     )?;
+    let hooks = test_hooks_snapshot(db);
 
-    create_recovery_sentinel(prepared, &recovery_dir, &sentinel_name)?;
+    create_recovery_sentinel(prepared, &recovery_dir, &sentinel_name, hooks.as_ref())?;
 
     if let Some(parent) = target_path.parent() {
         if let Err(error) = fs::create_dir_all(parent) {
@@ -435,8 +436,6 @@ fn persist_with_vault_write(
         }
     };
     let temp_identity = file_identity(&temp_file)?;
-    let hooks = test_hooks_snapshot();
-
     if let Ok(existing) = fs_safety::stat_at_nofollow(&parent_fd, target_name) {
         if existing.is_symlink() {
             let _ = cleanup_pre_rename(
@@ -654,13 +653,10 @@ fn create_recovery_sentinel(
     prepared: &PreparedPut,
     recovery_dir: &Path,
     sentinel_name: &str,
+    hooks: Option<&PutTestHooks>,
 ) -> Result<(), vault_sync::VaultSyncError> {
     let sentinel_path = recovery_dir.join(sentinel_name);
-    #[cfg(test)]
-    if test_hooks_snapshot()
-        .as_ref()
-        .is_some_and(|hook| hook.fail_sentinel_create)
-    {
+    if hooks.is_some_and(|hook| hook.fail_sentinel_create) {
         return Err(vault_sync::VaultSyncError::RecoverySentinel {
             collection_id: prepared.collection_id,
             relative_path: prepared.slug.clone(),
@@ -788,28 +784,30 @@ fn sync_fd<Fd: AsFd>(fd: Fd) -> io::Result<()> {
 
 #[cfg(not(test))]
 #[cfg(unix)]
-fn test_hooks_snapshot() -> Option<PutTestHooks> {
+fn test_hooks_snapshot(_db: &Connection) -> Option<PutTestHooks> {
     None
 }
 
 #[cfg(all(test, unix))]
-fn test_hooks_snapshot() -> Option<PutTestHooks> {
-    Some(
-        put_test_hooks()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone(),
-    )
+fn test_hooks_snapshot(db: &Connection) -> Option<PutTestHooks> {
+    let db_path = vault_sync::database_path(db).ok()?;
+    put_test_hooks()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&db_path)
+        .cloned()
 }
 
 #[cfg(all(test, unix))]
-fn put_test_hooks() -> &'static std::sync::Mutex<PutTestHooks> {
-    static HOOKS: std::sync::OnceLock<std::sync::Mutex<PutTestHooks>> = std::sync::OnceLock::new();
-    HOOKS.get_or_init(|| std::sync::Mutex::new(PutTestHooks::default()))
+fn put_test_hooks() -> &'static std::sync::Mutex<std::collections::HashMap<String, PutTestHooks>> {
+    static HOOKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, PutTestHooks>>,
+    > = std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[cfg(not(all(test, unix)))]
-fn maybe_block_inside_write_lock() {}
+fn maybe_block_inside_write_lock(_db: &Connection) {}
 
 #[cfg(all(test, unix))]
 #[derive(Debug, Default)]
@@ -834,8 +832,8 @@ fn write_lock_blocker() -> &'static (std::sync::Mutex<WriteLockBlockState>, std:
 }
 
 #[cfg(all(test, unix))]
-fn maybe_block_inside_write_lock() {
-    let Some(hooks) = test_hooks_snapshot() else {
+fn maybe_block_inside_write_lock(db: &Connection) {
+    let Some(hooks) = test_hooks_snapshot(db) else {
         return;
     };
     if !hooks.block_inside_slug_lock {
@@ -958,39 +956,41 @@ mod tests {
     #[cfg(unix)]
     struct HookGuard {
         _guard: std::sync::MutexGuard<'static, ()>,
+        db_path: String,
     }
 
     #[cfg(unix)]
     impl HookGuard {
-        fn acquire() -> Self {
+        fn acquire(db_path: impl Into<String>) -> Self {
+            let db_path = db_path.into();
             let guard = hook_test_lock()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner());
-            *put_test_hooks()
+            put_test_hooks()
                 .lock()
-                .unwrap_or_else(|err| err.into_inner()) = PutTestHooks::default();
-            Self { _guard: guard }
+                .unwrap_or_else(|err| err.into_inner())
+                .insert(db_path.clone(), PutTestHooks::default());
+            Self {
+                _guard: guard,
+                db_path,
+            }
         }
 
         fn set(&self, hooks: PutTestHooks) {
-            *put_test_hooks()
+            put_test_hooks()
                 .lock()
-                .unwrap_or_else(|err| err.into_inner()) = hooks;
-        }
-
-        fn install(hooks: PutTestHooks) -> Self {
-            let guard = Self::acquire();
-            guard.set(hooks);
-            guard
+                .unwrap_or_else(|err| err.into_inner())
+                .insert(self.db_path.clone(), hooks);
         }
     }
 
     #[cfg(unix)]
     impl Drop for HookGuard {
         fn drop(&mut self) {
-            *put_test_hooks()
+            put_test_hooks()
                 .lock()
-                .unwrap_or_else(|err| err.into_inner()) = PutTestHooks::default();
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&self.db_path);
         }
     }
 
@@ -1031,8 +1031,8 @@ mod tests {
     #[cfg(unix)]
     fn open_test_db_with_vault_guarded(
     ) -> (HookGuard, tempfile::TempDir, String, Connection, PathBuf) {
-        let guard = HookGuard::acquire();
         let (dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let guard = HookGuard::acquire(db_path.clone());
         (guard, dir, db_path, conn, vault_root)
     }
 
@@ -1539,6 +1539,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn put_test_hooks_are_scoped_to_the_guarded_database() {
+        let (guard, _hook_dir, _hook_db_path, hook_conn, hook_vault_root) =
+            open_test_db_with_vault_guarded();
+        guard.set(PutTestHooks {
+            fail_before_rename: true,
+            ..PutTestHooks::default()
+        });
+
+        let (_plain_dir, _plain_db_path, plain_conn, plain_vault_root) = open_test_db_with_vault();
+        let plain_body = "---\ntitle: Scoped Success\ntype: note\n---\nPlain body\n";
+        put_from_string(&plain_conn, "notes/scoped-success", plain_body, None).unwrap();
+
+        assert_eq!(
+            read_page(&plain_conn, "notes/scoped-success").unwrap().3,
+            "Plain body"
+        );
+        assert_eq!(
+            std::fs::read_to_string(plain_vault_root.join("notes").join("scoped-success.md"))
+                .unwrap(),
+            plain_body
+        );
+
+        let hook_body = "---\ntitle: Scoped Failure\ntype: note\n---\nHook body\n";
+        let error =
+            put_from_string(&hook_conn, "notes/scoped-failure", hook_body, None).unwrap_err();
+
+        assert!(error.to_string().contains("injected pre-rename failure"));
+        assert_eq!(page_count(&hook_conn, "notes/scoped-failure"), 0);
+        assert!(!hook_vault_root
+            .join("notes")
+            .join("scoped-failure.md")
+            .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn parent_fsync_failure_refuses_db_commit_and_retains_sentinel() {
         let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
@@ -1799,8 +1835,6 @@ mod tests {
     fn frontmatter_is_stored_as_json_and_recoverable() {
         let conn = open_test_db();
         let md = "---\nsource: manual\ntitle: Data\ntype: concept\n---\nContent.\n";
-        #[cfg(unix)]
-        let _guard = HookGuard::install(PutTestHooks::default());
 
         put_from_string(&conn, "data/test", md, None).unwrap();
 
