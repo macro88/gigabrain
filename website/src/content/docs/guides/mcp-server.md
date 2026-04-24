@@ -94,7 +94,7 @@ Add to your MCP client config (example for Claude Code):
 
 | Tool | Description |
 | --- | --- |
-| `brain_collections` | Read-only collection status: health, state, watcher activity, and ignore diagnostics for all attached vaults |
+| `brain_collections` | Read-only collection status: health, state, recovery flags, and ignore diagnostics for all attached vaults |
 
 ---
 
@@ -104,29 +104,29 @@ Add to your MCP client config (example for Claude Code):
 {}
 ```
 
-**Returns:** JSON array of collection records. Each entry includes:
+**Returns:** JSON array of collection records (`BrainCollectionView`). Each entry includes:
 
 ```json
 [
   {
-    "id": 1,
     "name": "notes",
-    "path": "/Users/alice/notes",
+    "root_path": "/Users/alice/notes",
     "state": "active",
+    "writable": true,
+    "is_write_target": true,
+    "page_count": 142,
+    "last_sync_at": "2026-04-25T09:01:00Z",
+    "embedding_queue_depth": 0,
+    "ignore_parse_errors": null,
     "needs_full_sync": false,
-    "write_target": true,
-    "blocker": null,
-    "restore_pending": false,
-    "restore_error": null,
-    "last_reconciled_at": "2026-04-25T09:00:00Z",
-    "last_synced_at": "2026-04-25T09:01:00Z",
-    "ignore_parse_errors": [],
-    "ignore_patterns_count": 5
+    "recovery_in_progress": false,
+    "integrity_blocked": null,
+    "restore_in_progress": false
   }
 ]
 ```
 
-`state` values: `"active"` | `"restoring"` | `"needs_sync"`. When `state` is `"restoring"`, all mutating tools on that collection return `CollectionRestoringError`.
+`state` values: `"active"` | `"restoring"` | `"detached"`. `root_path` is only populated for `"active"` collections. When `state` is `"restoring"` or `needs_full_sync` is `true`, all mutating tools on that collection return `CollectionRestoringError`. `integrity_blocked` is a string label when an integrity check has halted reconciliation, otherwise `null`.
 
 ---
 

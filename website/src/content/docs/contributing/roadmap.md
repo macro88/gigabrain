@@ -144,16 +144,15 @@ Extends GigaBrain from a single-vault store to a multi-collection, file-system-a
 - `<collection>::<slug>` routing across all CLI and MCP surfaces; ambiguous bare-slug inputs fail closed with a stable `AmbiguityError`
 - `.gbrainignore` support with atomic validation — all lines are parsed before any mirror update; invalid files leave the mirror unchanged
 - `gbrain collection ignore add|remove|list|clear --confirm` with dry-run-first validation
-- Quarantine lifecycle: pages with DB-only state (links, assertions, gaps) are quarantined on deletion rather than hard-deleted; inspect and manage with `gbrain collection quarantine list|export|discard`
+- Quarantine lifecycle: pages with DB-only state (links, assertions, gaps) are quarantined on deletion rather than hard-deleted; inspect and manage with `gbrain collection quarantine list|export|discard|restore` (restore is Unix-only)
 - Per-collection write interlocks: `CollectionRestoringError` on all mutating tools when a collection is in the `restoring` state
 - Writer-side crash safety: `brain_put` durably creates a sentinel before vault mutation and the startup reconciler consumes retained sentinels on next launch
 - Unix CAS / precondition gates on `brain_put` (platform-gated; Windows returns `UnsupportedPlatformError` for vault-sync CLI surfaces)
-- `brain_collections` MCP tool — read-only collection status with 13-field output including state, watcher activity, blocker, and ignore diagnostics
+- `brain_collections` MCP tool — read-only collection status with 13-field output: `name`, `root_path` (active only), `state`, `writable`, `is_write_target`, `page_count`, `last_sync_at`, `embedding_queue_depth`, `ignore_parse_errors`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, `restore_in_progress`
 - Live file watcher: `gbrain serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry
 
 **Explicitly deferred (not available yet):**
-- Quarantine `restore` — backed out pending a crash-durable, no-replace-install implementation
-- IPC socket and online restore handshake
+- Quarantine `restore` — Unix-only narrow seam is landed (`gbrain collection quarantine restore`, `#[cfg(unix)]`); Windows restore, IPC socket, and online restore handshake remain deferred
 - Broader DB-only mutator coverage and live/background recovery worker
 
 **Gate:** All closed tasks remain closed; next slice requires a fresh scoped gate before implementation resumes.
