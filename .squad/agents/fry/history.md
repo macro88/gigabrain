@@ -828,3 +828,8 @@ Ready for implementation and landing.
 - Added the read-only `brain_collections` MCP surface as a projection helper in `vault_sync.rs`, not as ad hoc JSON assembly in the server, so the frozen 13-field contract lives next to the collection/runtime truth it depends on.
 - Kept the tool honest by masking `root_path` to `null` whenever the collection is not `active`, parsing `ignore_parse_errors` into the tagged union the design froze, and surfacing `integrity_blocked` as the new string-or-null discriminator instead of reusing the older CLI-only blocked-state summary.
 - `recovery_in_progress` needed real runtime truth instead of guesswork, so I added a narrow process-local recovery registry around `complete_attach(...)`; queued recovery remains `needs_full_sync=true, recovery_in_progress=false`, while active attach hashing flips the runtime bit until the handoff completes. Validation on this Windows host: `cargo fmt --all`, targeted `brain_collections` tests, and full `cargo test --quiet` all passed.
+
+### 2026-04-25 07:25:00 - PR #77 feedback and v0.9.6 ship
+
+- When a platform gate sits at the public command boundary (`gbrain serve`), the docs need to describe the command as gated even if some lower-level helpers compile on other platforms. Reviewer feedback will keep coming back if the docs talk about an internal seam instead of the user-visible one.
+- Restore notes have to distinguish between “no implementation” and “narrow landed seam.” For quarantine restore, the honest wording was “Unix-only, no-replace target, pre-existing parent dirs, online handshake still deferred,” not “not yet implemented.”
