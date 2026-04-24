@@ -22,11 +22,11 @@ use notify::{
     event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
     RecommendedWatcher, RecursiveMode, Watcher,
 };
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use rustix::fs::fsync;
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use std::io::Write;
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
@@ -35,7 +35,7 @@ use crate::commands::get::get_page_by_key;
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
 use crate::core::file_state;
@@ -1312,7 +1312,6 @@ enum WriterSideSentinelCrashMode {
     PreRenameAbortAfterDedup,
     RenameFail,
     FsyncParentFail,
-    PostRenameStatFail,
     ForeignRenameBetweenRenameAndStat { foreign_bytes: Vec<u8> },
 }
 
@@ -1557,14 +1556,6 @@ fn exercise_writer_side_sentinel_crash_core(
         foreign_tempfile.sync_all()?;
         drop(foreign_tempfile);
         fs_safety::renameat_parent_fd(&parent_fd, &foreign_tempfile_name, Path::new(target_name))?;
-    }
-
-    if matches!(mode, WriterSideSentinelCrashMode::PostRenameStatFail) {
-        cleanup_post_rename_writer_side_abort(conn, collection_id, &dedup_key);
-        return Err(VaultSyncError::PostRenameStat {
-            collection_id,
-            relative_path: relative_path.display().to_string(),
-        });
     }
 
     let target_stat = fs_safety::stat_at_nofollow(&parent_fd, Path::new(target_name))?;
