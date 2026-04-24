@@ -173,9 +173,9 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 - **Schema v5** — `collections`, `file_state`, `raw_imports`, `embedding_jobs`, quarantine indexes; v4 brains refuse with re-init instructions
 - **Collection management** — `gbrain collection add|list|info|sync|restore|restore-reset|reconcile-reset`
 - **Ignore patterns** — `gbrain collection ignore add|remove|list|clear --confirm`; atomic-parse `.gbrainignore` with mirror refresh; built-in defaults (`.git/**`, `node_modules/**`, etc.) always applied
-- **Quarantine lifecycle** — `gbrain collection quarantine list|export|discard`; auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available
+- **Quarantine lifecycle** — `gbrain collection quarantine list|export|discard|restore` (restore is a narrow Unix-only seam); auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30); pages with DB-only state (links, assertions, knowledge gaps, contradictions, raw_data) are quarantined rather than hard-deleted; `discard --force` or post-export discard available
 - **Reconciler** — stat-diff walk, UUID identity resolution, rename detection (native pair → UUID match → content-hash uniqueness), delete-vs-quarantine classifier, 500-file batch commit
-- **File watcher** — one `notify` watcher per active collection in `gbrain serve`; 1.5 s debounce (`GBRAIN_WATCH_DEBOUNCE_MS`); reconcile-backed flushes; path+hash self-write suppression with TTL expiry
+- **File watcher** — one `notify` watcher per active collection in `gbrain serve` (Unix/macOS/Linux in `v0.9.6`); 1.5 s debounce (`GBRAIN_WATCH_DEBOUNCE_MS`); reconcile-backed flushes; path+hash self-write suppression with TTL expiry
 - **Write-through `brain_put`** *(Unix)* — full rename-before-commit sequence (recovery sentinel → tempfile → `renameat` → fsync parent dir → single SQLite tx); mandatory `expected_version` for updates; `check_fs_precondition` four-field CAS
 - **Write interlock** — `state='restoring'` or `needs_full_sync=1` blocks all mutating CLI/MCP ops with `CollectionRestoringError`
 - **Offline restore** — `gbrain collection restore <name> <target>` → Tx-A → atomic rename → Tx-B; `sync --finalize-pending` drives full-hash reconcile and reopens writes
@@ -187,7 +187,7 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 
 | Item | Why deferred |
 | ---- | ------------ |
-| `quarantine restore` | Requires crash-durable post-unlink cleanup and a no-replace install path; reopened until a safe slice lands |
+| Windows `quarantine restore`, IPC socket restore proxying, and online restore handshake | The narrow Unix restore seam shipped in `v0.9.6`; non-Unix restore hosting and live-handshake routing remain deferred |
 | IPC socket write proxying (`12.6*`) | Full trust-boundary design for `SO_PEERCRED` peer auth still in progress |
 | Per-event-type watcher handlers (`6.5–6.11`) | Create/Modify/Delete/Rename handlers; overflow recovery, `.gbrainignore` live reload, and watcher supervisor not yet wired |
 | Embedding job queue (`8.*`) | Async background embedding worker not yet implemented |

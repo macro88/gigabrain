@@ -149,7 +149,7 @@ Extends GigaBrain from a single-vault store to a multi-collection, file-system-a
 - Writer-side crash safety: `brain_put` durably creates a sentinel before vault mutation and the startup reconciler consumes retained sentinels on next launch
 - Unix CAS / precondition gates on `brain_put` (platform-gated; Windows returns `UnsupportedPlatformError` for vault-sync CLI surfaces)
 - `brain_collections` MCP tool — read-only collection status with 13-field output: `name`, `root_path` (active only), `state`, `writable`, `is_write_target`, `page_count`, `last_sync_at`, `embedding_queue_depth`, `ignore_parse_errors`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, `restore_in_progress`
-- Live file watcher: `gbrain serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry
+- Live file watcher: `gbrain serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry (Unix/macOS/Linux in `v0.9.6`)
 
 **Explicitly deferred (not available yet):**
 - Quarantine `restore` — Unix-only narrow seam is landed (`gbrain collection quarantine restore`, `#[cfg(unix)]`); Windows restore, IPC socket, and online restore handshake remain deferred
@@ -182,4 +182,5 @@ These are known design choices that are _not_ oversights:
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
 | `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter) |
-| TBD | vault-sync-engine — collections, live-sync watcher, quarantine lifecycle, write safety (in progress on `spec/vault-sync-engine`; restore + IPC deferred) |
+| `v0.9.5` | Flexible model resolution — configurable `online-model` selection, alias expansion, and persisted model metadata validation |
+| `v0.9.6` | Initial vault-sync ship — collections, Unix-gated `gbrain serve`, live watcher sync, quarantine tooling, `brain_collections`, and narrow Unix quarantine restore |

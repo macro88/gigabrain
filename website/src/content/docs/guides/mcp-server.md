@@ -8,6 +8,13 @@ description: Run `gbrain serve` and connect any MCP client over stdio JSON-RPC 2
 `gbrain serve` starts an MCP server over **stdio**. Your MCP client spawns the
 process and talks JSON-RPC 2.0 over stdin/stdout.
 
+> **Unix only in `v0.9.6`.** This release line gates the full `gbrain serve`
+> runtime to macOS/Linux because the command now owns watcher startup, lease
+> management, and recovery. On Windows it returns
+> `UnsupportedPlatformError`; portable CLI reads/searches still work there, but
+> MCP hosting via `gbrain serve` is deferred until a safe non-Unix runtime
+> contract exists.
+
 ## Claude Code config
 
 Add to your MCP client config (example for Claude Code):
@@ -299,4 +306,3 @@ Remove tags:
 ```json
 { "slug": "people/alice", "remove": ["yc-alum"] }
 ```
-
