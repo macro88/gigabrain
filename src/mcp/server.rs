@@ -3619,18 +3619,30 @@ mod tests {
 
     #[test]
     fn brain_collections_surfaces_status_flags_and_terminal_precedence() {
+        const QUEUED_ID: i64 = 20_002;
+        const RUNNING_ID: i64 = 20_003;
+        const TAMPERED_ID: i64 = 20_004;
+        const REASON_ONLY_ID: i64 = 20_005;
+        const DUPLICATE_ID: i64 = 20_006;
+        const TRIVIAL_ID: i64 = 20_007;
+        const RESTORE_PENDING_ID: i64 = 20_008;
+        const WITHIN_WINDOW_ID: i64 = 20_009;
+        const ESCALATED_ID: i64 = 20_010;
+        const PRECEDENCE_ID: i64 = 20_011;
+        const ABSENT_ID: i64 = 20_012;
+
         let (_dir, conn) = open_test_db();
-        insert_collection(&conn, 2, "queued", false);
-        insert_collection(&conn, 3, "running", false);
-        insert_collection(&conn, 4, "tampered", false);
-        insert_collection(&conn, 5, "reason-only", false);
-        insert_collection(&conn, 6, "duplicate", false);
-        insert_collection(&conn, 7, "trivial", false);
-        insert_collection(&conn, 8, "restore-pending", false);
-        insert_collection(&conn, 9, "within-window", false);
-        insert_collection(&conn, 10, "escalated", false);
-        insert_collection(&conn, 11, "precedence", false);
-        insert_collection(&conn, 12, "absent", false);
+        insert_collection(&conn, QUEUED_ID, "queued", false);
+        insert_collection(&conn, RUNNING_ID, "running", false);
+        insert_collection(&conn, TAMPERED_ID, "tampered", false);
+        insert_collection(&conn, REASON_ONLY_ID, "reason-only", false);
+        insert_collection(&conn, DUPLICATE_ID, "duplicate", false);
+        insert_collection(&conn, TRIVIAL_ID, "trivial", false);
+        insert_collection(&conn, RESTORE_PENDING_ID, "restore-pending", false);
+        insert_collection(&conn, WITHIN_WINDOW_ID, "within-window", false);
+        insert_collection(&conn, ESCALATED_ID, "escalated", false);
+        insert_collection(&conn, PRECEDENCE_ID, "precedence", false);
+        insert_collection(&conn, ABSENT_ID, "absent", false);
         let server = GigaBrainServer::new(conn);
 
         let db = server.db.lock().unwrap();
@@ -3638,24 +3650,24 @@ mod tests {
             "UPDATE collections
              SET state = 'active',
                   needs_full_sync = 1
-              WHERE id = 2",
-            [],
+              WHERE id = ?1",
+            [QUEUED_ID],
         )
         .unwrap();
         db.execute(
             "UPDATE collections
              SET state = 'active',
                   needs_full_sync = 1
-             WHERE id = 3",
-            [],
+             WHERE id = ?1",
+            [RUNNING_ID],
         )
         .unwrap();
         db.execute(
             "UPDATE collections
              SET state = 'restoring',
                   integrity_failed_at = '2026-04-24T00:00:00Z'
-             WHERE id = 4",
-            [],
+             WHERE id = ?1",
+            [TAMPERED_ID],
         )
         .unwrap();
         db.execute(
@@ -3663,16 +3675,16 @@ mod tests {
              SET state = 'active',
                   reconcile_halt_reason = 'duplicate_uuid',
                   reconcile_halted_at = '2026-04-24T00:00:00Z'
-             WHERE id = 6",
-            [],
+             WHERE id = ?1",
+            [DUPLICATE_ID],
         )
         .unwrap();
         db.execute(
             "UPDATE collections
              SET state = 'active',
                   reconcile_halt_reason = 'duplicate_uuid'
-             WHERE id = 5",
-            [],
+             WHERE id = ?1",
+            [REASON_ONLY_ID],
         )
         .unwrap();
         db.execute(
@@ -3680,24 +3692,24 @@ mod tests {
              SET state = 'active',
                   reconcile_halt_reason = 'unresolvable_trivial_content',
                   reconcile_halted_at = '2026-04-24T00:00:00Z'
-             WHERE id = 7",
-            [],
+             WHERE id = ?1",
+            [TRIVIAL_ID],
         )
         .unwrap();
         db.execute(
             "UPDATE collections
              SET state = 'restoring',
                   restore_command_id = 'restore-pending-1'
-             WHERE id = 8",
-            [],
+             WHERE id = ?1",
+            [RESTORE_PENDING_ID],
         )
         .unwrap();
         db.execute(
             "UPDATE collections
              SET state = 'restoring',
                   pending_manifest_incomplete_at = datetime('now', '-31 seconds')
-             WHERE id = 9",
-            [],
+             WHERE id = ?1",
+            [WITHIN_WINDOW_ID],
         )
         .unwrap();
         db.execute(
@@ -3706,8 +3718,8 @@ mod tests {
                   pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
                   reconcile_halt_reason = 'duplicate_uuid',
                   reconcile_halted_at = '2026-04-24T00:00:00Z'
-             WHERE id = 10",
-            [],
+             WHERE id = ?1",
+            [ESCALATED_ID],
         )
         .unwrap();
         db.execute(
@@ -3717,8 +3729,8 @@ mod tests {
                   pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
                   reconcile_halt_reason = 'unresolvable_trivial_content',
                   reconcile_halted_at = '2026-04-24T00:00:00Z'
-             WHERE id = 11",
-            [],
+             WHERE id = ?1",
+            [PRECEDENCE_ID],
         )
         .unwrap();
         db.execute(
@@ -3726,16 +3738,16 @@ mod tests {
              SET ignore_parse_errors = ?2
              WHERE id = ?1",
             rusqlite::params![
-                12_i64,
+                ABSENT_ID,
                 r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":0,"raw":"","message":".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly"}]"#
             ],
         )
         .unwrap();
         drop(db);
 
-        vault_sync::set_collection_recovery_in_progress_for_test(3, true);
+        vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, true);
         let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
-        vault_sync::set_collection_recovery_in_progress_for_test(3, false);
+        vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, false);
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
         let queued = rows.iter().find(|row| row["name"] == "queued").unwrap();
