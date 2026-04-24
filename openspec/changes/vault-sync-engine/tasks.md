@@ -234,7 +234,8 @@
   > **Closed 13.3 (CLI-only):** slug-bearing CLI commands now fail closed on ambiguous bare slugs, accept explicit `<collection>::<slug>` routing, and emit canonical `<collection>::<slug>` page references on CLI outputs that reference pages. This closure includes single-page `embed` parity only; `13.5` and `13.6` remain open.
 - [x] 13.4 `AmbiguityError` payload shape is stable (array of candidate strings + machine-readable code).
   > **Closed N1 (MCP-only):** MCP ambiguity failures now return code `ambiguous_slug` with a stable `candidates` array of canonical page addresses.
-- [ ] 13.5 `brain_search` / `brain_query` / `brain_list` accept an optional `collection` filter; default filters by write-target in single-writer setups, all collections otherwise.
+- [x] 13.5 `brain_search` / `brain_query` / `brain_list` accept an optional `collection` filter; default to the only active collection when exactly one is active, otherwise the write-target collection.
+  > **Closed 13.5 (MCP-only):** `brain_search`, `brain_query`, and `brain_list` now accept an optional `collection` filter. When omitted, MCP read tools default to the sole active collection if exactly one exists; otherwise they default to the write-target collection. `brain_query depth="auto"` preserves that filter during progressive expansion, and CLI read behavior remains unchanged.
 - [x] 13.6 New `brain_collections` MCP tool returns the per-collection object documented in design.md (§`brain_collections` schema; stable-absence ignore refusal arm remains deferred to 17.5aa5).
   > **Closed 13.6 (MCP-only):** `brain_collections` now exposes the frozen 13-field read-only collection object with truthful `root_path`, `needs_full_sync`, `recovery_in_progress`, `integrity_blocked`, and `restore_in_progress` semantics. In this slice, `ignore_parse_errors` intentionally surfaces line-level `parse_error` entries only; the stable-absence refusal arm remains deferred to `17.5aa5`.
 
