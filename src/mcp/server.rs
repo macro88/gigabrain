@@ -2315,7 +2315,14 @@ mod tests {
 
     fn insert_collection(conn: &Connection, id: i64, name: &str, is_write_target: bool) {
         let root_path = std::env::temp_dir()
-            .join(format!("gbrain-mcp-{id}-{name}"))
+            .join(format!(
+                "gbrain-mcp-{id}-{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
             .display()
             .to_string();
         fs::create_dir_all(&root_path).unwrap();

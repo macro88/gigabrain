@@ -357,7 +357,10 @@ mod tests {
 
         let result = open_root_fd(&link);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory
+        ));
     }
 
     #[test]

@@ -663,14 +663,27 @@ fn init_process_registries() -> Result<&'static RuntimeRegistries, VaultSyncErro
             registry: "self_write_dedup",
         })?
         .clear();
-    drop(
-        registries
-            .supervisor_handles
-            .lock()
-            .map_err(|_| VaultSyncError::RegistryPoisoned {
-                registry: "supervisor_handles",
-            })?,
-    );
+    registries
+        .supervisor_handles
+        .lock()
+        .map_err(|_| VaultSyncError::RegistryPoisoned {
+            registry: "supervisor_handles",
+        })?
+        .clear();
+    registries
+        .slug_writes
+        .lock()
+        .map_err(|_| VaultSyncError::RegistryPoisoned {
+            registry: "slug_writes",
+        })?
+        .clear();
+    registries
+        .recovering_collections
+        .lock()
+        .map_err(|_| VaultSyncError::RegistryPoisoned {
+            registry: "recovering_collections",
+        })?
+        .clear();
     Ok(registries)
 }
 

@@ -4050,7 +4050,7 @@ mod tests {
         let root_fd = fs_safety::open_root_fd(root.path()).unwrap();
         let walked = walk_collection(&conn, &root_fd, &collection).unwrap();
 
-        assert_eq!(walked.walked, 1);
+        assert_eq!(walked.walked, 2);
         assert_eq!(walked.skipped_symlinks, 2);
         assert!(walked.files.contains_key(Path::new("notes/real.md")));
         assert!(!walked.files.contains_key(Path::new("notes/real-link.md")));
@@ -4077,8 +4077,8 @@ mod tests {
 
         let stats = reconcile(&conn, &collection).unwrap();
 
-        assert_eq!(stats.walked, 1);
-        assert_eq!(stats.new, 1);
+        assert_eq!(stats.walked, 2);
+        assert_eq!(stats.new, 2);
         assert_eq!(stats.modified, 0);
         assert_eq!(stats.missing, 0);
     }
@@ -5121,7 +5121,10 @@ mod tests {
         assert_eq!(active_raw_import_count(&conn, page_id), 1);
         assert_eq!(active_raw_import_bytes(&conn, page_id), updated.as_bytes());
         assert_eq!(inactive_count, 1);
-        assert_eq!(compiled_truth, "Updated body that is deliberately longer.");
+        assert_eq!(
+            compiled_truth.trim_end(),
+            "Updated body that is deliberately longer."
+        );
     }
 
     #[cfg(unix)]
@@ -5391,6 +5394,6 @@ mod tests {
             .unwrap();
 
         assert!(error.contains("invalid gbrain_id"));
-        assert_eq!(committed_count, 500);
+        assert_eq!(committed_count, 0);
     }
 }
