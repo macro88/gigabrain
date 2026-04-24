@@ -396,6 +396,8 @@ gbrain collection info work
 
 Once attached, `gbrain serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
+> **Unix only.** `gbrain serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `gbrain serve` returns `UnsupportedPlatformError`. The MCP server's read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) are cross-platform; only the live vault-sync watcher is Unix-gated.
+
 ### Ignore patterns
 
 ```bash
@@ -433,7 +435,13 @@ gbrain collection quarantine export work --out quarantine.json
 gbrain collection quarantine discard work <page-slug>
 ```
 
-> **Note:** `quarantine restore` is not yet implemented. It remains deferred until a crash-durable post-unlink cleanup path lands.
+> **Unix only.** `gbrain collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status and re-registers its slug in the collection:
+>
+> ```bash
+> gbrain collection quarantine restore work <page-slug> <relative-path>
+> ```
+>
+> The IPC/online-handshake path (automatic restore on watcher reconnect) remains deferred and is not yet wired.
 
 Auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
 
