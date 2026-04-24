@@ -3794,6 +3794,21 @@ mod tests {
         conn.last_insert_rowid()
     }
 
+    fn insert_collection_with_id(
+        conn: &Connection,
+        collection_id: i64,
+        name: &str,
+        root_path: &Path,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO collections (id, name, root_path, state, writable, is_write_target)
+             VALUES (?1, ?2, ?3, 'active', 1, 0)",
+            params![collection_id, name, root_path.display().to_string()],
+        )
+        .unwrap();
+        collection_id
+    }
+
     fn insert_page_with_raw_import(
         conn: &Connection,
         collection_id: i64,
@@ -4680,7 +4695,9 @@ mod tests {
     fn mark_collection_restoring_uses_collection_owners_and_clears_ack_residue() {
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
-        let collection_id = insert_collection(&conn, "work", temp.path());
+        // Use a high explicit collection id so this test cannot collide with
+        // parallel in-memory tests that share the process-global supervisor registry.
+        let collection_id = insert_collection_with_id(&conn, 50_001, "work", temp.path());
         conn.execute(
             "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-owner', 1, 'host')",
             [],
