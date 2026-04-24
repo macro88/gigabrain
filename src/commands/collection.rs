@@ -115,7 +115,7 @@ pub enum CollectionQuarantineAction {
         #[arg(long)]
         force: bool,
     },
-    /// Deferred in this batch; currently refuses immediately
+    /// Restore a quarantined page to a target markdown path (Unix-only)
     Restore { slug: String, relative_path: String },
 }
 
@@ -478,11 +478,12 @@ fn quarantine_action(
             quarantine_discard(db, &slug, force, json)
         }
         CollectionQuarantineAction::Restore {
-            slug: _,
-            relative_path: _,
-        } => bail!(
-            "quarantine restore is deferred in this batch until crash-durable cleanup and no-replace install land; use quarantine list/export/discard for now"
-        ),
+            slug,
+            relative_path,
+        } => {
+            ensure_unix_collection_command("gbrain collection quarantine restore")?;
+            quarantine_restore(db, &slug, &relative_path, json)
+        }
     }
 }
 
@@ -820,6 +821,23 @@ fn quarantine_discard(db: &Connection, slug: &str, force: bool, json: bool) -> R
             "quarantined_at": receipt.quarantined_at,
             "force": receipt.forced,
             "exported_before_discard": receipt.exported_before_discard
+        }),
+    )
+}
+
+fn quarantine_restore(db: &Connection, slug: &str, relative_path: &str, json: bool) -> Result<()> {
+    let receipt = quarantine::restore_quarantined_page(db, slug, relative_path)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "quarantine-restore",
+            "collection": receipt.collection,
+            "slug": receipt.slug,
+            "restored_slug": receipt.restored_slug,
+            "restored_relative_path": receipt.restored_relative_path,
+            "quarantined_at": receipt.quarantined_at
         }),
     )
 }

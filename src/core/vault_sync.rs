@@ -3147,7 +3147,7 @@ pub fn fresh_attach_collection(
         .map_err(VaultSyncError::from)
 }
 
-struct ShortLivedLease {
+pub(crate) struct ShortLivedLease {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     _guard: LeaseGuard,
@@ -3181,7 +3181,7 @@ impl Drop for LeaseGuard {
     }
 }
 
-fn start_short_lived_owner_lease(
+pub(crate) fn start_short_lived_owner_lease(
     conn: &Connection,
     collection_id: i64,
 ) -> Result<ShortLivedLease, VaultSyncError> {

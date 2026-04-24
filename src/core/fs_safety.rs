@@ -9,6 +9,7 @@
 // - stat_at_nofollow: Stat a file via fstatat(AT_SYMLINK_NOFOLLOW).
 // - openat_create_excl: Open a file for exclusive creation under a parent fd.
 // - renameat_parent_fd: Atomically rename a file under parent fd.
+// - linkat_parent_fd: Install a second name without replacing an existing target.
 // - unlinkat_parent_fd: Remove a file under parent fd.
 //
 // On Windows, these functions return UnsupportedPlatformError.
@@ -275,6 +276,38 @@ pub fn renameat_parent_fd<Fd>(
     ))
 }
 
+// ── Link at Parent FD ───────────────────────────────────────────
+
+/// Create `new_name` as another name for `old_name` under `parent_fd`.
+///
+/// This is used for install-time no-replace semantics: `linkat` fails with
+/// `EEXIST` if `new_name` is created by another writer before the install step.
+#[cfg(unix)]
+pub fn linkat_parent_fd<Fd: AsFd>(
+    parent_fd: Fd,
+    old_name: &Path,
+    new_name: &Path,
+) -> io::Result<()> {
+    use rustix::fs::linkat;
+
+    linkat(
+        parent_fd.as_fd(),
+        old_name,
+        parent_fd.as_fd(),
+        new_name,
+        AtFlags::empty(),
+    )
+    .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))
+}
+
+#[cfg(not(unix))]
+pub fn linkat_parent_fd<Fd>(_parent_fd: Fd, _old_name: &Path, _new_name: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "linkat_parent_fd: fd-relative operations not supported on Windows",
+    ))
+}
+
 // ── Unlink at Parent FD ───────────────────────────────────────
 
 /// Remove a file under `parent_fd`.
@@ -493,6 +526,19 @@ mod tests {
         assert!(result.is_ok());
         assert!(!dir.path().join("old.txt").exists());
         assert!(dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn test_linkat_parent_fd_refuses_existing_target() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("temp.txt"), b"temp").unwrap();
+        fs::write(dir.path().join("final.txt"), b"existing").unwrap();
+        let root_fd = open_root_fd(dir.path()).unwrap();
+
+        let result = linkat_parent_fd(&root_fd, Path::new("temp.txt"), Path::new("final.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(dir.path().join("final.txt")).unwrap(), b"existing");
     }
 
     #[test]

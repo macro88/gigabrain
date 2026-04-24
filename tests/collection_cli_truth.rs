@@ -1092,7 +1092,7 @@ fn quarantine_list_missing_collection_reports_collection_specific_error() {
 }
 
 #[test]
-fn quarantine_restore_surface_is_deferred_and_leaves_page_quarantined() {
+fn quarantine_restore_reingests_page_and_reactivates_file_state() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let db_path = test_db_path(&dir, "quarantine-restore.db");
     let conn = open_test_db(&db_path);
@@ -1128,35 +1128,141 @@ fn quarantine_restore_surface_is_deferred_and_leaves_page_quarantined() {
         ],
     );
 
+    #[cfg(not(unix))]
     assert!(
         !output.status.success(),
-        "quarantine restore should be disabled for now: {output:?}"
+        "quarantine restore is Unix-only today: {output:?}"
     );
+    #[cfg(not(unix))]
     let stderr = String::from_utf8_lossy(&output.stderr);
+    #[cfg(not(unix))]
     assert!(
-        stderr.contains("quarantine restore is deferred in this batch"),
-        "restore refusal should explain the narrowed seam: {stderr}"
+        stderr.contains("UnsupportedPlatformError"),
+        "Windows must fail closed on the quarantine restore write surface: {stderr}"
+    );
+    #[cfg(not(unix))]
+    {
+        let verify = open_test_db(&db_path);
+        let row: (Option<String>, Option<String>) = verify
+            .query_row(
+                "SELECT quarantined_at,
+                        (SELECT relative_path FROM file_state WHERE page_id = ?1 LIMIT 1)
+                 FROM pages
+                 WHERE id = ?1",
+                [quarantined_page_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("load restored page");
+        assert!(row.0.is_some());
+        assert_eq!(row.1, None);
+        assert!(
+            !root.join("notes").join("restored.md").exists(),
+            "unsupported restore must not write vault bytes"
+        );
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let verify = open_test_db(&db_path);
+        let row: (Option<String>, Option<String>, String) = verify
+            .query_row(
+                "SELECT quarantined_at,
+                        (SELECT relative_path FROM file_state WHERE page_id = ?1 LIMIT 1)
+                        ,slug
+                 FROM pages
+                 WHERE id = ?1",
+                [quarantined_page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("load restored page");
+        assert_eq!(row.0, None, "restored page must no longer be quarantined");
+        assert_eq!(row.1.as_deref(), Some("notes/restored.md"));
+        assert_eq!(row.2, "notes/restored");
+        let payload = parse_stdout_json(&output);
+        assert_eq!(payload["command"], "quarantine-restore");
+        assert_eq!(payload["restored_slug"], "notes/restored");
+        assert_eq!(payload["restored_relative_path"], "notes/restored.md");
+        assert!(
+            output.status.success(),
+            "quarantine restore should succeed on Unix: {output:?}"
+        );
+        assert_eq!(
+            std::fs::read(root.join("notes").join("restored.md")).expect("read restored bytes"),
+            b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn quarantine_restore_reingests_page_and_reactivates_file_state_at_target_markdown_path() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "quarantine-restore-happy-path.db");
+    let conn = open_test_db(&db_path);
+    let root = dir.path().join("vault");
+    std::fs::create_dir_all(root.join("notes")).expect("create notes dir");
+    let collection_id = insert_collection(&conn, "work", &root);
+    let raw_bytes =
+        b"---\ngbrain_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored\ntype: concept\n---\nrestored body\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/quarantined",
+        "11111111-1111-7111-8111-111111111111",
+        raw_bytes,
+        "notes/original.md",
+    );
+    let quarantined_page_id = page_id(&conn, collection_id, "notes/quarantined");
+    quarantine_page(&conn, quarantined_page_id, "2026-04-25T00:00:00Z");
+    conn.execute(
+        "DELETE FROM file_state WHERE page_id = ?1",
+        [quarantined_page_id],
+    )
+    .expect("remove file_state");
+    drop(conn);
+
+    let output = run_gbrain(
+        &db_path,
+        &[
+            "collection",
+            "quarantine",
+            "restore",
+            "work::notes/quarantined",
+            "notes/restored",
+        ],
     );
 
+    assert!(
+        output.status.success(),
+        "quarantine restore happy path must succeed: {output:?}"
+    );
     let verify = open_test_db(&db_path);
-    let row: (Option<String>, Option<String>) = verify
+    let row: (Option<String>, Option<String>, i64) = verify
         .query_row(
             "SELECT quarantined_at,
-                    (SELECT relative_path FROM file_state WHERE page_id = ?1 LIMIT 1)
+                    (SELECT relative_path FROM file_state WHERE page_id = ?1 LIMIT 1),
+                    (SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1 AND is_active = 1)
              FROM pages
              WHERE id = ?1",
             [quarantined_page_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("load restored page");
-    assert!(
-        row.0.is_some(),
-        "page must remain quarantined while restore is deferred"
+    assert_eq!(row.0, None, "page must leave quarantine after restore");
+    assert_eq!(
+        row.1.as_deref(),
+        Some("notes/restored.md"),
+        "file_state must reactivate at the restored markdown path"
     );
-    assert_eq!(row.1, None);
-    assert!(
-        !root.join("notes").join("restored.md").exists(),
-        "disabled restore must not write any vault bytes"
+    assert_eq!(
+        row.2, 1,
+        "restore must leave exactly one active raw_import row"
+    );
+    assert_eq!(
+        std::fs::read(root.join("notes").join("restored.md")).expect("read restored bytes"),
+        raw_bytes,
+        "restored vault bytes must match the active raw import content"
     );
 }
 
