@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
