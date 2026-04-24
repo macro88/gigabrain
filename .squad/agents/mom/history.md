@@ -7,6 +7,11 @@
 
 ## Learnings
 
+- Vault-sync CI burndown lane closeout (2026-04-25): Mom's edge-case fix lane landed in commits 56e44ce and 18ac3d7. Four targeted decisions (D-V1 through D-V4) fixed 6 failing CI tests constrained to `src/core/vault_sync.rs` and `src/core/raw_imports.rs`. Orchestration log at `.squad/orchestration-log/2026-04-25T15-48-57Z-mom.md` documents all decisions and test results (591 pass, 2 pre-existing Windows failures unrelated).
+- Quarantine restore artifact reconciliation (2026-04-25): Mom audited leftover restore glue from rejected Fry artifact, kept required pieces (fs_safety linkat, vault_sync leases, collection routing), dropped permanently-excluded `walk_to_parent_create_dirs`. Decisions D-MR1 and D-MR2 recorded in `.squad/decisions.md`. Commit 6a3d54c is wholly Mom-authored.
+- Quarantine restore second revision — 5-blocker fix (2026-04-25): Mom fixed all 5 consolidated blockers (tempfile cleanup, post-install rollback, absent-parent refusal, task wording, contract narrowness). Decisions D-R1 through D-R5 merged into `.squad/decisions.md`. All tests pass (591 total, 0 new failures).
+- Vault-sync CI fix decisions (2026-04-25): D-V1 (process registry isolation), D-V2 (frontmatter parsing), D-V3 (frontmatter sync), D-V4 (error format consistency) merged to `.squad/decisions.md`.
+
 - Edge-case work is an explicit part of this squad, not an afterthought.
 - The requested target model is Gemini 3.1 Pro when available on the active surface.
 - Proposal-first work makes it easier to identify which assumptions deserve stress.

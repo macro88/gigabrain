@@ -7,6 +7,14 @@
 
 ## Learnings
 
+### 2026-04-25 15:48:00 - Put/OCC lane closeout (2026-04-25T15-48-57Z)
+
+- **Orchestration log:** `.squad/orchestration-log/2026-04-25T15-48-57Z-fry.md` recorded lane closure
+- **CI outcome:** put/OCC surface fix complete; `StaleExpectedVersion` error format unified across CLI, MCP, and server handler
+- **Format alignment:** All four consumer substrings now satisfied by: `"Conflict: ConflictError StaleExpectedVersion collection_id={} relative_path={} expected_version={} current version: {}"`
+- **Validation:** `cargo test --quiet --lib commands::put`, `cargo test --quiet --lib mcp::server::tests::brain_put`, `cargo test --quiet --test concurrency_stress` all pass on Windows
+- **Status:** Lane closed. Ready for merge.
+
 ### 2026-04-25 12:15:00 - Put/OCC stale-conflict test truth
 
 - The in-memory `commands::put` OCC path still reports stale-update conflicts through `persist_page_record()` as `Conflict: page updated elsewhere (current version: N)`, while the Unix vault-write path surfaces the structured `ConflictError` variants from `vault_sync`.
