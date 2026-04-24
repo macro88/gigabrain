@@ -962,14 +962,26 @@ mod tests {
 
     #[cfg(unix)]
     impl HookGuard {
-        fn install(hooks: PutTestHooks) -> Self {
+        fn acquire() -> Self {
             let guard = hook_test_lock()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner());
             *put_test_hooks()
                 .lock()
-                .unwrap_or_else(|err| err.into_inner()) = hooks;
+                .unwrap_or_else(|err| err.into_inner()) = PutTestHooks::default();
             Self { _guard: guard }
+        }
+
+        fn set(&self, hooks: PutTestHooks) {
+            *put_test_hooks()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = hooks;
+        }
+
+        fn install(hooks: PutTestHooks) -> Self {
+            let guard = Self::acquire();
+            guard.set(hooks);
+            guard
         }
     }
 
@@ -1014,6 +1026,14 @@ mod tests {
         let mut state = state_lock.lock().unwrap();
         state.release = true;
         wakeup.notify_all();
+    }
+
+    #[cfg(unix)]
+    fn open_test_db_with_vault_guarded(
+    ) -> (HookGuard, tempfile::TempDir, String, Connection, PathBuf) {
+        let guard = HookGuard::acquire();
+        let (dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        (guard, dir, db_path, conn, vault_root)
     }
 
     fn active_raw_import_count_for_slug(conn: &Connection, slug: &str) -> i64 {
@@ -1199,7 +1219,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_update_without_expected_version_conflicts_before_sentinel_creation() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/missing-expected",
@@ -1232,7 +1252,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_stale_expected_version_conflicts_before_sentinel_creation() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/stale-expected",
@@ -1262,7 +1282,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_external_delete_conflicts_before_sentinel_creation() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/external-delete",
@@ -1290,7 +1310,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_external_create_conflicts_before_sentinel_creation() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let target = vault_root.join("notes").join("external-create.md");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, b"external bytes").unwrap();
@@ -1313,7 +1333,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_fresh_create_succeeds_without_existing_file_state() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let body = "---\ntitle: Fresh Create\ntype: note\n---\nBody\n";
 
         put_from_string(&conn, "notes/fresh-create", body, None).unwrap();
@@ -1329,7 +1349,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn same_slug_writes_wait_for_per_slug_mutex() {
-        let (_dir, db_path, conn, _vault_root) = open_test_db_with_vault();
+        let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/serialized",
@@ -1338,7 +1358,7 @@ mod tests {
         )
         .unwrap();
         reset_write_lock_blocker();
-        let _guard = HookGuard::install(PutTestHooks {
+        guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
         });
@@ -1389,9 +1409,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn different_slug_writes_do_not_share_per_slug_mutex() {
-        let (_dir, db_path, conn, _vault_root) = open_test_db_with_vault();
+        let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         reset_write_lock_blocker();
-        let _guard = HookGuard::install(PutTestHooks {
+        guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
         });
@@ -1440,8 +1460,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sentinel_creation_failure_returns_recovery_sentinel_error_without_db_or_vault_mutation() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let _guard = HookGuard::install(PutTestHooks {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        guard.set(PutTestHooks {
             fail_sentinel_create: true,
             ..PutTestHooks::default()
         });
@@ -1472,8 +1492,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pre_rename_failure_cleans_tempfile_sentinel_and_dedup() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let _guard = HookGuard::install(PutTestHooks {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        guard.set(PutTestHooks {
             fail_before_rename: true,
             ..PutTestHooks::default()
         });
@@ -1496,8 +1516,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rename_failure_cleans_tempfile_sentinel_and_dedup() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
-        let _guard = HookGuard::install(PutTestHooks {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        guard.set(PutTestHooks {
             fail_rename: true,
             ..PutTestHooks::default()
         });
@@ -1520,7 +1540,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn parent_fsync_failure_refuses_db_commit_and_retains_sentinel() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/fsync-parent",
@@ -1528,7 +1548,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let _guard = HookGuard::install(PutTestHooks {
+        guard.set(PutTestHooks {
             fail_parent_fsync: true,
             ..PutTestHooks::default()
         });
@@ -1561,7 +1581,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn foreign_rename_returns_concurrent_rename_and_retains_sentinel() {
-        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/concurrent",
@@ -1569,7 +1589,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let _guard = HookGuard::install(PutTestHooks {
+        guard.set(PutTestHooks {
             post_rename_swap: Some(
                 b"---\ntitle: Concurrent\ntype: note\n---\nForeign body\n".to_vec(),
             ),
@@ -1599,7 +1619,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_busy_retains_sentinel_until_startup_recovery_reconciles() {
-        let (_dir, db_path, conn, _vault_root) = open_test_db_with_vault();
+        let (_guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/busy",
@@ -1647,7 +1667,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn foreign_rename_with_busy_falls_back_to_startup_sentinel_recovery() {
-        let (_dir, db_path, conn, _vault_root) = open_test_db_with_vault();
+        let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/foreign-busy",
@@ -1662,7 +1682,7 @@ mod tests {
                 "BEGIN EXCLUSIVE; UPDATE collections SET updated_at = updated_at WHERE id = 1;",
             )
             .unwrap();
-        let _guard = HookGuard::install(PutTestHooks {
+        guard.set(PutTestHooks {
             post_rename_swap: Some(
                 b"---\ntitle: Foreign Busy\ntype: note\n---\nForeign winner body\n".to_vec(),
             ),
@@ -1680,7 +1700,7 @@ mod tests {
         assert!(error.to_string().contains("ConcurrentRenameError"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
         drop(blocker);
-        drop(_guard);
+        drop(guard);
 
         let verify_before_runtime = Connection::open(&db_path).unwrap();
         assert_eq!(collection_needs_full_sync(&verify_before_runtime, 1), 0);
