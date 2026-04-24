@@ -11,6 +11,7 @@ use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 ///
 /// At most `limit` results are returned. The limit is pushed into the FTS5 query
 /// and applied after the merge step to cap memory usage.
+#[allow(dead_code)]
 pub fn hybrid_search(
     query: &str,
     wing: Option<&str>,

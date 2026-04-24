@@ -11,7 +11,9 @@ pub async fn run(db: Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(unix))]
     use super::*;
+    #[cfg(not(unix))]
     use crate::core::db;
 
     #[cfg(not(unix))]

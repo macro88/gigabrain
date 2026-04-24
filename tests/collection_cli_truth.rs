@@ -1159,7 +1159,6 @@ fn quarantine_restore_reingests_page_and_reactivates_file_state() {
             !root.join("notes").join("restored.md").exists(),
             "unsupported restore must not write vault bytes"
         );
-        return;
     }
 
     #[cfg(unix)]

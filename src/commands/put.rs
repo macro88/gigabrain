@@ -408,8 +408,8 @@ fn persist_with_vault_write(
             return Err(error.into());
         }
     };
-    let target_name = match relative_path_buf.file_name() {
-        Some(target_name) => target_name,
+    let target_name_os = match relative_path_buf.file_name() {
+        Some(name) => name,
         None => {
             let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);
             return Err(vault_sync::VaultSyncError::InvariantViolation {
@@ -417,6 +417,7 @@ fn persist_with_vault_write(
             });
         }
     };
+    let target_name = Path::new(target_name_os);
     let temp_name = PathBuf::from(format!(".gbrain-write-{write_id}.tmp"));
     let temp_file = match create_tempfile(&parent_fd, &temp_name, raw_bytes) {
         Ok(temp_file) => temp_file,
