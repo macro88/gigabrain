@@ -77,13 +77,22 @@ gbrain init ~/brain.db
 
 This creates a new `brain.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (in `v0.9.6`) collections, file_state, and raw_imports tables.
 
-### 2. Import an existing markdown directory
+### 2. Import or attach an existing markdown directory
 
 ```bash
 gbrain import /path/to/notes/ --db ~/brain.db
 ```
 
 GigaBrain ingests each markdown file, parses frontmatter, splits compiled-truth from timeline, generates embeddings, and writes to the database. Ingest is idempotent — re-running the same file is safe.
+
+> **`v0.9.6` note:** Use collections for ongoing vault sync. The old workflow was `gbrain import <path>`. The new workflow is `gbrain collection add <name> <path>` and then `gbrain serve`, which starts the live watcher automatically on macOS/Linux.
+>
+> ```bash
+> gbrain collection add notes /path/to/notes
+> gbrain serve
+> ```
+>
+> Use `gbrain import` for one-shot bulk ingest. Use collections when you want GigaBrain to stay in sync with a markdown or Obsidian vault. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 
 ### 3. Search
 
@@ -163,6 +172,8 @@ gbrain serve
 > **Unix only in `v0.9.6`.** `gbrain serve` now owns the vault-sync runtime, so macOS/Linux are the supported hosts for MCP on this release line. On Windows it returns `UnsupportedPlatformError`; use the portable CLI commands (`search`, `query`, `get`, `list`, etc.) there until a safe non-Unix serve contract lands.
 
 The MCP server exposes tools over stdio JSON-RPC 2.0.
+
+> For OpenClaw, put the same server definition under `mcp.servers` in `openclaw.json`. See [openclaw-harness.md](openclaw-harness.md) for the full harness setup, collections-based vault sync, and `brain_collections` health checks.
 
 **Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
 
