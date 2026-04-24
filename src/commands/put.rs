@@ -794,7 +794,12 @@ fn test_hooks_snapshot() -> Option<PutTestHooks> {
 
 #[cfg(all(test, unix))]
 fn test_hooks_snapshot() -> Option<PutTestHooks> {
-    Some(put_test_hooks().lock().unwrap().clone())
+    Some(
+        put_test_hooks()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone(),
+    )
 }
 
 #[cfg(all(test, unix))]
@@ -958,8 +963,12 @@ mod tests {
     #[cfg(unix)]
     impl HookGuard {
         fn install(hooks: PutTestHooks) -> Self {
-            let guard = hook_test_lock().lock().unwrap();
-            *put_test_hooks().lock().unwrap() = hooks;
+            let guard = hook_test_lock()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            *put_test_hooks()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = hooks;
             Self { _guard: guard }
         }
     }
@@ -967,7 +976,9 @@ mod tests {
     #[cfg(unix)]
     impl Drop for HookGuard {
         fn drop(&mut self) {
-            *put_test_hooks().lock().unwrap() = PutTestHooks::default();
+            *put_test_hooks()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = PutTestHooks::default();
         }
     }
 
@@ -1334,7 +1345,7 @@ mod tests {
         let first_db_path = db_path.clone();
         let first = std::thread::spawn(move || {
             let conn = Connection::open(&first_db_path).unwrap();
-            conn.busy_timeout(Duration::from_millis(0)).unwrap();
+            conn.busy_timeout(Duration::from_secs(1)).unwrap();
             put_from_string(
                 &conn,
                 "notes/serialized",
@@ -1348,7 +1359,7 @@ mod tests {
         let second_db_path = db_path.clone();
         let second = std::thread::spawn(move || {
             let conn = Connection::open(&second_db_path).unwrap();
-            conn.busy_timeout(Duration::from_millis(0)).unwrap();
+            conn.busy_timeout(Duration::from_secs(1)).unwrap();
             let result = put_from_string(
                 &conn,
                 "notes/serialized",
@@ -1387,7 +1398,7 @@ mod tests {
         let blocked_db_path = db_path.clone();
         let blocked = std::thread::spawn(move || {
             let conn = Connection::open(&blocked_db_path).unwrap();
-            conn.busy_timeout(Duration::from_millis(0)).unwrap();
+            conn.busy_timeout(Duration::from_secs(1)).unwrap();
             put_from_string(
                 &conn,
                 "notes/alpha",
@@ -1401,7 +1412,7 @@ mod tests {
         let free_db_path = db_path.clone();
         let free = std::thread::spawn(move || {
             let conn = Connection::open(&free_db_path).unwrap();
-            conn.busy_timeout(Duration::from_millis(0)).unwrap();
+            conn.busy_timeout(Duration::from_secs(1)).unwrap();
             let result = put_from_string(
                 &conn,
                 "notes/beta",

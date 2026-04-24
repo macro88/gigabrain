@@ -2314,15 +2314,15 @@ mod tests {
     }
 
     fn insert_collection(conn: &Connection, id: i64, name: &str, is_write_target: bool) {
+        let root_path = std::env::temp_dir()
+            .join(format!("gbrain-mcp-{id}-{name}"))
+            .display()
+            .to_string();
+        fs::create_dir_all(&root_path).unwrap();
         conn.execute(
             "INSERT INTO collections (id, name, root_path, state, writable, is_write_target) \
              VALUES (?1, ?2, ?3, 'active', 1, ?4)",
-            rusqlite::params![
-                id,
-                name,
-                format!(r"C:\vaults\{name}"),
-                if is_write_target { 1 } else { 0 }
-            ],
+            rusqlite::params![id, name, root_path, if is_write_target { 1 } else { 0 }],
         )
         .unwrap();
     }
