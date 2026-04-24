@@ -34,7 +34,7 @@ Sprint 0 establishes the full repository structure before any core implementatio
 **Owner:** Fry  
 **Depends on:** Sprint 0
 
-**Release:** `v0.1.0` — tag pending. All ship gates passed; pushing the `v0.1.0` tag triggers the release workflow.
+**Release:** `v0.1.0`
 
 The smallest complete slice that proves GigaBrain's value proposition. When Phase 1 ships, a real user can import their markdown brain, search it semantically and by keyword, export without data loss, and connect any MCP-compatible agent via `gbrain serve`.
 
@@ -130,7 +130,35 @@ The smallest complete slice that proves GigaBrain's value proposition. When Phas
 
 ---
 
-## Deliberate Deferrals
+## vault-sync-engine — Collections, Live-sync, and Write Safety 🔄
+
+**Status: In progress** (`spec/vault-sync-engine` branch)  
+**Owner:** Fry  
+**Depends on:** Phase 3 ship gate
+
+Extends GigaBrain from a single-vault store to a multi-collection, file-system-aware knowledge engine. The brain stays current as you edit in Obsidian or any editor, and write safety guarantees keep the SQLite state honest even under concurrent agents.
+
+**Landed in this branch:**
+- Schema v5: `collections`, `file_state`, `embedding_jobs`, `raw_imports`, `collection_owners`, and updated indexes/FKs
+- Collections model: `gbrain collection add/list/info/sync`, per-collection writable/read-only state
+- `<collection>::<slug>` routing across all CLI and MCP surfaces; ambiguous bare-slug inputs fail closed with a stable `AmbiguityError`
+- `.gbrainignore` support with atomic validation — all lines are parsed before any mirror update; invalid files leave the mirror unchanged
+- `gbrain collection ignore add|remove|list|clear --confirm` with dry-run-first validation
+- Quarantine lifecycle: pages with DB-only state (links, assertions, gaps) are quarantined on deletion rather than hard-deleted; inspect and manage with `gbrain collection quarantine list|export|discard`
+- Per-collection write interlocks: `CollectionRestoringError` on all mutating tools when a collection is in the `restoring` state
+- Writer-side crash safety: `brain_put` durably creates a sentinel before vault mutation and the startup reconciler consumes retained sentinels on next launch
+- Unix CAS / precondition gates on `brain_put` (platform-gated; Windows returns `UnsupportedPlatformError` for vault-sync CLI surfaces)
+- `brain_collections` MCP tool — read-only collection status with 13-field output including state, watcher activity, blocker, and ignore diagnostics
+- Live file watcher: `gbrain serve` runs one watcher per active collection with a 1.5 s debounce, bounded event queue, reconcile-backed flushes, and self-write suppression with TTL expiry
+
+**Explicitly deferred (not available yet):**
+- Quarantine `restore` — backed out pending a crash-durable, no-replace-install implementation
+- IPC socket and online restore handshake
+- Broader DB-only mutator coverage and live/background recovery worker
+
+**Gate:** All closed tasks remain closed; next slice requires a fresh scoped gate before implementation resumes.
+
+---
 
 These are known design choices that are _not_ oversights:
 
@@ -154,4 +182,5 @@ These are known design choices that are _not_ oversights:
 | `v0.1.0` | Phase 1 — core storage, CLI, search, MCP |
 | `v0.2.0` | Phase 2 — intelligence layer |
 | `v0.9.2` | Phase 3 — full skill suite + benchmarks + dual BGE-small release channels |
-| `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter; #55 remains a post-ship rerun gate) |
+| `v0.9.4` | FTS5 search hardening (`sanitize_fts_query`, `--raw` bypass, JSON errors) + assertion extraction tightening (scope to `## Assertions` sections + frontmatter) |
+| TBD | vault-sync-engine — collections, live-sync watcher, quarantine lifecycle, write safety (in progress on `spec/vault-sync-engine`; restore + IPC deferred) |

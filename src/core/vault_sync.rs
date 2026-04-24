@@ -3882,6 +3882,50 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn relative_markdown_path_accepts_only_markdown_within_root() {
+        let root = Path::new("/vault");
+
+        assert_eq!(
+            relative_markdown_path(root, &root.join("notes").join("a.md")),
+            Some(PathBuf::from("notes").join("a.md"))
+        );
+        assert_eq!(
+            relative_markdown_path(root, &root.join("notes").join("a.MD")),
+            Some(PathBuf::from("notes").join("a.MD"))
+        );
+        assert_eq!(
+            relative_markdown_path(root, &root.join("notes").join("a.txt")),
+            None
+        );
+        assert_eq!(
+            relative_markdown_path(root, &PathBuf::from("/elsewhere").join("a.md")),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_collection_watcher_returns_invariant_violation_when_channel_disconnects() {
+        let conn = open_test_db();
+        let (_sender, receiver) = mpsc::channel(1);
+        drop(_sender);
+        let watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let mut state = CollectionWatcherState {
+            root_path: PathBuf::from("/vault"),
+            generation: 0,
+            receiver,
+            _watcher: watcher,
+            buffer: WatchBatchBuffer::default(),
+        };
+
+        let err = poll_collection_watcher(&conn, 42, &mut state).unwrap_err();
+
+        assert!(matches!(err, VaultSyncError::InvariantViolation { .. }));
+        assert!(err.to_string().contains("watch channel disconnected"));
+    }
+
+    #[cfg(unix)]
     fn startup_recovery_sentinel_count(recovery_root: &Path, collection_id: i64) -> usize {
         recovery_sentinel_paths(recovery_root, collection_id)
             .unwrap()
@@ -4538,6 +4582,35 @@ mod tests {
         assert!(compiled_truth.contains("Stale dedup must not block ingest."));
 
         drop(runtime);
+    }
+
+    #[test]
+    fn sync_collection_watchers_production_logic_stays_active_only_and_generation_aware() {
+        let source = production_vault_sync_source();
+        let start = source.find("fn sync_collection_watchers(").unwrap();
+        let end = source[start..]
+            .find("fn run_watcher_reconcile(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("WHERE state = 'active'"),
+            "watcher sync must only enumerate active collections: {snippet}"
+        );
+        assert!(
+            snippet
+                .contains("watchers.retain(|collection_id, _| active.contains_key(collection_id))"),
+            "watcher sync must drop watchers for non-active collections: {snippet}"
+        );
+        assert!(
+            snippet.contains("state.root_path != root_path || state.generation != generation"),
+            "watcher sync must replace watchers when root or reload_generation changes: {snippet}"
+        );
+        assert!(
+            snippet.contains("state.generation = generation;"),
+            "replacement watchers must inherit the new reload_generation: {snippet}"
+        );
     }
 
     #[test]

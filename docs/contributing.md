@@ -18,7 +18,7 @@ Read [getting-started.md](getting-started.md) first if you haven't. Read [spec.m
 gigabrain/
 ├── src/
 │   ├── main.rs               # CLI entrypoint (clap dispatch)
-│   ├── schema.sql            # Full v4 DDL (embedded via include_str!)
+│   ├── schema.sql            # Full v5 DDL (embedded via include_str!)
 │   ├── core/                 # Library modules
 │   │   ├── db.rs             # SQLite connection, schema init, WAL, sqlite-vec
 │   │   ├── types.rs          # All structs
@@ -32,9 +32,12 @@ gigabrain/
 │   │   ├── progressive.rs    # Token-budget-gated content expansion
 │   │   ├── palace.rs         # Wing/room derivation for palace filtering (Phase 2: room-level)
 │   │   ├── novelty.rs        # Jaccard + cosine dedup (Phase 2: tiers 2–4)
-│   │   ├── migrate.rs        # import_dir / export_dir / validate_roundtrip
+│   │   ├── migrate.rs        # import_dir / export_dir / validate_roundtrip (legacy ingest)
 │   │   ├── chunking.rs       # Temporal sub-chunking
-│   │   └── graph.rs          # Graph neighbourhood traversal (Phase 2)
+│   │   ├── collections.rs    # Collection model, CRUD helpers, slug resolution (vault-sync)
+│   │   ├── file_state.rs     # File stat tracking and stat-diff (vault-sync)
+│   │   ├── fs_safety.rs      # fd-relative primitives: openat, renameat, unlinkat (vault-sync, Unix)
+│   │   └── reconciler.rs     # Stat-diff → rename resolution → apply pipeline (vault-sync)
 │   ├── commands/             # One file per CLI command
 │   │   ├── init.rs, get.rs, put.rs, list.rs, stats.rs
 │   │   ├── search.rs, query.rs, embed.rs
@@ -43,6 +46,7 @@ gigabrain/
 │   │   ├── gaps.rs, check.rs
 │   │   ├── validate.rs, call.rs, pipe.rs, skills.rs
 │   │   ├── serve.rs, compact.rs, config.rs, version.rs
+│   │   ├── collection.rs     # gbrain collection subcommands (vault-sync)
 │   │   └── tags.rs
 │   └── mcp/
 │       └── server.rs         # MCP stdio server (JSON-RPC 2.0 via rmcp)

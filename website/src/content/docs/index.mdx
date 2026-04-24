@@ -46,19 +46,26 @@ Then import your notes and connect to Claude Code:
     Combine the precision of keyword search with the context of semantic search.
     Find exactly what you need across millions of documents in milliseconds.
   </Card>
+  <Card title="Live Vault Sync" icon="rocket">
+    Attach any Obsidian vault as a collection. GigaBrain watches for edits
+    with a 1.5 s debounce and reconcile-backed flushes so the brain stays
+    current as you write. <em>(vault-sync-engine branch)</em>
+  </Card>
 </CardGrid>
 
 ---
 
 ## Get running in seconds
 
-Simple CLI tools for complex information management.
+Three commands. No API keys. No cloud.
 
 ```bash
-$ gbrain init ~/brain.db
-Initializing local SQLite brain... Done.
+# Initialize a brain
+gbrain init ~/brain.db
 
-$ gbrain serve
-Indexing 4.2k local markdown files...
-Server active at http://localhost:8080
+# Import your notes (idempotent — safe to re-run)
+gbrain import ~/notes --db ~/brain.db
+
+# Expose 16 tools to any MCP client over stdio (v0.9.4)
+GBRAIN_DB=~/brain.db gbrain serve
 ```

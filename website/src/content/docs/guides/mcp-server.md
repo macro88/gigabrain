@@ -90,6 +90,44 @@ Add to your MCP client config (example for Claude Code):
 | `brain_stats` | Brain statistics (page count, link count, contradiction count, db size) |
 | `brain_raw` | Store raw structured data (API responses, JSON) for a page |
 
+### vault-sync-engine — Collections and write safety
+
+| Tool | Description |
+| --- | --- |
+| `brain_collections` | Read-only collection status: health, state, watcher activity, and ignore diagnostics for all attached vaults |
+
+---
+
+## `brain_collections` — collection status
+
+```json
+{}
+```
+
+**Returns:** JSON array of collection records. Each entry includes:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "notes",
+    "path": "/Users/alice/notes",
+    "state": "active",
+    "needs_full_sync": false,
+    "write_target": true,
+    "blocker": null,
+    "restore_pending": false,
+    "restore_error": null,
+    "last_reconciled_at": "2026-04-25T09:00:00Z",
+    "last_synced_at": "2026-04-25T09:01:00Z",
+    "ignore_parse_errors": [],
+    "ignore_patterns_count": 5
+  }
+]
+```
+
+`state` values: `"active"` | `"restoring"` | `"needs_sync"`. When `state` is `"restoring"`, all mutating tools on that collection return `CollectionRestoringError`.
+
 ---
 
 ## Phase 3 tool examples

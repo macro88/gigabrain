@@ -23,16 +23,6 @@ pub struct DbOnlyStateCounts {
     pub knowledge_gaps: i64,
 }
 
-impl DbOnlyStateCounts {
-    pub fn any(self) -> bool {
-        self.programmatic_links != 0
-            || self.non_import_assertions != 0
-            || self.raw_data != 0
-            || self.contradictions != 0
-            || self.knowledge_gaps != 0
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QuarantinedPageView {
     pub collection: String,
@@ -331,9 +321,10 @@ pub fn discard_quarantined_page(
     let resolved = vault_sync::resolve_slug_for_op(conn, slug_input, OpKind::WriteUpdate)?;
     vault_sync::ensure_collection_write_allowed(conn, resolved.collection_id)?;
     let page = load_quarantined_page(conn, &resolved)?;
-    let counts = db_only_state_counts(conn, page.page_id)?;
+    let has_db_only_state = reconciler::has_db_only_state(conn, page.page_id)?;
     let exported_before_discard = has_current_export(conn, page.page_id, &page.quarantined_at)?;
-    if counts.any() && !force && !exported_before_discard {
+    if has_db_only_state && !force && !exported_before_discard {
+        let counts = db_only_state_counts(conn, page.page_id)?;
         return Err(QuarantineError::ExportRequired {
             slug: page.slug,
             counts,
@@ -760,6 +751,7 @@ fn current_timestamp(conn: &Connection) -> Result<String, QuarantineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn open_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -791,6 +783,13 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    fn production_source_without_tests(path: &str) -> String {
+        let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        let source = std::fs::read_to_string(source_path).unwrap();
+        let test_module_start = source.rfind("#[cfg(test)]").unwrap();
+        source[..test_module_start].to_owned()
     }
 
     #[test]
@@ -856,9 +855,250 @@ mod tests {
                 "SELECT exported_at FROM quarantine_exports WHERE page_id = ?1 AND quarantined_at = ?2",
                 params![page_id, "2026-01-01T00:00:00Z"],
                 |row| row.get(0),
+        )
+        .unwrap();
+        assert_eq!(exported_at, "2026-01-03T04:05:06Z");
+    }
+
+    #[test]
+    fn list_collection_quarantine_ignores_export_receipts_from_prior_quarantine_epoch() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-01T00:00:00Z",
+            "2026-01-03T04:05:06Z",
+            "out.json".to_owned(),
+        )
+        .unwrap();
+
+        let rows = list_collection_quarantine(&conn, "work").unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].address, "work::notes/exported");
+        assert_eq!(rows[0].quarantined_at, "2026-01-02T00:00:00Z");
+        assert_eq!(
+            rows[0].exported_at, None,
+            "stale export receipts must not surface on the current quarantine epoch"
+        );
+    }
+
+    #[test]
+    fn list_collection_quarantine_reports_db_only_counts_and_current_epoch_export() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        let peer_id =
+            insert_quarantined_page(&conn, collection_id, "notes/peer", "2026-01-02T00:00:00Z");
+        conn.execute(
+            "INSERT INTO links (from_page_id, to_page_id, relationship, source_kind)
+             VALUES (?1, ?2, 'related', 'programmatic')",
+            params![page_id, peer_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T04:05:06Z",
+            "out.json".to_owned(),
+        )
+        .unwrap();
+
+        let rows = list_collection_quarantine(&conn, "work").unwrap();
+        let exported = rows
+            .into_iter()
+            .find(|row| row.slug == "notes/exported")
+            .expect("exported row");
+
+        assert_eq!(
+            exported.exported_at.as_deref(),
+            Some("2026-01-03T04:05:06Z")
+        );
+        assert_eq!(
+            exported.db_only_state,
+            DbOnlyStateCounts {
+                programmatic_links: 1,
+                non_import_assertions: 0,
+                raw_data: 0,
+                contradictions: 0,
+                knowledge_gaps: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn discard_without_force_requires_current_epoch_export_when_db_only_state_exists() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-01T00:00:00Z",
+            "2026-01-03T04:05:06Z",
+            "out.json".to_owned(),
+        )
+        .unwrap();
+
+        let err = discard_quarantined_page(&conn, "work::notes/exported", false).unwrap_err();
+
+        assert!(matches!(
+            err,
+            QuarantineError::ExportRequired { slug, .. } if slug == "notes/exported"
+        ));
+        let still_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(exported_at, "2026-01-03T04:05:06Z");
+        assert_eq!(still_exists, 1);
+    }
+
+    #[test]
+    fn discard_without_force_succeeds_after_current_epoch_export_when_db_only_state_exists() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id = insert_quarantined_page(
+            &conn,
+            collection_id,
+            "notes/exported",
+            "2026-01-02T00:00:00Z",
+        );
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+        record_quarantine_export(
+            &conn,
+            page_id,
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T04:05:06Z",
+            "out.json".to_owned(),
+        )
+        .unwrap();
+
+        let receipt = discard_quarantined_page(&conn, "work::notes/exported", false).unwrap();
+
+        assert_eq!(
+            receipt,
+            QuarantineDiscardReceipt {
+                collection: "work".to_owned(),
+                slug: "notes/exported".to_owned(),
+                quarantined_at: "2026-01-02T00:00:00Z".to_owned(),
+                forced: false,
+                exported_before_discard: true,
+            }
+        );
+        let still_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_exists, 0);
+    }
+
+    #[test]
+    fn discard_with_force_deletes_db_only_state_without_prior_export() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn);
+        let page_id =
+            insert_quarantined_page(&conn, collection_id, "notes/forced", "2026-01-02T00:00:00Z");
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context)
+             VALUES (?1, 'gap-1', 'context')",
+            [page_id],
+        )
+        .unwrap();
+
+        let receipt = discard_quarantined_page(&conn, "work::notes/forced", true).unwrap();
+
+        assert_eq!(
+            receipt,
+            QuarantineDiscardReceipt {
+                collection: "work".to_owned(),
+                slug: "notes/forced".to_owned(),
+                quarantined_at: "2026-01-02T00:00:00Z".to_owned(),
+                forced: true,
+                exported_before_discard: false,
+            }
+        );
+        let still_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_exists, 0);
+    }
+
+    #[test]
+    fn hard_delete_paths_consult_db_only_state_predicate_before_delete() {
+        let reconciler_source = production_source_without_tests(
+            PathBuf::from("src")
+                .join("core")
+                .join("reconciler.rs")
+                .to_str()
+                .unwrap(),
+        );
+        let quarantine_source = production_source_without_tests(
+            PathBuf::from("src")
+                .join("core")
+                .join("quarantine.rs")
+                .to_str()
+                .unwrap(),
+        );
+
+        assert!(
+            reconciler_source.contains("if has_db_only_state(conn, page_id)? {"),
+            "reconciler missing-file classification must consult has_db_only_state before choosing quarantine vs hard-delete"
+        );
+        assert!(
+            quarantine_source.contains(
+                "let has_db_only_state = reconciler::has_db_only_state(conn, page.page_id)?;"
+            ),
+            "quarantine discard must consult the shared has_db_only_state predicate before deleting a page"
+        );
+        assert!(
+            quarantine_source.contains("if reconciler::has_db_only_state(conn, page_id)? {"),
+            "quarantine TTL sweep must consult has_db_only_state before deleting a page"
+        );
     }
 
     #[test]
