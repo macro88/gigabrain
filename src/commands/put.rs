@@ -1043,11 +1043,12 @@ mod tests {
         )
         .unwrap()
         .query_row([slug], |row| {
+            let compiled_truth: String = row.get(3)?;
             Ok((
                 row.get(0)?,
                 row.get(1)?,
                 row.get(2)?,
-                row.get(3)?,
+                compiled_truth.trim_end_matches('\n').to_owned(),
                 row.get(4)?,
             ))
         })
@@ -1155,7 +1156,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Conflict"));
-        assert!(err.contains("current version: 2"));
+        assert!(err.contains("current_version=2"));
     }
 
     #[test]
@@ -1778,6 +1779,8 @@ mod tests {
     fn frontmatter_is_stored_as_json_and_recoverable() {
         let conn = open_test_db();
         let md = "---\nsource: manual\ntitle: Data\ntype: concept\n---\nContent.\n";
+        #[cfg(unix)]
+        let _guard = HookGuard::install(PutTestHooks::default());
 
         put_from_string(&conn, "data/test", md, None).unwrap();
 
