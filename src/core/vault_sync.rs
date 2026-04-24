@@ -358,7 +358,7 @@ pub enum VaultSyncError {
         sentinel_path: String,
     },
 
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     #[error("DurabilityError: collection_id={collection_id} relative_path={relative_path}")]
     Durability {
         collection_id: i64,
@@ -470,6 +470,7 @@ pub enum FsPreconditionOutcome {
 }
 
 #[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
 struct FsPreconditionInspection {
     outcome: FsPreconditionOutcome,
@@ -621,7 +622,7 @@ pub(crate) fn check_fs_precondition_before_sentinel(
     Ok(inspect_fs_precondition(conn, collection_id, root_path, relative_path)?.outcome)
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub fn check_fs_precondition(
     conn: &Connection,
     collection_id: i64,
