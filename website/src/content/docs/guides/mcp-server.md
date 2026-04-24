@@ -8,6 +8,10 @@ description: Run `gbrain serve` and connect any MCP client over stdio JSON-RPC 2
 `gbrain serve` starts an MCP server over **stdio**. Your MCP client spawns the
 process and talks JSON-RPC 2.0 over stdin/stdout.
 
+> **Platform note:** `gbrain serve` and the core MCP tools are cross-platform. Live vault-sync
+> watcher threads (automatic reconcile on file edits) are Unix-only (macOS / Linux) and are
+> simply not started on Windows — MCP tool calls continue to work normally.
+
 ## Claude Code config
 
 Add to your MCP client config (example for Claude Code):

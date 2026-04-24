@@ -396,7 +396,7 @@ gbrain collection info work
 
 Once attached, `gbrain serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-> **Unix only.** `gbrain serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `gbrain serve` returns `UnsupportedPlatformError`. The MCP server's read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) are cross-platform; only the live vault-sync watcher is Unix-gated.
+> **Platform note.** `gbrain serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `gbrain serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) work on all platforms.
 
 ### Ignore patterns
 
