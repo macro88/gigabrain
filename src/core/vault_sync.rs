@@ -366,13 +366,6 @@ pub enum VaultSyncError {
     },
 
     #[cfg(unix)]
-    #[error("PostRenameStatError: collection_id={collection_id} relative_path={relative_path}")]
-    PostRenameStat {
-        collection_id: i64,
-        relative_path: String,
-    },
-
-    #[cfg(unix)]
     #[allow(dead_code)]
     #[error(
         "PostRenameRecoveryPendingError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} stage={stage} reason={reason}"
@@ -435,6 +428,7 @@ pub enum VaultSyncError {
         actual_sha256: String,
     },
 
+    #[cfg(not(unix))]
     #[error("UnsupportedPlatformError: command={command} requires=unix")]
     UnsupportedPlatform { command: &'static str },
 

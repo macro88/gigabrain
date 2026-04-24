@@ -381,7 +381,7 @@ fn restore_refuses_when_target_appears_after_the_earlier_absence_check() {
     drop(conn);
 
     let pause_file = dir.path().join("restore.pause");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gbrain"))
+    let child = Command::new(env!("CARGO_BIN_EXE_gbrain"))
         .arg("--db")
         .arg(&db_path)
         .arg("collection")
