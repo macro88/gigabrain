@@ -5,6 +5,12 @@
 - **Stack:** Rust, rusqlite, SQLite FTS5, sqlite-vec, candle + BGE-small-en-v1.5, clap, rmcp
 - **Created:** 2026-04-13T14:22:20Z
 
+## 2026-04-25 — Vault-sync 13.5 read-filter slice
+
+**VERDICT: APPROVE**
+
+All five contract points are closed by the uncommitted diff. `BrainQueryInput`, `BrainSearchInput`, and `BrainListInput` each gain `collection: Option<String>`. All three MCP handlers call a single thin `resolve_read_collection_filter_for_mcp` → `collections::resolve_read_collection_filter`, which correctly implements the default rule: explicit name → `NotFound` error if absent; exactly one `state = 'active'` row (fetched with `LIMIT 2` to short-circuit correctly) → use it; otherwise → write-target via `is_write_target = 1`. Unknown-collection error is code `-32001` with message `"collection not found: X"`, tested for all three tools in one combined test. Explicit-filter isolation is tested independently per tool. Default-rule behavior is proven by two direct-evidence tests (`brain_search_defaults_to_single_active_collection` for the sole-active branch; `brain_query_defaults_to_write_target...` + `brain_list_defaults_to_write_target...` for the write-target fallback). The `collection_filter: Option<i64>` parameter is threaded all the way through `fts.rs`, `inference.rs`, and `search.rs` without introducing a new CLI surface: both `commands/query.rs` and `commands/search.rs` pass hard-coded `None`. No write-path changes, no 17.5aa5 widening, no slug-resolution cluster claims.
+
 ## 2026-04-25 — Vault-sync 13.6 + 17.5ddd re-review (spec-boundary correction)
 
 **VERDICT: APPROVE**
@@ -13,6 +19,7 @@ The spec boundary correction is sufficient. `parse_ignore_parse_errors` (vault_s
 
 ## Learnings
 
+- Vault-sync quarantine-restore pre-gate (2026-04-25): re-enabling a deferred destructive surface is landable only when the reopened contract names both stable end states and proves the hard parts directly — install-time no-replace semantics plus parent-fsynced post-unlink cleanup. Converting deferred-surface tests into precise happy/failure contract proofs is mandatory; retaining only broad "restore failed" coverage is not enough.
 - Vault-sync Batch 13.6 / 17.5ddd review (2026-04-24): **REJECT for landing** when `brain_collections` computes terminal `integrity_blocked` from `reconcile_halt_reason` alone instead of the frozen `reconcile_halted_at IS NOT NULL AND reason` predicate. Read-only shape work is not enough if the presentation can overstate a terminal halt from stale metadata; schema-fidelity reviews must verify the exact truth predicate, not just field names.
 - Vault-sync Batch 13.3 review (2026-04-24): **REJECT for landing** when CLI slug-parity canonicalizes only success paths and leaves a resolved failure path speaking raw inputs. If a command has already resolved `from`/`to` to collection-aware identities (for example `gbrain unlink`), even "no matching link found" must emit canonical `<collection>::<slug>` addresses or the CLI parity claim is still incomplete.
 - Vault-sync Batch N1 review (2026-04-24): **REJECT for landing despite correct MCP truth surface** when a supposedly MCP-only slug-routing slice silently widens shared CLI behavior. Shared-helper reuse is not a scope exemption: if `src/commands/check.rs` changes single-page `gbrain check` resolution/filtering semantics to support `brain_check`, the batch must either narrow the implementation back to MCP-only or state the CLI widening explicitly as its own reviewed surface.
@@ -356,3 +363,11 @@ All four of Bender's other claimed fixes are correct and well-covered: `integrit
 **Minimum required fix:** Either (a) update `design.md §505` to explicitly exclude `file_stably_absent_but_clear_not_confirmed` from `brain_collections` output and document the deferral, or (b) remove the `retain(|e| e.code == "parse_error")` filter and surface both codes as the spec demands. The test must be updated to match whichever path is chosen.
 
 
+
+
+## 2026-04-24 — 13.5 re-review after repair commit 97e574e
+
+VERDICT: APPROVE
+
+The repair is tight and correct. progressive_retrieve now accepts collection_filter: Option<i64> and outbound_neighbours enforces it via AND (?3 IS NULL OR p2.collection_id = ?3) — the ?3 IS NULL short-circuit keeps the CLI path (which passes None) unaffected. rain_query in server.rs threads the same collection_filter ID it resolved for hybrid_search_canonical straight into progressive_retrieve, so the initial search and the BFS expansion are under the same fence. The CLI query.rs correctly passes None (no widening). The esolve_read_collection_filter default logic satisfies the 13.5 contract — single active collection filters to it, write-target designated filters to it, no write target returns None (all collections). The new direct-proof test rain_query_auto_depth_does_not_expand_across_collections creates an explicit cross-collection link and asserts the linked page in the foreign collection never surfaces. Scope is clean: no write-path changes, no CLI widening, no ignore-diagnostic widening. 13.5 is sealed.
+- **Pre-gate scoping before implementation (2026-04-25):** A pre-gate decision on narrow restore re-enable must specify the exact contract before any code lands: which fsyncs are mandatory, what the observable invariant is at recovery time, and which failure paths are acceptable. The contract in this case was: parent fsync after every unlink, install-time no-replace semantics, and deterministic no-data-left-behind on any failure. Gating before the body starts prevents discovering the contract mismatch in code review.

@@ -107,3 +107,74 @@
 
 **Lesson:**
 - When a filter is established at the query entry point, it must be threaded through every subsequent expansion step. A filter that only covers the seed set but not the BFS frontier is a half-fence. The `?3 IS NULL OR p2.collection_id = ?3` pattern is the right idiom: one SQL clause handles both the filtered (MCP) and unfiltered (CLI) call sites without branching the prepared statement or duplicating the query.
+
+### 2026-04-25 Vault-Sync Edge Case Audit — Read-Only Coverage Survey
+
+**Context:** User commissioned a read-only audit of vault-sync test coverage gaps. No code was modified. Deliverable: written audit report, decision record, and skill file.
+
+**Scope surveyed:**
+- `src/core/vault_sync.rs` (watcher runtime, ownership, write guards, session management)
+- `src/core/quarantine.rs` (list, export, discard, sweep, export audit trail)
+- `src/commands/collection.rs` (CLI dispatch, restore deferral, confirm gates)
+- `tests/quarantine_revision_fixes.rs` (5 process-level integration tests)
+- `tests/watcher_core.rs` (1 Unix-only integration test)
+
+**Key findings:**
+
+1. **Deferred-restore tests test the bail, not the behavior.** All four restore tests in `quarantine_revision_fixes.rs` assert the same `"quarantine restore is deferred in this batch"` substring. They verify that restore is correctly disabled — but none exercise the validation logic their names describe (non-.md extension check, live-owner gate, conflict detection, read-only guard). When restore is re-enabled, all four tests must be rewritten. The test setups are correct but the assertions are parking-lot placeholders.
+
+2. **Discard happy-path after successful export is untested.** `blocker_1_failed_export_does_not_unlock_discard` proves the negative (failed export → still blocked). The positive (successful export + db_only_state → non-force discard succeeds) has no test anywhere. This is the highest-value missing unit test.
+
+3. **`discard` with `force=true` is also untested.** The force path bypasses the export guard unconditionally. No test exists at any level.
+
+4. **`discard_quarantined_page` calls `ensure_collection_write_allowed` not `ensure_collection_vault_write_allowed`.** This is a policy decision, not necessarily a bug — discard is a pure SQLite DELETE with no vault bytes touched. But the distinction is undocumented and there is no test asserting this is the intended contract. Read-only collections (`writable=false`) can have quarantined pages discarded.
+
+5. **`record_quarantine_export` upserts silently.** Re-exporting a page overwrites `exported_at` and `output_path` via `ON CONFLICT DO UPDATE`. No test covers re-export behavior. The current test only verifies epoch-matching logic.
+
+6. **`sweep_expired_quarantined_pages` with `GBRAIN_QUARANTINE_TTL_DAYS=0` is untested.** The TTL-zero edge case (sweep everything) is never exercised. Current tests use a fixed past date which bypasses the boundary.
+
+7. **Watcher integration coverage is minimal.** One Unix-only test exists (`start_serve_runtime_defers_fresh_restore_without_mutating_page_rows`). Missing: channel overflow → `needs_full_sync` escalation; reconcile-halt via watcher path; non-.md file event filtering; watcher replacement on generation bump.
+
+8. **`QUARANTINE_SWEEP_INTERVAL_SECS` is hardcoded (86400 secs).** No env-var override exists, making it impossible to write an integration test for the serve-loop sweep without a 24-hour clock dependency.
+
+**Architecture note — `ensure_collection_write_allowed` vs `ensure_collection_vault_write_allowed`:**
+- `ensure_collection_write_allowed` → gates on `state` + `needs_full_sync` only
+- `ensure_collection_vault_write_allowed` → additionally checks `writable` flag
+- `discard_quarantined_page` uses the first (no writable check) — intentional because discard writes no vault bytes
+- `export_quarantined_page` uses `resolve_slug_for_op(OpKind::Read)` — no write gate at all, which is correct (export is read-only)
+- This distinction should be tested and documented, not left implicit
+
+**`ensure_collection_not_live_owned` does not exist as a named function.** History.md (Mom's prior entry) says it was added to `vault_sync.rs`, but Bender's truth repair backed out the entire restore implementation. The function is not present in the codebase. Ownership enforcement for non-serve code paths goes through `acquire_owner_lease` + `session_is_live` inline check.
+
+**Decision record:** `.squad/decisions/inbox/mom-vault-sync-edge-audit.md`
+**Skill file:** `.squad/skills/gate-vs-bail-test-discipline/SKILL.md`
+
+---
+
+### 2026-04-25 Quarantine Lifecycle Revision (9.8 Full Closure)
+
+**Context:** Fry authored quarantine slice; Professor and Nibbler rejected on four specific blockers. Mom assigned as revision author while Fry locked out of this cycle.
+
+**What happened:**
+- Fixed all four rejection blockers in narrow, targeted edits:
+  1. **Export ordering:** `export_quarantined_page()` now writes filesystem first, only records `quarantine_exports` row on success. Failed export no longer unlocks discard.
+  2. **Restore `.md` validation:** `restore_target_relative_path()` now returns `Result`, validates final extension is `.md` after auto-append. Prevents `.txt`, `.pdf` writes.
+  3. **Restore live-owner gate:** Added `ensure_collection_not_live_owned()` to `vault_sync.rs`, wired into `restore_quarantined_page()`. Restore now refuses when serve owns collection.
+  4. **Restore atomicity:** Reordered restore to start SQLite tx first, update DB state, then write filesystem bytes, commit only after all steps succeed. Rollback on any failure prevents residue.
+- Added 4 focused tests in `tests/quarantine_revision_fixes.rs` proving each blocker fix.
+- Existing lib-level quarantine tests remain green.
+- Task `9.8` now closes fully (default quarantine surface complete).
+
+**Decision record:** `.squad/decisions/inbox/mom-quarantine-revision.md`
+
+**Key files:**
+- `src/core/quarantine.rs` — export ordering fix, restore validation + atomicity reordering
+- `src/core/vault_sync.rs` — `ensure_collection_not_live_owned()` helper
+- `tests/quarantine_revision_fixes.rs` — 4 targeted blocker tests
+
+**Lesson:**
+- **Export-first is the wrong order for any operation that records success state.** Write the effect first, record the tracking row second. This matches PUT's write-then-register pattern and prevents failed writes from unlocking downstream relaxations.
+- **Validation after auto-convenience is safer than before.** Auto-appending `.md` is user-friendly; validating the final result afterward prevents inadvertent bypasses without removing the convenience.
+- **Transaction-first rollback is the canonical atomicity pattern for multi-resource commits.** Filesystem-first + cleanup-on-failure is error-prone and misses corner cases. Committing the DB only after all filesystem steps succeed (inside the same transaction) is the correct ordering.
+- **When a gate exists (like `ServeOwnsCollectionError`), every code path that performs the gated action must enforce it.** Restore is a vault write; it must honor the same ownership fences as PUT. Adding `ensure_collection_not_live_owned()` as a reusable helper makes this explicit.
+

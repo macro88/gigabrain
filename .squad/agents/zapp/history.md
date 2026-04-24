@@ -17,6 +17,9 @@
 - Phase/version alignment is a chronic drift point: `v0.1.0 = Phase 1`, `v0.2.0 = Phase 2`, `v1.0.0 = Phase 3`. Any doc that mentions a version tag must also cite the correct phase, and vice versa.
 - When a status table lists phases without version tags, readers cannot cross-reference the roadmap — always include both the phase label and the version target in the same row.
 - Operational scripts (issue creation commands, label helpers) are docs too: a mismatched label like `[Phase 3] v0.1.0 release` teaches contributors the wrong mental model before they've even opened a file.
+- Feature ordering in the README Features list is a positioning signal: the live watcher / collection management (vault-sync-engine) should appear near the top alongside MCP server — these are the headline growth hooks for Obsidian users, not footnotes.
+- Homepage feature grids are the highest-conversion real estate: every landed branch capability with user-facing impact deserves a card with an honest branch qualifier — aspiration plus honesty beats hiding the feature until release.
+- Tool count accuracy across surfaces: use the released count (16) on generic install-path docs; use branch count (17) only when explicitly discussing the branch. README already models this split correctly.
 
 ## 2026-04-15 Release Contract Audit — Fix 'for this release' ambiguity
 
@@ -46,6 +49,34 @@
 **Outcome:** P3 Release release-readiness component **COMPLETE**. Release checklist ready, phase/version aligned across README/docs/scripts, all gates passed.
 
 **Decision notes:** `.squad/decisions.md` (merged from inbox) — documents Zapp's two decisions (release checklist routing, final phase/version alignment fixes).
+
+
+## 2026-04-25 Promo / Docs Pass — vault-sync-engine branch truth
+
+**Role:** Public docs + product-facing messaging audit
+
+**What happened:**
+- Audited all four surfaces flagged by `docs-site-promotion-checklist` SKILL.md: tool count references, version numbers, schema version references, homepage accuracy, and roadmap completeness.
+- Found 4 issues requiring correctness fixes: (1) "17 tools" in index.mdx code comment, (2) "seventeen production tools" in getting-started.mdx, (3) two "17 MCP tools" refs in phase3-capabilities.md, (4) stale "v0.1.0 — tag pending" in roadmap Phase 1.
+- Fixed all four correctness issues. Tool count references now say 16 (released) with branch-qualified 17 where appropriate.
+- Added vault-sync-engine "TBD" row to roadmap version targets table.
+- Growth: Added "Live Vault Sync" card to homepage CardGrid with branch qualifier — Obsidian sync angle is highest-resonance hook for target audience.
+- Growth: Added live-sync paragraph to why-gigabrain.mdx describing the watcher + reconcile-backed brain-current guarantee.
+- Growth: Promoted "Live file watcher" and "Collection management" to positions 5–7 in README Features list (were last two items).
+- Decision log written to `.squad/decisions/inbox/zapp-promo-docs-pass.md`.
+
+**Files changed:**
+- `website/src/content/docs/index.mdx` — tool count fix + vault-sync card
+- `website/src/content/docs/guides/getting-started.mdx` — "seventeen" → "all production tools"
+- `website/src/content/docs/guides/phase3-capabilities.md` — two "17" → "16" fixes
+- `website/src/content/docs/contributing/roadmap.md` — stale Phase 1 note fixed; vault-sync TBD row added
+- `website/src/content/docs/guides/why-gigabrain.mdx` — live-sync paragraph added
+- `README.md` — features list reordered; vault-sync promoted; MCP tool count corrected
+
+**Deferred launch work:**
+- vault-sync-engine dedicated guide page (collections, watcher, quarantine CLI)
+- Blog / changelog post for vault-sync-engine release
+- npm public publication gate
 
 
 ## 2026-04-16 v0.9.0 Shell-First Release Lane
@@ -82,3 +113,4 @@
 - Annotated tags (`git tag -a`) are preferable to lightweight tags for releases — they carry a tagger identity and timestamped message that shows in GitHub's release view.
 - The `softprops/action-gh-release@v2` + `gh release upload` two-step pattern is correct for adding the install.sh asset after the binary artifacts are attached.
 - npm token guard ("skip if absent, never fail") is the right CI posture for staged channels — zero friction for maintainers who haven't configured npm yet.
+- **Promo docs consistency within multi-branch state (2026-04-25):** When one branch (vault-sync-engine) has 17 MCP tools and the released version has 16, the homepage, feature grids, and tool counts must all coordinate. Released-path binaries must show 16; branch prose may show 17 with explicit '(vault-sync-engine branch)' qualifier. Roadmap version tables need TBD entries for in-progress work to distinguish 'intentionally deferred' (explicit row) from 'not yet planned' (no row). Silence on a feature state is itself a claim.

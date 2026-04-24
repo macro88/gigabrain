@@ -7,6 +7,30 @@
 
 ## Learnings
 
+### 2026-04-25 10:20:00 - Vault-Sync post-batch coverage follow-up
+
+- The hard-delete truth for quarantine now stays simplest when every destructive path shares the same five-branch `reconciler::has_db_only_state(...)` predicate and only layers counts/receipts on top for operator messaging.
+- Good coverage wins on the current quarantine seam come from positive-path proofs (`export`→same-epoch `discard`, forced discard, list counts/export timestamps) plus a source-level invariant that fails if reconcile/discard/TTL drift away from the shared predicate.
+- Relevant files for this follow-up: `src/core/quarantine.rs`, `src/core/vault_sync.rs`, `tests/collection_cli_truth.rs`, and `openspec/changes/vault-sync-engine/tasks.md` (`17.17d` closure note).
+
+### 2026-04-25 06:35:00 - Vault-Sync quarantine lifecycle + dedup cleanup slice
+
+- The default quarantine seam can stay reviewer-friendly if it leans on existing invariants instead of inventing a second state machine: export/discard/restore all route through the same resolved `<collection>::<slug>` addressing, the same five-branch DB-only predicate, and the existing active `raw_imports` bytes as the restore source of truth.
+- Tracking export eligibility per `(page_id, quarantined_at)` in a small `quarantine_exports` table cleanly solves the “export relaxes discard” rule without widening page schema or losing the distinction between old and newly re-quarantined epochs.
+- Quarantined hard-deletes exposed an FTS trigger edge: deleting a page that was already absent from `page_fts` can corrupt the external-content index if the delete trigger fires unconditionally, so `pages_ad` now skips the FTS delete op when `old.quarantined_at IS NOT NULL`.
+
+### 2026-04-25 02:20:00 - Vault-Sync watcher core + dedup slice
+
+- Kept the watcher slice narrow: `start_serve_runtime()` now owns one `notify` watcher plus bounded `tokio::mpsc` queue and debounce buffer per active collection, then flushes bursts through the existing reconciler instead of inventing a second mutation path.
+- Reused the existing process-global runtime registries for self-write suppression instead of bolting on a separate service object: the serve process now keeps a path+hash+instant dedup map, `gbrain put` inserts before `renameat`, watcher classification drops only recent exact path+hash matches, and a 10s sweeper ages entries out.
+- Truth boundary stayed explicit: live `.gbrainignore` reload, watcher health/supervision, and broader overflow choreography remain deferred; validation here was `cargo test --quiet` green, while `cargo clippy -- -D warnings` is still blocked by pre-existing dead-code warnings in unrelated modules (`assertions`, `graph`, `search`).
+
+### 2026-04-24 23:10:00 - Vault-Sync Batch 13.5 (read-only MCP collection filter slice)
+
+- Kept 13.5 narrow and read-only: only `brain_search`, `brain_query`, and `brain_list` gained an optional MCP `collection` filter, with no CLI widening and no write-path changes.
+- The default filter rule is now encoded in one helper and one proof seam: absent `collection` means the sole active collection when exactly one is active, otherwise the write-target collection — never “all active collections.”
+- Search/list backends take an optional collection-id filter directly, so MCP filtering stays in the SQL/vector lanes instead of post-filtering mixed results.
+
 ### 2026-04-24 14:25:00 - Vault-Sync Batch M1b-ii (Unix put precondition/CAS slice)
 
 - Kept the slice honest and Unix-only: `gbrain put` / `brain_put` now reject missing-or-stale update `expected_version` and filesystem precondition conflicts before recovery-sentinel creation, without claiming the deferred mutex, IPC, or happy-path closure work.
@@ -779,4 +803,9 @@ Ready for implementation and landing.
 - `check --all` and graph/backlink fixtures had hidden single-collection assumptions; once CLI outputs became canonical, older tests had to be updated to stop asserting bare slugs.
 - Slug-bound `check` only recomputes the selected page, so contradiction-output tests need either pre-seeded assertion state or an all-pages warmup pass before checking the explicit-route output.
 
+### 2026-04-24 06:05:00 - Vault-Sync Batch 13.6 / 17.5ddd (`brain_collections` MCP shape slice)
+
+- Added the read-only `brain_collections` MCP surface as a projection helper in `vault_sync.rs`, not as ad hoc JSON assembly in the server, so the frozen 13-field contract lives next to the collection/runtime truth it depends on.
+- Kept the tool honest by masking `root_path` to `null` whenever the collection is not `active`, parsing `ignore_parse_errors` into the tagged union the design froze, and surfacing `integrity_blocked` as the new string-or-null discriminator instead of reusing the older CLI-only blocked-state summary.
+- `recovery_in_progress` needed real runtime truth instead of guesswork, so I added a narrow process-local recovery registry around `complete_attach(...)`; queued recovery remains `needs_full_sync=true, recovery_in_progress=false`, while active attach hashing flips the runtime bit until the handoff completes. Validation on this Windows host: `cargo fmt --all`, targeted `brain_collections` tests, and full `cargo test --quiet` all passed.
 

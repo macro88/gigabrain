@@ -130,4 +130,11 @@ Adversarial seams reviewed and controlled. Identity theft, reset/finalize dishon
 
 - **Verdict:** APPROVE. The spec/task seam is now truthful: `design.md` and `tasks.md` explicitly scope 13.6 + 17.5ddd to the frozen read-only `brain_collections` field set while deferring the stable-absence `file_stably_absent_but_clear_not_confirmed` surfacing to 17.5aa5. That matches the existing code/tests, which expose only line-level `parse_error` entries in `ignore_parse_errors`, return `null` for the deferred stable-absence case, and otherwise pin the exact documented schema without widening into deferred work.
 
+## 2026-04-24 13.5 Review
+
+- **Verdict:** REJECT. `brain_search` and `brain_list` respect the new MCP-only collection filter/defaulting rules, but `brain_query` does not hold the boundary once `depth="auto"` is used: it filters the initial `hybrid_search_canonical(...)` call, then hands the canonical hits to `progressive_retrieve(...)`, whose `outbound_neighbours()` expansion follows links without any collection constraint. In a multi-collection brain with cross-collection links, `brain_query(collection="work", depth="auto")` can therefore emit pages from other collections, so the slice does not yet truthfully close 13.5's read-filter contract.
+
+## 2026-04-24 13.5 Re-review
+
+- **Verdict:** REJECT. The `depth="auto"` fence itself is repaired in `src/core/progressive.rs`, but the claimed head artifact `97e574e` is not self-contained: on a clean checkout, `src/mcp/server.rs` and `src/commands/query.rs` now call `collections::resolve_read_collection_filter(...)` plus 5-argument `hybrid_search_canonical(...)` / `search_fts_canonical(...)`, while `src/core/collections.rs`, `src/core/search.rs`, `src/core/fts.rs`, and `src/core/inference.rs` at HEAD do not yet define those interfaces. A clean `cargo check` at HEAD fails immediately, so this commit cannot truthfully close 13.5 yet.
 
