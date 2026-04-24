@@ -1,70 +1,11 @@
-# Squad Decisions
+# Squad Decisions Archive
 
-## Active Decisions
+## Archived Entries
 
-### 2026-04-24: Coverage + Docs + Roadmap Batch final approval
-**By:** Fry + Professor + Nibbler + Bender + Coordinator  
-**What:** Approved and landed coverage + docs + roadmap truth batch as ffe9b18.  
-**Why:** Fry tightened quarantine/watcher coverage and wired delete paths to DB-only state gating; task definitions updated to match implementation; targeted tests added. Bender validated all docs/site surfaces and fixed stale "tag pending" language in `docs/roadmap.md`. Professor and Nibbler approved. Work landed as ffe9b18.  
-**Scope:** Coverage + delete-path gating + task truth + tests + docs validation + roadmap fix ✓  
+Decisions from 2026-04-13 through 2026-04-22, archived 2026-04-24 to keep active decisions focused.
+These entries remain valid references.
 
-### 2026-04-24: Vault-sync-engine Batch M3a final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch M3a for landing as the reconciler-specific `2.4c` wording/closure note only.
-**Why:** The updated task truth now matches the code that exists today: the reconciler enumerates candidates with `ignore::WalkBuilder` and `follow_links(false)`, treats walker metadata as advisory only, revalidates each candidate with `walk_to_parent` + `stat_at_nofollow`, WARN-skips symlinked entries and ancestors, and never descends symlinked directories on that reconciler path. No `readdir` claim, generic fd-relative walk primitive, watcher/IPC surface, or startup-healing widening is approved here.
-
-### 2026-04-24: Vault-sync-engine Batch M2c final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch M2c for landing as the proof-only `17.17b` slice.
-**Why:** The added invariant test is scoped only to production `finalize_pending_restore(...)` call sites, excludes the test module, and proves each real caller passes an explicit `FinalizeCaller` variant (`ExternalFinalize`, `StartupRecovery`, or `RestoreOriginator`). No production finalize logic, restore/runtime behavior, watcher/IPC surface, startup-healing path, or broader `17.17*` claim changed here.
-
-### 2026-04-24: Vault-sync-engine Batch M2b-prime final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch M2b-prime for landing as the narrow mutex + mechanical ordering proof slice: `12.4`, narrow `17.5k`, and `17.17e`.
-**Why:** The implemented seam now has a real same-slug within-process write lock for vault-byte writes, while keeping different slugs concurrent and leaving DB CAS responsible for cross-process safety. The `brain_put` happy path is only claimed at the mechanical sequence level (`tempfile -> rename -> single-tx commit`), with dedup-echo suppression still deferred, and `expected_version` ordering is proved only for the enumerated vault-byte entry points (`brain_put` prevalidation and CLI `gbrain put` / `put_from_string` before any tempfile, dedup, filesystem, or DB mutation). No non-Unix, live-serve, or broader mutator widening is approved here.
-
-### 2026-04-24: Vault-sync-engine Batch M2a-prime final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch M2a-prime for landing as the narrow platform-safety + wording/proof cleanup slice: `2.4a2`, `17.16`, narrowed `17.16a`, and `12.5` as closure-note/proof cleanup only.
-**Why:** The implemented Windows gate now truthfully covers only the currently implemented vault-sync CLI handlers (`gbrain serve`, `gbrain put`, `gbrain collection {add,sync,restore}`), while existing DB-only reset handlers remain outside that gate and may still run offline. `12.5` / `17.16a` are now truthfully scoped to vault-byte write entry points only (`gbrain put`, `brain_put` via `put_from_string`) through `ensure_collection_vault_write_allowed`; broader DB-only mutator coverage remains deferred.
-
-### 2026-04-24: Vault-sync-engine Batches M1b-i and M1b-ii final approval
-**By:** Professor + Nibbler (recorded via Copilot)
-**What:** Approved `M1b-i` for the real write-interlock seam (`17.5s2`, `17.5s3`, `17.5s4`, `17.5s5`) and approved `M1b-ii` for the Unix precondition/CAS seam (`12.2`, `12.3`, `12.4a`, `17.5l-s`).
-**Why:** `tasks.md` is now truthful that `17.5s5` depends on real production gates in `brain_link`, `brain_check`, and `brain_raw`, not only an MCP matrix. `brain_put` now runs `ensure_collection_write_allowed` before OCC/existence prevalidation so blocked collections surface `CollectionRestoringError` before version/existence conflicts. These approvals remain narrow: no full `12.1`, no full `12.4`, no `12.5`, no `12.6*`, no `12.7`, no dedup `7.x`, no `17.5k`, no IPC/live routing, and no generic startup-healing or happy-path write-through closure claim.
-
-### 2026-04-24: Vault-sync-engine Batch M1b-ii precondition split
-**By:** Fry
-**What:** Keep the Unix `gbrain put` / `brain_put` precondition gate split in two layers: a real `check_fs_precondition()` helper that can self-heal stat drift on hash match, and a no-side-effect pre-sentinel inspection path for actual writes.
-**Why:** Batch M1b-ii needed both truths at once: `12.2` requires a real self-healing filesystem precondition helper, but `12.4aa` and the M1b-ii gate require CAS/precondition failures to happen before sentinel creation with no DB mutation on the pre-sentinel branch. Reusing the self-healing helper directly in the write path would have violated that sentinel-failure truth by mutating `file_state` before the sentinel existed.
-**Consequences:** Unix write-through paths can fail closed on stale OCC or external-drift conflicts before any sentinel/tempfile work. The standalone helper remains available for direct proof and later reuse without widening this batch to the deferred happy-path or mutex scope. Any future full `12.1` closure must preserve the same ordering: pre-sentinel inspection first, sentinel creation before any write-path DB mutation.
-
-### 2026-04-24: Vault-sync-engine Batch M1b-i write-gate proof closure
-**By:** Bender
-**What:** Closed all four open items in the M1b-i batch (17.5s2–17.5s5) with test-only evidence. No production code was touched. All behavior was already implemented under task 11.8.
-**Why:** All five entry points already call `vault_sync::ensure_collection_write_allowed` before any mutation. The interlock is consistently implemented. No production-code truth bug was found. Added 6 new test functions to explicitly cover mutator matrix and all refusal conditions.
-**Evidence:** 11 total write-gate assertions (6 new + 5 pre-existing), all passing. Tests added for `brain_link`, `brain_check`, `brain_raw` refusal during restoring; `brain_gap` and `brain_put` refusal coverage pre-existed. Explicit mutator matrix proves both state=restoring and needs_full_sync=1 conditions.
-
-### 2026-04-24: Vault-sync-engine Batch M1a final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch M1a for landing as the narrow writer-side sentinel crash-core slice only: `12.1a`, `12.4aa`, `12.4b`, `12.4c`, `12.4d`, `17.5t`, `17.5u`, `17.5u2`, and `17.5v`.
-**Why:** `put` now durably creates and fsyncs the sentinel before vault mutation, hard-stops on parent-directory fsync failure, detects post-rename foreign replacement, retains the sentinel on post-rename failures, and uses best-effort fresh-connection `needs_full_sync` fallback while startup recovery consumes retained sentinels. The proof remains narrow and Unix-only: it does not cover full `12.1`, `12.2`, `12.3`, full `12.4`, `12.5`, `12.6*`, `12.7`, IPC/live routing, generic startup healing, or full happy-path write-through closure.
-
-### 2026-04-24: Vault-sync-engine Batch M1a scope split
-**By:** Fry
-**What:** Split `12.1` before implementation and landed only `12.1a`, the pre-gated writer-side sentinel crash core. The implemented seam is limited to sentinel creation/durable ordering, tempfile rename, parent-directory fsync hard-stop, post-rename foreign-rename detection, retained sentinel on post-rename failure, and fresh-connection `needs_full_sync` best-effort fallback.
-**Why:** The full `12.1` contract still depends on deferred work (`12.2`, `12.3`, `12.4` mutex, and routing/IPC tasks). Recording the split keeps task truth aligned with what is actually proved today while still allowing the existing startup sentinel consumer to recover rename-ahead-of-DB failures.
-
-### 2026-04-24: Vault-sync-engine Batch M1a proof lane — internal Unix crash-core seam only
-**By:** Scruffy
-**What:** Treat Batch M1a as a **pre-gated internal proof seam only**: prove `12.4aa`, `12.4b`, `12.4c`, `12.4d`, `17.5t`, `17.5u`, `17.5u2`, and `17.5v`; keep the implementation as an internal Unix crash-core seam in `src/core/vault_sync.rs`; anchor recovery truth on startup reconcile + sentinel retention.
-**Why:** This slice is credible only if it stays narrower than full `brain_put` rollout. The tests can honestly pin sentinel-create failure, pre-rename/rename cleanup, post-rename abort retention, fresh-connection `needs_full_sync` as best-effort only, and foreign-rename + `SQLITE_BUSY` recovery from the sentinel alone without claiming `12.2`, `12.3`, `12.4` mutex proof, happy-path write-through closure, live worker / IPC / generic startup healing. Narrow proof seam; deferred full contract and routing.
-
-### 2026-04-24: Vault-sync-engine Batch L2 final approval
-**By:** Professor + Nibbler + Scruffy (recorded via Copilot)
-**What:** Approved Batch L2 for landing as the startup-only sentinel recovery slice: `11.1b`, `11.4`, and `17.12`.
-**Why:** Startup now bootstraps `<brain-data-dir>\recovery\<collection_id>\`, scans only owned sentinel-bearing collections, marks them dirty, reuses the existing startup reconcile path, and unlinks sentinels only after successful reconcile. The proof is synthetic and narrow: post-rename/pre-commit disk-ahead-of-DB convergence plus foreign-owner skip and failed-reconcile sentinel retention; it does not cover real `brain_put` sentinel creation/unlink, live recovery workers, generic startup healing, remap reopen, IPC, or handshake widening.
-
+## Decisions (Archived)
 ### 2026-04-23: Vault-sync-engine Batch L1 final approval
 **By:** Professor + Nibbler (recorded via Copilot)
 **What:** Approved Batch L1 for landing as the narrowed restore-orphan startup recovery slice only: `11.1a`, `17.5ll`, and `17.13`.

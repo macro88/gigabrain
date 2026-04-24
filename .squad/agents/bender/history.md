@@ -184,9 +184,22 @@ This dual-release cycle validated the full team workflow:
 - **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
 - **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii.
 
+## 2026-04-25 Docs Validation — vault-sync-engine refresh pass
+
+- **Scope:** Validated all Amy (prose docs), Hermes (website), and Zapp (promo/website) doc changes from the 2026-04-25 vault-sync-engine post-batch refresh.
+- **Site build:** 15 pages, zero errors. ✅
+- **Finding (FIXED):** `docs/roadmap.md` Phase 1 and Phase 2 release lines still said "tag pending" for v0.1.0 and v0.2.0. Both tags are live. Fixed in commit `9f56a16`. Amy added the vault-sync section but missed cleaning up the stale Phase 1/2 release lines. Zapp's D4 decision only targeted the website surface.
+- **All other surfaces approved:** tool counts (16 released / 17 branch), schema version (v5), channel defaults (airgapped), vault-sync branch qualifiers, deferred items tables, install.mdx version pins (v0.9.4), homepage accuracy (no fake HTTP output).
+- **Decision written:** `.squad/decisions/inbox/bender-docs-validation.md`
+
 ## Learnings
 
-- **Exact-slug shortcuts must fail closed before generic search fallback.** If a hybrid-query path recognizes a bare slug or `[[slug]]`, ambiguity is a routing failure, not a "no results" case. Returning `None` from the exact-slug fast path silently lies about the seam and hides duplicate-slug defects.
+- **When `docs/roadmap.md` and `website/contributing/roadmap.md` are updated in separate passes, both must be checked for the same stale language.** Zapp's D4 only fixed the website version. Amy updated docs/roadmap.md for vault-sync content but missed the pre-existing stale Phase 1/2 release lines. Rule: any docs-refresh checklist must diff both roadmap files together.
+- **"tag pending" is the most reliably stale string in docs.** Cross-check against `git tag -l` output on every docs validation pass that touches roadmap files.
+
+## Learnings
+
+- **Exact-slug shortcuts must fail closed before generic search fallback.**If a hybrid-query path recognizes a bare slug or `[[slug]]`, ambiguity is a routing failure, not a "no results" case. Returning `None` from the exact-slug fast path silently lies about the seam and hides duplicate-slug defects.
 - **For CLI parity claims, prove every slug-bearing entry point directly.** One `get` ambiguity test is not evidence for `graph`, `timeline`, `check`, `link`, `links`, `backlinks`, `unlink`, or exact-slug `query`. Build the command matrix first, then add one direct refusal assertion per command family so the task text stays truthful.
 - **For frozen MCP diagnostic schemas, test the full predicate, not just the label column.** A terminal discriminator like `integrity_blocked` must prove its timestamp/age gate, precedence, and negative cases (reason present without terminal state, queued recovery, pre-window restore) or reviewers will correctly reject it as overclaimed.
 - **When a restore seam still fails crash-durability and no-replace safety, back the surface out instead of inventing a bigger repair.** A deferred command with explicit task reopen is a better batch than pretending a risky restore is "close enough."
