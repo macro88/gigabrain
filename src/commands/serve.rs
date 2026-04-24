@@ -2,6 +2,8 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 pub async fn run(db: Connection) -> Result<()> {
+    // `gbrain serve` owns the vault-sync runtime (watchers, leases, startup recovery),
+    // so this branch keeps the whole command Unix-gated until a safe non-Unix contract exists.
     crate::core::vault_sync::ensure_unix_platform("gbrain serve")
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let db_path = crate::core::vault_sync::database_path(&db)?;

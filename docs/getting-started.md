@@ -1,6 +1,6 @@
 # Getting Started with GigaBrain
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.4` adds FTS5 search hardening and assertion extraction tightening; the dual-release channels (`airgapped` embedded and `online`) shipped in `v0.9.2`.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.6` adds the first vault-sync release slice: collections, Unix-gated `gbrain serve`, live sync, quarantine tooling, and narrow Unix restore.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete.** The current release is `v0.9.4`: FTS5 search hardening and assertion extraction tightening, with `airgapped` and `online` assets shipped from the same release line.
+> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.9.6`: collections, Unix-gated `gbrain serve`, live watcher sync, `brain_collections`, and quarantine tooling, with `airgapped` and `online` assets shipped from the same release line.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,7 +26,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.6` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
 
@@ -160,6 +160,8 @@ Then start the server:
 gbrain serve
 ```
 
+> **Unix only in `v0.9.6`.** `gbrain serve` now owns the vault-sync runtime, so macOS/Linux are the supported hosts for MCP on this release line. On Windows it returns `UnsupportedPlatformError`; use the portable CLI commands (`search`, `query`, `get`, `list`, etc.) there until a safe non-Unix serve contract lands.
+
 The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
@@ -168,9 +170,9 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
 
-**vault-sync-engine tools:** `brain_collections` *(in `spec/vault-sync-engine` branch)* — read-only per-collection status including state, ignore diagnostics, and recovery flags
+**vault-sync tools:** `brain_collections` — read-only per-collection status including state, ignore diagnostics, and recovery flags
 
-All 16 tools are live in the current `v0.9.4` release; 17 tools in the vault-sync-engine branch. See [spec.md](spec.md#mcp-server) for tool signatures.
+All 17 tools are live in the current `v0.9.6` release. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -396,7 +398,7 @@ gbrain collection info work
 
 Once attached, `gbrain serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-> **Unix only.** `gbrain serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `gbrain serve` returns `UnsupportedPlatformError`. The MCP server's read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) are cross-platform; only the live vault-sync watcher is Unix-gated.
+> **Unix only.** `gbrain serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `gbrain serve` returns `UnsupportedPlatformError` because the full serve/runtime surface is intentionally gated in this release line; portable CLI reads/searches still work there, but MCP hosting and vault-byte write-through remain deferred.
 
 ### Ignore patterns
 
@@ -435,13 +437,13 @@ gbrain collection quarantine export work --out quarantine.json
 gbrain collection quarantine discard work <page-slug>
 ```
 
-> **Unix only.** `gbrain collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status and re-registers its slug in the collection:
+> **Unix only.** `gbrain collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status, refuses occupied targets, and requires the destination parent directories to already exist:
 >
 > ```bash
 > gbrain collection quarantine restore work <page-slug> <relative-path>
 > ```
 >
-> The IPC/online-handshake path (automatic restore on watcher reconnect) remains deferred and is not yet wired.
+> The IPC/online-handshake path (automatic restore on watcher reconnect) and Windows restore host support remain deferred and are not yet wired.
 
 Auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
 

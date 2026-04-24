@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.4` (released) — Phase 3 complete, FTS5 search hardening, and assertion extraction tightening shipped. Active development: `vault-sync-engine` branch adds collections, live-sync watcher, reconciler, and write-safety to the system. [See the roadmap →](#roadmap)
+**Status:** `v0.9.6` (released) — initial vault-sync ship: collections, Unix-gated `gbrain serve`, live-sync watcher, quarantine tooling, `brain_collections`, and narrow Unix quarantine restore. [See the roadmap →](#roadmap)
 
 ---
 
@@ -17,8 +17,8 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Sprint 0** — Repository scaffold | ✅ Complete | `Cargo.toml`, module stubs, `schema.sql`, skill stubs, CI/CD workflows |
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
-| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.4` — search hardening + assertion tightening) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
-| **vault-sync-engine** — Collections, live-sync, write safety | 🔄 In progress (`spec/vault-sync-engine` branch) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard`, write-through `brain_put`, `brain_collections` MCP tool; restore and IPC deferred |
+| **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.5` — flexible model resolution + configurable online-model selection) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **vault-sync-engine** — Collections, live-sync, write safety | 🚢 Initial ship (`v0.9.6` — Unix/macOS/Linux) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard|restore`, write-through `brain_put`, `brain_collections` MCP tool; Windows `serve`/restore and IPC deferred |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -51,11 +51,11 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
 - **Local embeddings** — BAAI BGE family via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key; online builds only need internet for the initial model download
-- **MCP server** — `gbrain serve` exposes 16 tools over stdio JSON-RPC 2.0 (17 on the vault-sync-engine branch). Works with Claude Code, any MCP-compatible agent
+- **MCP server** — `gbrain serve` exposes 17 tools over stdio JSON-RPC 2.0 in `v0.9.6` (Unix/macOS/Linux on the vault-sync line). Works with Claude Code and other MCP-compatible agents
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
-- **Live file watcher** *(vault-sync-engine branch)* — `gbrain serve` runs a per-collection watcher with 1.5 s debounce and reconcile-backed flushes so the brain stays current as you edit in Obsidian or any editor
+- **Live file watcher** *(v0.9.6, Unix/macOS/Linux)* — `gbrain serve` runs a per-collection watcher with 1.5 s debounce and reconcile-backed flushes so the brain stays current as you edit in Obsidian or any editor
 - **Collection management** *(vault-sync-engine branch)* — attach one or more vaults with `gbrain collection add`; per-collection writable/read-only, ignore patterns via `.gbrainignore`, and `<collection>::<slug>` routing across all CLI/MCP surfaces
-- **Quarantine lifecycle** *(vault-sync-engine branch)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, or discard via `gbrain collection quarantine list|export|discard`
+- **Quarantine lifecycle** *(v0.9.6)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, discard, or narrowly restore on Unix via `gbrain collection quarantine ...`
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
 - **Temporal knowledge graph** — typed links with validity windows, contradiction detection via assertions
 - **Knowledge gap tracking** — agent logs what it can't answer; research skill resolves gaps later
@@ -79,18 +79,18 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> Phase 3 is complete. `v0.9.4` ships FTS5 search hardening and assertion extraction tightening on top of the dual-release channels introduced in `v0.9.2`: `airgapped` (embedded BGE-small) and `online` (downloads/caches the selected BGE model on first use).
+> `v0.9.6` ships the initial vault-sync slice on top of the dual-release lines: collections, Unix-gated live sync, `brain_collections`, quarantine lifecycle tooling, and narrow Unix quarantine restore, while preserving the `airgapped` and `online` channels.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.4` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.6` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.4`. The npm package remains a single wrapper package and targets the `online` channel by default.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.6`. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
@@ -125,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.4"
+VERSION="v0.9.6"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
@@ -235,7 +235,7 @@ gbrain check --all
 # Brain stats
 gbrain stats
 
-# Start MCP server (stdio)
+# Start MCP server (stdio; Unix/macOS/Linux in v0.9.6)
 gbrain serve
 
 # Compact WAL → single file for backup/transport
@@ -303,15 +303,17 @@ Add to your MCP client config (e.g. Claude Code):
 }
 ```
 
+> **Unix only in `v0.9.6`.** `gbrain serve` returns `UnsupportedPlatformError` on Windows in the vault-sync release line because the command now owns the watcher, lease, and startup-recovery runtime. Portable CLI reads/searches still work on Windows; MCP hosting via `gbrain serve` is deferred until a safe non-Unix runtime contract exists.
+
 **Phase 1 tools (core read/write):** `brain_get`, `brain_put`, `brain_query`, `brain_search`, `brain_list`
 
 **Phase 2 tools (intelligence layer):** `brain_link`, `brain_link_close`, `brain_backlinks`, `brain_graph`, `brain_check`, `brain_timeline`, `brain_tags`
 
 **Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
 
-**vault-sync-engine tools (collections):** `brain_collections` *(in `spec/vault-sync-engine` branch)* — returns per-collection status, state, ignore diagnostics, and recovery flags
+**vault-sync tools (collections):** `brain_collections` — returns per-collection status, state, ignore diagnostics, and recovery flags
 
-All 17 tools are available when you run `gbrain serve` from the vault-sync-engine branch (16 from the current `v0.9.4` release).
+All 17 tools are available in the current `v0.9.6` release when you run `gbrain serve` on Unix/macOS/Linux.
 
 ## Skills
 
@@ -369,7 +371,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-GigaBrain is open for contributions. All three phases have shipped. The current release is `v0.9.4`, which adds FTS5 search hardening and assertion extraction tightening on top of the `v0.9.2` dual-channel line. Active development continues on the `spec/vault-sync-engine` branch, which adds the collections model, live-sync watcher, reconciler, and write-safety infrastructure.
+GigaBrain is open for contributions. All three core phases have shipped. The current release is `v0.9.6`, which lands the first vault-sync slice: collections, Unix-gated `gbrain serve`, live-sync watcher, quarantine tooling, and narrow Unix restore on top of the prior dual-channel/model-selection work.
 
 **How we work:**
 
