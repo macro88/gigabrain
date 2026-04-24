@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Once;
+use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -10,8 +12,18 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const LEGACY_SMALL_MODEL_NAME: &str = "bge-small-en-v1.5";
+const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
+const PAGES_AU_TRIGGER_SQL: &str =
+    "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+    INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
+    SELECT 'delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline
+    WHERE old.quarantined_at IS NULL;
+    INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
+    SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
+    WHERE new.quarantined_at IS NULL;
+END;";
 
 pub struct OpenDb {
     pub conn: Connection,
@@ -87,6 +99,7 @@ pub fn open(path: &str) -> Result<Connection, DbError> {
 pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<OpenDb, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
+    preflight_existing_schema(path)?;
     let conn = open_connection(path)?;
 
     if !existed_before || path == ":memory:" {
@@ -104,6 +117,12 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 
     let effective_model = match read_brain_config(&conn)? {
         Some(stored) => {
+            // Check schema version — refuse to open v4 or older
+            if stored.schema_version < SCHEMA_VERSION {
+                return Err(DbError::Schema {
+                    message: format_schema_reinit_message(stored.schema_version, path),
+                });
+            }
             if stored.model_id != requested_model.model_id {
                 return Err(DbError::ModelMismatch {
                     message: format_model_mismatch(&stored, &requested_model, path),
@@ -133,6 +152,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
 pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbError> {
     let requested_model = coerce_model_for_build(requested_model);
     let existed_before = path != ":memory:" && Path::new(path).exists();
+    preflight_existing_schema(path)?;
     let conn = open_connection(path)?;
 
     if let Some(stored) = read_brain_config(&conn)? {
@@ -160,6 +180,25 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     Ok(conn)
 }
 
+fn preflight_existing_schema(path: &str) -> Result<(), DbError> {
+    if path == ":memory:" || !Path::new(path).exists() {
+        return Ok(());
+    }
+
+    let conn = Connection::open(path)?;
+    let Some(schema_version) = read_existing_schema_version(&conn)? else {
+        return Ok(());
+    };
+
+    if schema_version < SCHEMA_VERSION {
+        return Err(DbError::Schema {
+            message: format_schema_reinit_message(schema_version, path),
+        });
+    }
+
+    Ok(())
+}
+
 fn open_connection(path: &str) -> Result<Connection, DbError> {
     let db_path = Path::new(path);
     if let Some(parent) = db_path.parent() {
@@ -173,10 +212,136 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     ensure_sqlite_vec();
 
     let conn = Connection::open(path)?;
+    // Set busy timeout *before* schema DDL so concurrent opens don't race on the
+    // write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
+    conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(include_str!("../schema.sql"))?;
+    ensure_pages_update_trigger_handles_quarantine(&conn)?;
+    ensure_collection_owner_columns(&conn)?;
     set_version(&conn)?;
+    ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
+    let trigger_sql: Option<String> = conn
+        .query_row(
+            "SELECT sql
+             FROM sqlite_master
+             WHERE type = 'trigger' AND name = 'pages_au'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if trigger_sql
+        .as_deref()
+        .is_some_and(|sql| sql.contains(PAGES_AU_QUARANTINE_GUARD))
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!(
+        "DROP TRIGGER IF EXISTS pages_au;
+         {PAGES_AU_TRIGGER_SQL}"
+    ))?;
+
+    Ok(())
+}
+
+fn ensure_collection_owner_columns(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(collections)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    for (column_name, column_sql) in [
+        (
+            "active_lease_session_id",
+            "ALTER TABLE collections ADD COLUMN active_lease_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_command_id",
+            "ALTER TABLE collections ADD COLUMN restore_command_id TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_lease_session_id",
+            "ALTER TABLE collections ADD COLUMN restore_lease_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "reload_generation",
+            "ALTER TABLE collections ADD COLUMN reload_generation INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "watcher_released_session_id",
+            "ALTER TABLE collections ADD COLUMN watcher_released_session_id TEXT DEFAULT NULL",
+        ),
+        (
+            "watcher_released_generation",
+            "ALTER TABLE collections ADD COLUMN watcher_released_generation INTEGER DEFAULT NULL",
+        ),
+        (
+            "watcher_released_at",
+            "ALTER TABLE collections ADD COLUMN watcher_released_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_command_heartbeat_at",
+            "ALTER TABLE collections ADD COLUMN pending_command_heartbeat_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_root_path",
+            "ALTER TABLE collections ADD COLUMN pending_root_path TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_restore_manifest",
+            "ALTER TABLE collections ADD COLUMN pending_restore_manifest TEXT DEFAULT NULL",
+        ),
+        (
+            "restore_command_pid",
+            "ALTER TABLE collections ADD COLUMN restore_command_pid INTEGER DEFAULT NULL",
+        ),
+        (
+            "restore_command_host",
+            "ALTER TABLE collections ADD COLUMN restore_command_host TEXT DEFAULT NULL",
+        ),
+        (
+            "integrity_failed_at",
+            "ALTER TABLE collections ADD COLUMN integrity_failed_at TEXT DEFAULT NULL",
+        ),
+        (
+            "pending_manifest_incomplete_at",
+            "ALTER TABLE collections ADD COLUMN pending_manifest_incomplete_at TEXT DEFAULT NULL",
+        ),
+        (
+            "reconcile_halted_at",
+            "ALTER TABLE collections ADD COLUMN reconcile_halted_at TEXT DEFAULT NULL",
+        ),
+        (
+            "reconcile_halt_reason",
+            "ALTER TABLE collections ADD COLUMN reconcile_halt_reason TEXT DEFAULT NULL",
+        ),
+    ] {
+        if !existing_columns.contains(column_name) {
+            conn.execute_batch(column_sql)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Ensure a collection with id=1 exists in the database.
+///
+/// All legacy INSERT INTO pages statements that omit collection_id rely on
+/// `DEFAULT 1` routing them to this collection.  Called at every
+/// `open_connection()` so test-only in-memory databases are also covered.
+fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO collections \
+             (id, name, root_path, state, writable, is_write_target) \
+         VALUES (1, 'default', '', 'active', 1, 1);",
+    )?;
+    Ok(())
 }
 
 fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
@@ -324,6 +489,42 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     Ok(exists.is_some())
 }
 
+fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbError> {
+    for (table, key) in [("brain_config", "schema_version"), ("config", "version")] {
+        if !table_exists(conn, table)? {
+            continue;
+        }
+
+        let value: Option<String> = conn
+            .query_row(
+                &format!("SELECT value FROM {table} WHERE key = ?1"),
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let Some(value) = value else {
+            continue;
+        };
+
+        let schema_version = value.parse::<i64>().map_err(|_| DbError::Schema {
+            message: format!("{table}.{key} must be an integer"),
+        })?;
+        return Ok(Some(schema_version));
+    }
+
+    Ok(None)
+}
+
+fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
+    format!(
+        "Database schema version {} is older than required version {}. \
+         GigaBrain v5 requires re-initialization. \
+         Backup your data, then run: rm {} && gbrain init",
+        schema_version, SCHEMA_VERSION, path
+    )
+}
+
 fn format_model_mismatch(stored: &BrainConfig, requested: &ModelConfig, db_path: &str) -> String {
     let requested_dim = if requested.embedding_dim == 0 {
         "unknown".to_owned()
@@ -394,6 +595,37 @@ mod tests {
     use super::*;
     use crate::core::inference::resolve_model;
 
+    fn seed_existing_db(path: &Path, schema_version: i64) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE brain_config (
+                 key   TEXT PRIMARY KEY NOT NULL,
+                 value TEXT NOT NULL
+             ) STRICT;
+             CREATE TABLE config (
+                 key   TEXT PRIMARY KEY NOT NULL,
+                 value TEXT NOT NULL
+             ) STRICT;",
+        )
+        .unwrap();
+        let model = default_model();
+        write_brain_config(
+            &conn,
+            &BrainConfig {
+                model_id: model.model_id.clone(),
+                model_alias: model.alias.clone(),
+                embedding_dim: model.embedding_dim,
+                schema_version,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('version', ?1)",
+            [schema_version.to_string()],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn open_creates_all_expected_tables() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -415,9 +647,13 @@ mod tests {
         let expected = [
             "assertions",
             "brain_config",
+            "collections",
+            "collection_owners",
             "config",
             "contradictions",
+            "embedding_jobs",
             "embedding_models",
+            "file_state",
             "import_manifest",
             "ingest_log",
             "knowledge_gaps",
@@ -427,6 +663,7 @@ mod tests {
             "pages",
             "raw_data",
             "raw_imports",
+            "serve_sessions",
             "tags",
             "timeline_entries",
         ];
@@ -440,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_4() {
+    fn open_sets_user_version_to_5() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_brain.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -448,7 +685,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -488,7 +725,122 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
+    }
+
+    #[test]
+    fn open_replaces_buggy_pages_update_trigger_for_quarantined_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test_brain.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let conn = open(path_str).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS pages_au;
+             CREATE TRIGGER pages_au AFTER UPDATE ON pages BEGIN
+                 INSERT INTO page_fts(page_fts, rowid, title, slug, compiled_truth, timeline)
+                 VALUES ('delete', old.id, old.title, old.slug, old.compiled_truth, old.timeline);
+                 INSERT INTO page_fts(rowid, title, slug, compiled_truth, timeline)
+                 SELECT new.id, new.title, new.slug, new.compiled_truth, new.timeline
+                 WHERE new.quarantined_at IS NULL;
+             END;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        let collection_id: i64 = conn
+            .query_row(
+                "SELECT id FROM collections ORDER BY id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES (?1, 'notes/quarantined', ?2, 'concept', 'Quarantined', '', 'before restore', '', '{}', 'notes', '', 1)",
+            params![collection_id, uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+        let page_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "UPDATE pages
+             SET quarantined_at = '2026-04-25T00:00:00Z'
+             WHERE id = ?1",
+            [page_id],
+        )
+        .unwrap();
+
+        conn.execute(
+            "UPDATE pages
+             SET slug = 'notes/restored',
+                 title = 'Restored',
+                 compiled_truth = 'after restore',
+                 quarantined_at = NULL
+             WHERE id = ?1",
+            [page_id],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM page_fts
+                 WHERE page_fts MATCH 'after'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn open_with_model_rejects_v4_database_before_creating_v5_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        seed_existing_db(&db_path, 4);
+
+        let err = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect_err("v4 database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+        assert!(err.to_string().contains("schema version 4"));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let stored_version: String = conn
+            .query_row(
+                "SELECT value FROM brain_config WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_version, "4");
+    }
+
+    #[test]
+    fn init_rejects_v4_database_before_creating_v5_tables() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        seed_existing_db(&db_path, 4);
+
+        let err = init(db_path.to_str().unwrap(), &default_model())
+            .expect_err("v4 database should be refused");
+
+        assert!(matches!(err, DbError::Schema { .. }));
+
+        let conn = Connection::open(&db_path).unwrap();
+        assert!(!table_exists(&conn, "collections").unwrap());
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "4");
     }
 
     #[test]
@@ -560,7 +912,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 4);
+        assert_eq!(config.schema_version, 5);
     }
 
     #[test]
@@ -576,7 +928,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 4,
+                schema_version: 5,
             }
         );
     }

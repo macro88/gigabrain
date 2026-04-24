@@ -61,7 +61,7 @@ struct AssertionRow {
 
 /// Replace heuristic assertions for a page and return the number of inserted triples.
 pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, AssertionError> {
-    let page_id = resolve_page_id(conn, &page.slug)?;
+    let page_id = resolve_page_id_for_page(conn, page)?;
     let subject = assertion_subject(page);
     let mut extracted = extract_from_frontmatter(subject, &page.frontmatter);
     let mut seen: HashSet<Triple> = extracted
@@ -76,7 +76,7 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
     }
 
     conn.execute(
-        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'agent'",
+        "DELETE FROM assertions WHERE page_id = ?1 AND asserted_by = 'import'",
         [page_id],
     )?;
 
@@ -85,7 +85,7 @@ pub fn extract_assertions(page: &Page, conn: &Connection) -> Result<usize, Asser
             "INSERT INTO assertions (
                 page_id, subject, predicate, object, valid_from, valid_until,
                 confidence, asserted_by, source_ref, evidence_text
-            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, 'agent', '', ?5)",
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0.8, 'import', '', ?5)",
             rusqlite::params![
                 page_id,
                 assertion.triple.subject,
@@ -109,11 +109,19 @@ fn assertion_subject(page: &Page) -> &str {
 }
 
 /// Detect contradictions for the requested page and insert any newly discovered rows.
+#[allow(dead_code)]
 pub fn check_assertions(
     slug: &str,
     conn: &Connection,
 ) -> Result<Vec<Contradiction>, AssertionError> {
     let root_page_id = resolve_page_id(conn, slug)?;
+    check_assertions_for_page_id(root_page_id, conn)
+}
+
+pub fn check_assertions_for_page_id(
+    root_page_id: i64,
+    conn: &Connection,
+) -> Result<Vec<Contradiction>, AssertionError> {
     let subjects = load_subjects_for_page(conn, root_page_id)?;
     let mut contradictions = Vec::new();
 
@@ -187,6 +195,18 @@ fn resolve_page_id(conn: &Connection, slug: &str) -> Result<i64, AssertionError>
         },
         other => AssertionError::Sqlite(other),
     })
+}
+
+fn resolve_page_id_for_page(conn: &Connection, page: &Page) -> Result<i64, AssertionError> {
+    match conn.query_row(
+        "SELECT id FROM pages WHERE uuid = ?1",
+        [&page.uuid],
+        |row| row.get(0),
+    ) {
+        Ok(page_id) => Ok(page_id),
+        Err(rusqlite::Error::QueryReturnedNoRows) => resolve_page_id(conn, &page.slug),
+        Err(other) => Err(AssertionError::Sqlite(other)),
+    }
 }
 
 fn load_subjects_for_page(conn: &Connection, page_id: i64) -> Result<Vec<String>, AssertionError> {
@@ -553,6 +573,28 @@ mod tests {
         insert_page_with_frontmatter(conn, slug, slug, truth, "{}");
     }
 
+    fn test_uuid(slug: &str) -> String {
+        let mut hex = String::new();
+        for byte in slug.as_bytes() {
+            hex.push_str(&format!("{byte:02x}"));
+            if hex.len() >= 32 {
+                break;
+            }
+        }
+        while hex.len() < 32 {
+            hex.push('0');
+        }
+
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
+
     fn insert_page_with_frontmatter(
         conn: &Connection,
         slug: &str,
@@ -561,10 +603,10 @@ mod tests {
         frontmatter: &str,
     ) {
         conn.execute(
-            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                                  frontmatter, wing, room, version) \
-             VALUES (?1, 'person', ?2, '', ?3, '', ?4, 'people', '', 1)",
-            rusqlite::params![slug, title, truth, frontmatter],
+             VALUES (?1, ?2, 'person', ?3, '', ?4, '', ?5, 'people', '', 1)",
+            rusqlite::params![slug, test_uuid(slug), title, truth, frontmatter],
         )
         .unwrap();
     }
@@ -664,28 +706,75 @@ mod tests {
                         "founded".to_string(),
                         "Brain Co".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "Alice".to_string(),
                         "is_a".to_string(),
                         "founder".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "Alice".to_string(),
                         "works_at".to_string(),
                         "Acme Corp".to_string(),
                         0.8,
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                 ]
             );
         }
 
         #[test]
-        fn reindexing_replaces_prior_agent_triples() {
+        fn duplicate_bare_slugs_across_collections_use_page_uuid_for_import_assertions() {
+            let conn = open_test_db();
+            conn.execute(
+                "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+                 VALUES ('memory', 'C:\\vaults\\memory', 'active', 1, 0)",
+                [],
+            )
+            .unwrap();
+            let memory_id = conn.last_insert_rowid();
+
+            conn.execute(
+                "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (1, 'people/alice', '11111111-1111-7111-8111-111111111111', 'person', 'Default Alice', '', '## Assertions\nAlice works at Acme Corp.\n', '', '{}', 'people', '', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO pages (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (?1, 'people/alice', '22222222-2222-7222-8222-222222222222', 'person', 'Memory Alice', '', '## Assertions\nAlice works at Beta Corp.\n', '', '{}', 'people', '', 1)",
+                [memory_id],
+            )
+            .unwrap();
+            let memory_page_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM pages WHERE collection_id = ?1 AND slug = 'people/alice'",
+                    [memory_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+
+            let page =
+                crate::commands::get::get_page_by_key(&conn, memory_id, "people/alice").unwrap();
+
+            let inserted = extract_assertions(&page, &conn).unwrap();
+            let rows: Vec<(i64, String)> = conn
+                .prepare("SELECT page_id, object FROM assertions ORDER BY object")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            assert_eq!(inserted, 1);
+            assert_eq!(rows, vec![(memory_page_id, "Beta Corp".to_string())]);
+        }
+
+        #[test]
+        fn reindexing_replaces_prior_import_triples() {
             let conn = open_test_db();
             insert_page(
                 &conn,
@@ -793,7 +882,7 @@ mod tests {
                     (
                         "founded".to_string(),
                         "Brain Co".to_string(),
-                        "agent".to_string(),
+                        "import".to_string(),
                     ),
                     (
                         "employer".to_string(),

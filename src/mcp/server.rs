@@ -7,17 +7,17 @@ use rmcp::{ServerHandler, ServiceExt};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::get::get_page;
-use crate::commands::{check, link};
+use crate::commands::{check, get, link};
 
-use crate::core::fts::{sanitize_fts_query, search_fts};
+use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
+use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
 use crate::core::markdown;
-use crate::core::palace;
 use crate::core::progressive::progressive_retrieve;
-use crate::core::search::hybrid_search;
+use crate::core::search::hybrid_search_canonical;
 use crate::core::types::SearchError;
+use crate::core::vault_sync;
 
 type DbRef = Arc<Mutex<Connection>>;
 
@@ -43,14 +43,112 @@ fn validate_slug(slug: &str) -> Result<(), rmcp::Error> {
             "invalid slug: exceeds maximum length of {MAX_SLUG_LEN} characters"
         )));
     }
-    if !slug.bytes().all(|b| {
-        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'/' || b == b'_' || b == b'-'
-    }) {
-        return Err(invalid_params(
-            "invalid slug: allowed characters are [a-z0-9/_-]",
-        ));
+    vault_sync::parse_slug_input(slug).map_err(|err| invalid_params(err.to_string()))
+}
+
+fn canonical_slug(collection_name: &str, slug: &str) -> String {
+    format!("{collection_name}::{slug}")
+}
+
+fn ambiguous_slug_error(slug: &str, candidates: Vec<String>) -> rmcp::Error {
+    rmcp::Error::new(
+        ErrorCode(-32002),
+        format!("AmbiguityError: slug `{slug}` matches multiple collections"),
+        Some(serde_json::json!({
+            "code": "ambiguous_slug",
+            "candidates": candidates,
+        })),
+    )
+}
+
+fn map_collection_error(error: CollectionError) -> rmcp::Error {
+    match error {
+        CollectionError::NotFound { name } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("collection not found: {name}"),
+            None,
+        ),
+        CollectionError::Ambiguous { slug, candidates } => ambiguous_slug_error(
+            &slug,
+            candidates
+                .split(", ")
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
+        CollectionError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+        other => invalid_params(other.to_string()),
     }
-    Ok(())
+}
+
+fn resolve_slug_for_mcp(
+    db: &Connection,
+    input: &str,
+    op_kind: OpKind,
+) -> Result<vault_sync::ResolvedSlug, rmcp::Error> {
+    match collections::parse_slug(db, input, op_kind).map_err(map_collection_error)? {
+        SlugResolution::Resolved {
+            collection_id,
+            collection_name,
+            slug,
+        } => Ok(vault_sync::ResolvedSlug {
+            collection_id,
+            collection_name,
+            slug,
+        }),
+        SlugResolution::NotFound { slug } => Err(rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("page not found: {slug}"),
+            None,
+        )),
+        SlugResolution::Ambiguous { slug, candidates } => Err(ambiguous_slug_error(
+            &slug,
+            candidates
+                .into_iter()
+                .map(|candidate| candidate.full_address)
+                .collect(),
+        )),
+    }
+}
+
+fn resolve_read_collection_filter_for_mcp(
+    db: &Connection,
+    collection_name: Option<&str>,
+) -> Result<Option<collections::Collection>, rmcp::Error> {
+    collections::resolve_read_collection_filter(db, collection_name).map_err(map_collection_error)
+}
+
+fn page_id_for_resolved(
+    db: &Connection,
+    resolved: &vault_sync::ResolvedSlug,
+) -> Result<i64, rmcp::Error> {
+    db.query_row(
+        "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![resolved.collection_id, &resolved.slug],
+        |row| row.get(0),
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!(
+                "page not found: {}",
+                canonical_slug(&resolved.collection_name, &resolved.slug)
+            ),
+            None,
+        ),
+        other => map_db_error(other),
+    })
+}
+
+fn canonicalize_page_for_mcp(
+    page: &crate::core::types::Page,
+    resolved: &vault_sync::ResolvedSlug,
+) -> crate::core::types::Page {
+    let mut rendered = page.clone();
+    rendered.frontmatter.insert(
+        "slug".to_string(),
+        canonical_slug(&resolved.collection_name, &resolved.slug),
+    );
+    rendered
 }
 
 fn validate_content(content: &str) -> Result<(), rmcp::Error> {
@@ -213,6 +311,13 @@ fn map_db_error(e: rusqlite::Error) -> rmcp::Error {
 fn map_search_error(e: SearchError) -> rmcp::Error {
     match e {
         SearchError::Sqlite(sqlite_err) => map_db_error(sqlite_err),
+        SearchError::Ambiguous { slug, candidates } => ambiguous_slug_error(
+            &slug,
+            candidates
+                .split(", ")
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
         SearchError::Internal { message } => {
             rmcp::Error::new(ErrorCode(-32003), format!("search error: {message}"), None)
         }
@@ -221,11 +326,56 @@ fn map_search_error(e: SearchError) -> rmcp::Error {
 
 fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
     let msg = e.to_string();
-    if msg.contains("page not found") || msg.contains("link not found") {
+    if msg.contains("ConflictError") || msg.contains("ConcurrentRenameError") {
+        rmcp::Error::new(ErrorCode(-32009), msg, None)
+    } else if msg.contains("page not found") || msg.contains("link not found") {
         rmcp::Error::new(ErrorCode(-32001), msg, None)
+    } else if msg.contains("CollectionRestoringError")
+        || msg.contains("ServeOwnsCollectionError")
+        || msg.contains("Restore")
+        || msg.contains("NewRoot")
+        || msg.contains("ambiguous slug")
+    {
+        rmcp::Error::new(ErrorCode(-32002), msg, None)
     } else {
         rmcp::Error::new(ErrorCode(-32003), msg, None)
     }
+}
+
+fn map_vault_sync_error(e: vault_sync::VaultSyncError) -> rmcp::Error {
+    if let vault_sync::VaultSyncError::AmbiguousSlug { slug, candidates } = &e {
+        return ambiguous_slug_error(
+            slug,
+            candidates
+                .split(", ")
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        );
+    }
+    let code = match e {
+        vault_sync::VaultSyncError::PageNotFound { .. } => ErrorCode(-32001),
+        vault_sync::VaultSyncError::AmbiguousSlug { .. }
+        | vault_sync::VaultSyncError::CollectionRestoring { .. }
+        | vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }
+        | vault_sync::VaultSyncError::RestoreInProgress { .. }
+        | vault_sync::VaultSyncError::RestorePendingFinalize { .. }
+        | vault_sync::VaultSyncError::RestoreIntegrityBlocked { .. }
+        | vault_sync::VaultSyncError::RestoreNonEmptyTarget { .. }
+        | vault_sync::VaultSyncError::ServeDiedDuringHandshake { .. }
+        | vault_sync::VaultSyncError::HandshakeTimeout { .. }
+        | vault_sync::VaultSyncError::NewRootVerificationFailed { .. }
+        | vault_sync::VaultSyncError::NewRootUnstable { .. }
+        | vault_sync::VaultSyncError::ReconcileHalted { .. } => ErrorCode(-32002),
+        #[cfg(unix)]
+        vault_sync::VaultSyncError::MissingExpectedVersion { .. }
+        | vault_sync::VaultSyncError::StaleExpectedVersion { .. }
+        | vault_sync::VaultSyncError::ExternalDelete { .. }
+        | vault_sync::VaultSyncError::ExternalCreate { .. }
+        | vault_sync::VaultSyncError::HashMismatch { .. }
+        | vault_sync::VaultSyncError::ConcurrentRename { .. } => ErrorCode(-32009),
+        _ => ErrorCode(-32003),
+    };
+    rmcp::Error::new(code, e.to_string(), None)
 }
 
 fn map_graph_error(e: GraphError) -> rmcp::Error {
@@ -282,6 +432,8 @@ pub struct BrainPutInput {
 pub struct BrainQueryInput {
     /// Search query string
     pub query: String,
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -294,6 +446,8 @@ pub struct BrainQueryInput {
 pub struct BrainSearchInput {
     /// FTS5 search query string
     pub query: String,
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Maximum results to return
@@ -302,6 +456,8 @@ pub struct BrainSearchInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainListInput {
+    /// Optional collection filter
+    pub collection: Option<String>,
     /// Optional wing filter
     pub wing: Option<String>,
     /// Optional type filter
@@ -361,6 +517,8 @@ pub struct BrainTagsInput {
 pub struct BrainGapInput {
     /// Query string to log as a knowledge gap
     pub query: String,
+    /// Optional page slug to bind the gap to
+    pub slug: Option<String>,
     /// Optional context about the gap
     pub context: Option<String>,
 }
@@ -375,6 +533,9 @@ pub struct BrainGapsInput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainStatsInput {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrainCollectionsInput {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BrainRawInput {
@@ -397,20 +558,10 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        match get_page(&db, &input.slug) {
-            Ok(page) => {
-                let rendered = markdown::render_page(&page);
-                Ok(CallToolResult::success(vec![Content::text(rendered)]))
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("page not found") {
-                    Err(rmcp::Error::new(rmcp::model::ErrorCode(-32001), msg, None))
-                } else {
-                    Err(rmcp::Error::new(rmcp::model::ErrorCode(-32003), msg, None))
-                }
-            }
-        }
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
+        let page = vault_sync::get_page_by_input(&db, &input.slug).map_err(map_vault_sync_error)?;
+        let rendered = markdown::render_page(&canonicalize_page_for_mcp(&page, &resolved));
+        Ok(CallToolResult::success(vec![Content::text(rendered)]))
     }
 
     #[tool(description = "Write or update a page")]
@@ -421,132 +572,81 @@ impl GigaBrainServer {
         validate_slug(&input.slug)?;
         validate_content(&input.content)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let (frontmatter, body) = markdown::parse_frontmatter(&input.content);
-        let (compiled_truth, timeline) = markdown::split_content(&body);
-        let summary = markdown::extract_summary(&compiled_truth);
-        let wing = palace::derive_wing(&input.slug);
-        let room = palace::derive_room(&compiled_truth);
-        let title = frontmatter
-            .get("title")
-            .cloned()
-            .unwrap_or_else(|| input.slug.clone());
-        let page_type = frontmatter
-            .get("type")
-            .cloned()
-            .unwrap_or_else(|| "concept".to_string());
-        let frontmatter_json = serde_json::to_string(&frontmatter).map_err(|e| {
-            rmcp::Error::new(
-                rmcp::model::ErrorCode(-32002),
-                format!("parse error: {e}"),
-                None,
+        let resolved = resolve_slug_for_mcp(
+            &db,
+            &input.slug,
+            if input.expected_version.is_some() {
+                OpKind::WriteUpdate
+            } else {
+                OpKind::WriteCreate
+            },
+        )?;
+        // Collection write-gate must run BEFORE any OCC/precondition prevalidation.
+        // If the collection is restoring or needs_full_sync, CollectionRestoringError wins
+        // over any version-conflict or existence-conflict that the prevalidation would surface.
+        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+            .map_err(map_vault_sync_error)?;
+        let existing_version: Option<i64> = db
+            .query_row(
+                "SELECT version FROM pages WHERE collection_id = ?1 AND slug = ?2",
+                rusqlite::params![resolved.collection_id, &resolved.slug],
+                |row| row.get(0),
             )
-        })?;
-
-        let now: String = db
-            .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
-                row.get(0)
-            })
-            .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-
-        let existing_version: Option<i64> = match db
-            .prepare("SELECT version FROM pages WHERE slug = ?1")
-            .map_err(map_db_error)?
-            .query_row([&input.slug], |row| row.get(0))
-        {
-            Ok(v) => Some(v),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => return Err(map_db_error(e)),
-        };
-
-        match existing_version {
-            None => {
-                // OCC: a client supplying expected_version on a non-existent page has stale
-                // state — the page never existed at that version. Reject as a conflict.
-                if let Some(n) = input.expected_version {
-                    return Err(rmcp::Error::new(
-                        rmcp::model::ErrorCode(-32009),
-                        format!("conflict: page does not exist at version {n}"),
-                        Some(serde_json::json!({ "current_version": null })),
-                    ));
-                }
-                db.execute(
-                    "INSERT INTO pages \
-                         (slug, type, title, summary, compiled_truth, timeline, \
-                          frontmatter, wing, room, version, \
-                          created_at, updated_at, truth_updated_at, timeline_updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10, ?10, ?10)",
-                    rusqlite::params![
-                        input.slug,
-                        page_type,
-                        title,
-                        summary,
-                        compiled_truth,
-                        timeline,
-                        frontmatter_json,
-                        wing,
-                        room,
-                        now,
-                    ],
-                )
-                .map_err(map_db_error)?;
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Created {} (version 1)",
-                    input.slug
-                ))]))
+            .optional()
+            .map_err(map_db_error)?;
+        match (existing_version, input.expected_version) {
+            (None, Some(expected)) => {
+                return Err(rmcp::Error::new(
+                    ErrorCode(-32009),
+                    format!("conflict: page does not exist at version {expected}"),
+                    Some(serde_json::json!({ "current_version": null })),
+                ));
             }
-            Some(current) => {
-                let expected = input.expected_version.ok_or_else(|| {
-                    rmcp::Error::new(
-                        rmcp::model::ErrorCode(-32009),
-                        format!(
-                            "conflict: page already exists (current version: {current}). \
-                             Provide expected_version to update."
-                        ),
-                        Some(serde_json::json!({ "current_version": current })),
-                    )
-                })?;
-
-                let rows = db
-                    .execute(
-                        "UPDATE pages SET \
-                             type = ?1, title = ?2, summary = ?3, \
-                             compiled_truth = ?4, timeline = ?5, \
-                             frontmatter = ?6, wing = ?7, room = ?8, \
-                             version = version + 1, \
-                             updated_at = ?9, truth_updated_at = ?9, timeline_updated_at = ?9 \
-                         WHERE slug = ?10 AND version = ?11",
-                        rusqlite::params![
-                            page_type,
-                            title,
-                            summary,
-                            compiled_truth,
-                            timeline,
-                            frontmatter_json,
-                            wing,
-                            room,
-                            now,
-                            input.slug,
-                            expected,
-                        ],
-                    )
-                    .map_err(map_db_error)?;
-
-                if rows == 0 {
-                    return Err(rmcp::Error::new(
-                        rmcp::model::ErrorCode(-32009),
-                        format!("conflict: page updated elsewhere (current version: {current})"),
-                        Some(serde_json::json!({ "current_version": current })),
-                    ));
-                }
-
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Updated {} (version {})",
-                    input.slug,
-                    expected + 1
-                ))]))
+            (Some(current), None) => {
+                return Err(rmcp::Error::new(
+                    ErrorCode(-32009),
+                    format!(
+                        "conflict: page already exists (current version: {current}). Provide expected_version to update."
+                    ),
+                    Some(serde_json::json!({ "current_version": current })),
+                ));
             }
+            _ => {}
         }
+        crate::commands::put::put_from_string(
+            &db,
+            &canonical_slug(&resolved.collection_name, &resolved.slug),
+            &input.content,
+            input.expected_version,
+        )
+        .map_err(|err| {
+            let message = err.to_string();
+            if message.contains("Conflict:") {
+                rmcp::Error::new(
+                    ErrorCode(-32009),
+                    message.replace("Conflict: ", "conflict: "),
+                    Some(serde_json::json!({ "current_version": existing_version })),
+                )
+            } else {
+                map_anyhow_error(err)
+            }
+        })?;
+        let version: i64 = db
+            .query_row(
+                "SELECT version FROM pages WHERE collection_id = ?1 AND slug = ?2",
+                rusqlite::params![resolved.collection_id, &resolved.slug],
+                |row| row.get(0),
+            )
+            .map_err(map_db_error)?;
+        let verb = if input.expected_version.is_some() {
+            "Updated"
+        } else {
+            "Created"
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{verb} {}::{} (version {})",
+            resolved.collection_name, resolved.slug, version
+        ))]))
     }
 
     #[tool(description = "Hybrid semantic + FTS5 query")]
@@ -555,14 +655,28 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainQueryInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
-        let results = hybrid_search(&input.query, input.wing.as_deref(), &db, limit)
-            .map_err(map_search_error)?;
+        let results = hybrid_search_canonical(
+            &input.query,
+            input.wing.as_deref(),
+            collection_filter.as_ref().map(|collection| collection.id),
+            &db,
+            limit,
+        )
+        .map_err(map_search_error)?;
 
         // Auto-log knowledge gap on weak results
         if results.len() < 2 || results.iter().all(|r| r.score < 0.3) {
-            let _ = gaps::log_gap(&input.query, "", results.first().map(|r| r.score), &db);
+            let _ = gaps::log_gap(
+                None,
+                &input.query,
+                "",
+                results.first().map(|r| r.score),
+                &db,
+            );
         }
 
         let depth_normalized = input.depth.as_deref().map(|d| d.trim().to_lowercase());
@@ -577,7 +691,14 @@ impl GigaBrainServer {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(4000);
-                progressive_retrieve(results.clone(), budget, 3, &db).unwrap_or(results)
+                progressive_retrieve(
+                    results.clone(),
+                    budget,
+                    3,
+                    collection_filter.as_ref().map(|c| c.id),
+                    &db,
+                )
+                .unwrap_or(results)
             }
             _ => results,
         };
@@ -593,11 +714,19 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainSearchInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results =
-            search_fts(&safe_query, input.wing.as_deref(), &db, limit).map_err(map_search_error)?;
+        let results = crate::core::fts::search_fts_canonical(
+            &safe_query,
+            input.wing.as_deref(),
+            collection_filter.as_ref().map(|collection| collection.id),
+            &db,
+            limit,
+        )
+        .map_err(map_search_error)?;
 
         let json = serde_json::to_string_pretty(&results)
             .map_err(|e| rmcp::Error::new(rmcp::model::ErrorCode(-32003), e.to_string(), None))?;
@@ -610,20 +739,31 @@ impl GigaBrainServer {
         #[tool(aggr)] input: BrainListInput,
     ) -> Result<CallToolResult, rmcp::Error> {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collection_filter =
+            resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT);
-        let mut sql = String::from("SELECT slug, type, summary FROM pages WHERE 1=1");
+        let mut sql = String::from(
+            "SELECT c.name || '::' || p.slug, p.type, p.summary \
+             FROM pages p \
+             JOIN collections c ON c.id = p.collection_id \
+             WHERE 1=1",
+        );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(ref w) = input.wing {
-            sql.push_str(" AND wing = ?");
+            sql.push_str(" AND p.wing = ?");
             params.push(Box::new(w.clone()));
         }
         if let Some(ref t) = input.page_type {
-            sql.push_str(" AND type = ?");
+            sql.push_str(" AND p.type = ?");
             params.push(Box::new(t.clone()));
         }
-        sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
+        if let Some(collection) = collection_filter {
+            sql.push_str(" AND p.collection_id = ?");
+            params.push(Box::new(collection.id));
+        }
+        sql.push_str(" ORDER BY p.updated_at DESC LIMIT ?");
         params.push(Box::new(limit));
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -673,11 +813,15 @@ impl GigaBrainServer {
             validate_temporal_value(valid_until, "valid_until")?;
         }
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let from = resolve_slug_for_mcp(&db, &input.from_slug, OpKind::WriteUpdate)?;
+        let to = resolve_slug_for_mcp(&db, &input.to_slug, OpKind::WriteUpdate)?;
+        let from_slug = canonical_slug(&from.collection_name, &from.slug);
+        let to_slug = canonical_slug(&to.collection_name, &to.slug);
 
         link::run_silent(
             &db,
-            &input.from_slug,
-            &input.to_slug,
+            &from_slug,
+            &to_slug,
             &input.relationship,
             input.valid_from,
             input.valid_until,
@@ -686,7 +830,7 @@ impl GigaBrainServer {
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Linked {} → {} ({})",
-            input.from_slug, input.to_slug, input.relationship
+            from_slug, to_slug, input.relationship
         ))]))
     }
 
@@ -715,21 +859,8 @@ impl GigaBrainServer {
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
         let limit = input.limit.unwrap_or(100).min(MAX_LIMIT);
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
-
-        let to_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE slug = ?1",
-                [&input.slug],
-                |row| row.get(0),
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-                    ErrorCode(-32001),
-                    format!("page not found: {}", input.slug),
-                    None,
-                ),
-                other => map_db_error(other),
-            })?;
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
+        let to_id = page_id_for_resolved(&db, &resolved)?;
 
         #[derive(Serialize)]
         struct BacklinkRow {
@@ -749,8 +880,10 @@ impl GigaBrainServer {
         };
 
         let sql = format!(
-            "SELECT l.id, p.slug, l.relationship, l.valid_from, l.valid_until \
-             FROM links l JOIN pages p ON l.from_page_id = p.id \
+            "SELECT l.id, c.name || '::' || p.slug, l.relationship, l.valid_from, l.valid_until \
+             FROM links l \
+             JOIN pages p ON l.from_page_id = p.id \
+             JOIN collections c ON c.id = p.collection_id \
              WHERE l.to_page_id = ?1{temporal_clause} \
              ORDER BY l.created_at DESC \
              LIMIT ?2"
@@ -787,9 +920,17 @@ impl GigaBrainServer {
 
         let depth = input.depth.unwrap_or(1).min(graph::MAX_DEPTH);
         let filter = parse_temporal_filter(input.temporal.as_deref())?;
-
-        let result =
-            graph::neighborhood_graph(&input.slug, depth, filter, &db).map_err(map_graph_error)?;
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
+        let page_id = page_id_for_resolved(&db, &resolved)?;
+        let result = graph::neighborhood_graph_for_page(
+            page_id,
+            &resolved.collection_name,
+            &resolved.slug,
+            depth,
+            filter,
+            &db,
+        )
+        .map_err(map_graph_error)?;
 
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
@@ -804,28 +945,49 @@ impl GigaBrainServer {
         if let Some(slug) = input.slug.as_deref() {
             validate_slug(slug)?;
         }
-        let slug_filter = input.slug.clone();
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let slug_filter = input
+            .slug
+            .as_deref()
+            .map(|slug| resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate))
+            .transpose()?;
 
-        let all = slug_filter.is_none();
-        check::execute_check(&db, input.slug.as_deref(), all, None).map_err(map_anyhow_error)?;
+        let selected_page_id = if let Some(resolved) = slug_filter.as_ref() {
+            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+                .map_err(map_vault_sync_error)?;
+            let page_id = page_id_for_resolved(&db, resolved)?;
+            let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
+                .map_err(map_anyhow_error)?;
+            crate::core::assertions::extract_assertions(&page, &db)
+                .map_err(|error| map_anyhow_error(error.into()))?;
+            crate::core::assertions::check_assertions_for_page_id(page_id, &db)
+                .map_err(|error| map_anyhow_error(error.into()))?;
+            Some(page_id)
+        } else {
+            check::execute_check(&db, None, true, None).map_err(map_anyhow_error)?;
+            None
+        };
 
         // Fetch unresolved contradictions as JSON
         use crate::core::assertions::Contradiction;
-        let contradictions: Vec<Contradiction> = if let Some(slug) = slug_filter.as_deref() {
+        let contradictions: Vec<Contradiction> = if let Some(page_id) = selected_page_id {
             let mut stmt = db
                 .prepare(
-                    "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
-                     FROM contradictions c \
-                     JOIN pages p ON p.id = c.page_id \
-                     LEFT JOIN pages other ON other.id = c.other_page_id \
-                     WHERE c.resolved_at IS NULL AND (p.slug = ?1 OR other.slug = ?1) \
-                     ORDER BY c.detected_at, p.slug",
+                    "SELECT cp.name || '::' || p.slug, \
+                            COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
+                            c.type, c.description, c.detected_at \
+                      FROM contradictions c \
+                      JOIN pages p ON p.id = c.page_id \
+                      JOIN collections cp ON cp.id = p.collection_id \
+                      LEFT JOIN pages other ON other.id = c.other_page_id \
+                      LEFT JOIN collections co ON co.id = other.collection_id \
+                      WHERE c.resolved_at IS NULL AND (c.page_id = ?1 OR c.other_page_id = ?1) \
+                      ORDER BY c.detected_at, p.slug",
                 )
                 .map_err(map_db_error)?;
 
             let rows = stmt
-                .query_map([slug], |row| {
+                .query_map([page_id], |row| {
                     Ok(Contradiction {
                         page_slug: row.get(0)?,
                         other_page_slug: row.get(1)?,
@@ -840,12 +1002,16 @@ impl GigaBrainServer {
         } else {
             let mut stmt = db
                 .prepare(
-                    "SELECT p.slug, COALESCE(other.slug, p.slug), c.type, c.description, c.detected_at \
-                     FROM contradictions c \
-                     JOIN pages p ON p.id = c.page_id \
-                     LEFT JOIN pages other ON other.id = c.other_page_id \
-                     WHERE c.resolved_at IS NULL \
-                     ORDER BY c.detected_at, p.slug",
+                    "SELECT cp.name || '::' || p.slug, \
+                            COALESCE(co.name || '::' || other.slug, cp.name || '::' || p.slug), \
+                            c.type, c.description, c.detected_at \
+                      FROM contradictions c \
+                      JOIN pages p ON p.id = c.page_id \
+                      JOIN collections cp ON cp.id = p.collection_id \
+                      LEFT JOIN pages other ON other.id = c.other_page_id \
+                      LEFT JOIN collections co ON co.id = other.collection_id \
+                      WHERE c.resolved_at IS NULL \
+                      ORDER BY c.detected_at, p.slug",
                 )
                 .map_err(map_db_error)?;
 
@@ -876,26 +1042,14 @@ impl GigaBrainServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
 
         let limit = input.limit.unwrap_or(20).min(MAX_LIMIT);
 
-        // Verify page exists
-        let page = get_page(&db, &input.slug).map_err(map_anyhow_error)?;
+        let page = get::get_page_by_key(&db, resolved.collection_id, &resolved.slug)
+            .map_err(map_anyhow_error)?;
 
-        let page_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE slug = ?1",
-                [&input.slug],
-                |row| row.get(0),
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-                    ErrorCode(-32001),
-                    format!("page not found: {}", input.slug),
-                    None,
-                ),
-                other => map_db_error(other),
-            })?;
+        let page_id = page_id_for_resolved(&db, &resolved)?;
 
         // Query structured timeline_entries table
         let mut stmt = db
@@ -947,7 +1101,7 @@ impl GigaBrainServer {
         }
 
         let output = TimelineOutput {
-            slug: input.slug,
+            slug: canonical_slug(&resolved.collection_name, &resolved.slug),
             entries,
         };
 
@@ -964,13 +1118,22 @@ impl GigaBrainServer {
         validate_slug(&input.slug)?;
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
 
+        let add = input.add.unwrap_or_default();
+        let remove = input.remove.unwrap_or_default();
+        validate_tag_list(&add, "add")?;
+        validate_tag_list(&remove, "remove")?;
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
+        if !add.is_empty() || !remove.is_empty() {
+            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+                .map_err(map_vault_sync_error)?;
+        }
         let page_id: i64 = db
             .query_row(
-                "SELECT id FROM pages WHERE slug = ?1",
-                [&input.slug],
+                "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+                rusqlite::params![resolved.collection_id, &resolved.slug],
                 |row| row.get(0),
             )
-            .map_err(|e| match e {
+            .map_err(|error| match error {
                 rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
                     ErrorCode(-32001),
                     format!("page not found: {}", input.slug),
@@ -978,11 +1141,6 @@ impl GigaBrainServer {
                 ),
                 other => map_db_error(other),
             })?;
-
-        let add = input.add.unwrap_or_default();
-        let remove = input.remove.unwrap_or_default();
-        validate_tag_list(&add, "add")?;
-        validate_tag_list(&remove, "remove")?;
 
         for tag in &add {
             db.execute(
@@ -1034,6 +1192,15 @@ impl GigaBrainServer {
             context.clear();
         }
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let page_id = if let Some(slug) = input.slug.as_deref() {
+            validate_slug(slug)?;
+            let resolved = resolve_slug_for_mcp(&db, slug, OpKind::WriteUpdate)?;
+            vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+                .map_err(map_vault_sync_error)?;
+            Some(page_id_for_resolved(&db, &resolved)?)
+        } else {
+            None
+        };
 
         let query_hash = {
             use sha2::{Digest, Sha256};
@@ -1044,9 +1211,11 @@ impl GigaBrainServer {
                 .collect::<String>()
         };
 
-        gaps::log_gap(&input.query, &context, None, &db).map_err(|e| {
-            rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None)
-        })?;
+        match page_id {
+            Some(page_id) => gaps::log_gap_for_page(page_id, &input.query, &context, None, &db),
+            None => gaps::log_gap(None, &input.query, &context, None, &db),
+        }
+        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), format!("database error: {e}"), None))?;
 
         // Retrieve the gap ID
         let gap_id: i64 = db
@@ -1060,6 +1229,7 @@ impl GigaBrainServer {
         let result = serde_json::json!({
             "id": gap_id,
             "query_hash": query_hash,
+            "page_id": page_id,
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&result).unwrap(),
@@ -1153,6 +1323,18 @@ impl GigaBrainServer {
         )]))
     }
 
+    #[tool(description = "List collection status for MCP clients")]
+    pub fn brain_collections(
+        &self,
+        #[tool(aggr)] _input: BrainCollectionsInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let collections = vault_sync::list_brain_collections(&db).map_err(map_vault_sync_error)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&collections).unwrap(),
+        )]))
+    }
+
     #[tool(description = "Store raw structured data (API responses, JSON) for a page")]
     pub fn brain_raw(
         &self,
@@ -1176,21 +1358,12 @@ impl GigaBrainServer {
         }
         let overwrite = input.overwrite.unwrap_or(false);
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::WriteUpdate)?;
+        vault_sync::ensure_collection_write_allowed(&db, resolved.collection_id)
+            .map_err(map_vault_sync_error)?;
 
-        let page_id: i64 = db
-            .query_row(
-                "SELECT id FROM pages WHERE slug = ?1",
-                [&input.slug],
-                |row| row.get(0),
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => rmcp::Error::new(
-                    ErrorCode(-32001),
-                    format!("page not found: {}", input.slug),
-                    None,
-                ),
-                other => map_db_error(other),
-            })?;
+        let page_id = page_id_for_resolved(&db, &resolved)?;
+        let canonical_page_slug = canonical_slug(&resolved.collection_name, &resolved.slug);
 
         // Guard against silent replacement of existing source data.
         let existing: Option<i64> = db
@@ -1207,7 +1380,7 @@ impl GigaBrainServer {
                 ErrorCode(-32003),
                 format!(
                     "raw data for source '{}' already exists on '{}'; set overwrite=true to replace",
-                    input.source, input.slug
+                    input.source, canonical_page_slug
                 ),
                 None,
             ));
@@ -1255,12 +1428,89 @@ mod tests {
     use super::*;
     use crate::core::db;
     use serde_json::json;
+    use std::fs;
+    #[cfg(unix)]
+    use std::path::{Path, PathBuf};
 
     fn open_test_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("server.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        let vault_root = dir.path().join("vault");
+        fs::create_dir_all(&vault_root).unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET root_path = ?1,
+                 writable = 1,
+                 is_write_target = 1,
+                 state = 'active',
+                 needs_full_sync = 0
+             WHERE id = 1",
+            [vault_root.display().to_string()],
+        )
+        .unwrap();
         (dir, conn)
+    }
+
+    #[cfg(unix)]
+    fn open_test_db_with_vault() -> (tempfile::TempDir, String, Connection, PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("server.db");
+        let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        let vault_root = dir.path().join("vault");
+        fs::create_dir_all(&vault_root).unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET root_path = ?1,
+                 writable = 1,
+                 is_write_target = 1,
+                 state = 'active',
+                 needs_full_sync = 0
+             WHERE id = 1",
+            [vault_root.display().to_string()],
+        )
+        .unwrap();
+        (dir, db_path.display().to_string(), conn, vault_root)
+    }
+
+    #[cfg(unix)]
+    fn recovery_sentinel_count(db_path: &str, collection_id: i64) -> usize {
+        let recovery_root = vault_sync::recovery_root_for_db_path(Path::new(db_path));
+        fs::read_dir(vault_sync::collection_recovery_dir(
+            &recovery_root,
+            collection_id,
+        ))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(".needs_full_sync")
+                })
+                .count()
+        })
+        .unwrap_or(0)
+    }
+
+    #[cfg(unix)]
+    fn active_raw_import_count(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports \
+             WHERE page_id = (SELECT id FROM pages WHERE slug = ?1) AND is_active = 1",
+            [slug],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn page_version(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row("SELECT version FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
+        .unwrap()
     }
 
     #[test]
@@ -1280,6 +1530,11 @@ mod tests {
                 as fn(&GigaBrainServer, BrainSearchInput) -> Result<CallToolResult, rmcp::Error>,
             GigaBrainServer::brain_list
                 as fn(&GigaBrainServer, BrainListInput) -> Result<CallToolResult, rmcp::Error>,
+            GigaBrainServer::brain_collections
+                as fn(
+                    &GigaBrainServer,
+                    BrainCollectionsInput,
+                ) -> Result<CallToolResult, rmcp::Error>,
         );
 
         assert!(info.capabilities.tools.is_some());
@@ -1297,6 +1552,77 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode(-32001));
+    }
+
+    #[test]
+    fn brain_get_returns_structured_ambiguity_payload_for_colliding_bare_slug() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "memory", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nDefault Alice\n",
+        );
+        create_page_in_collection(
+            &server,
+            "memory",
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nMemory Alice\n",
+        );
+
+        let error = server
+            .brain_get(BrainGetInput {
+                slug: "people/alice".to_string(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        let data = error.data.unwrap();
+        assert_eq!(data["code"], "ambiguous_slug");
+        let mut candidates = data["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        assert_eq!(
+            candidates,
+            vec![
+                "default::people/alice".to_string(),
+                "memory::people/alice".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn brain_get_explicit_collection_slug_reads_resolved_page_when_slug_collides() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "memory", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nDefault Alice\n",
+        );
+        create_page_in_collection(
+            &server,
+            "memory",
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nMemory Alice\n",
+        );
+
+        let result = server
+            .brain_get(BrainGetInput {
+                slug: "memory::people/alice".to_string(),
+            })
+            .unwrap();
+
+        let rendered = extract_text(&result);
+        assert!(rendered.contains("slug: memory::people/alice"));
+        assert!(rendered.contains("Memory Alice"));
+        assert!(!rendered.contains("Default Alice"));
     }
 
     #[test]
@@ -1347,6 +1673,97 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode(-32009));
         assert_eq!(error.data, Some(json!({ "current_version": 1 })));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn brain_put_existing_page_without_expected_version_conflicts_before_vault_mutation() {
+        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let server = GigaBrainServer::new(conn);
+        let original = "---\ntitle: Existing\ntype: note\n---\nOriginal body\n";
+
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/existing".to_string(),
+                content: original.to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/existing".to_string(),
+                content: "---\ntitle: Existing\ntype: note\n---\nUnexpected overwrite\n"
+                    .to_string(),
+                expected_version: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert_eq!(
+            fs::read_to_string(vault_root.join("notes").join("existing.md")).unwrap(),
+            original
+        );
+        let db = server.db.lock().unwrap();
+        assert_eq!(page_version(&db, "notes/existing"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn brain_put_stale_expected_version_conflicts_before_vault_mutation() {
+        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let server = GigaBrainServer::new(conn);
+        let original = "---\ntitle: Stale\ntype: note\n---\nOriginal body\n";
+
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/stale".to_string(),
+                content: original.to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/stale".to_string(),
+                content: "---\ntitle: Stale\ntype: note\n---\nStale overwrite\n".to_string(),
+                expected_version: Some(0),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert_eq!(
+            fs::read_to_string(vault_root.join("notes").join("stale.md")).unwrap(),
+            original
+        );
+        let db = server.db.lock().unwrap();
+        assert_eq!(page_version(&db, "notes/stale"), 1);
+    }
+
+    #[test]
+    fn brain_put_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/blocked".to_string(),
+                content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("CollectionRestoringError"));
     }
 
     #[test]
@@ -1415,6 +1832,38 @@ mod tests {
     }
 
     #[test]
+    fn brain_get_renders_persisted_gbrain_id_after_update_omits_frontmatter_uuid() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/uuid".to_string(),
+                content: "---\ngbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/uuid".to_string(),
+                content: "---\ntitle: UUID\ntype: note\n---\nUpdated\n".to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_get(BrainGetInput {
+                slug: "notes/uuid".to_string(),
+            })
+            .unwrap();
+        let rendered = extract_text(&result);
+
+        assert!(rendered.contains("gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+        assert!(rendered.contains("slug: default::notes/uuid"));
+        assert!(rendered.contains("Updated"));
+    }
+
+    #[test]
     fn brain_query_logs_gap_for_weak_results() {
         let (_dir, conn) = open_test_db();
         let server = GigaBrainServer::new(conn);
@@ -1422,6 +1871,7 @@ mod tests {
         let result = server
             .brain_query(BrainQueryInput {
                 query: "who runs the moon colony".to_string(),
+                collection: None,
                 wing: None,
                 limit: None,
                 depth: None,
@@ -1465,6 +1915,7 @@ mod tests {
         let result = server
             .brain_query(BrainQueryInput {
                 query: "alpha".to_string(),
+                collection: None,
                 wing: None,
                 limit: Some(1),
                 depth: Some("auto".to_string()),
@@ -1472,7 +1923,59 @@ mod tests {
             .unwrap();
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert!(rows.iter().any(|row| row["slug"] == "concepts/child"));
+        assert!(rows
+            .iter()
+            .any(|row| row["slug"] == "default::concepts/child"));
+    }
+
+    // 13.5 contract: depth="auto" must NOT expand across collection boundaries
+    #[test]
+    fn brain_query_auto_depth_does_not_expand_across_collections() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+
+        // Anchor page in "default" — will match the query
+        create_page(
+            &server,
+            "concepts/anchor",
+            "---\ntitle: Anchor\ntype: concept\n---\ncross collection fence anchor\n",
+        );
+        // Outside page in "work" — linked from anchor but must NOT appear
+        create_page_in_collection(
+            &server,
+            "work",
+            "concepts/outside",
+            "---\ntitle: Outside\ntype: concept\n---\nshould not appear in filtered results\n",
+        );
+        // Cross-collection link: default::concepts/anchor -> work::concepts/outside
+        server
+            .brain_link(BrainLinkInput {
+                from_slug: "default::concepts/anchor".to_string(),
+                to_slug: "work::concepts/outside".to_string(),
+                relationship: "related".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "cross collection fence anchor".to_string(),
+                collection: Some("default".to_string()),
+                wing: None,
+                limit: Some(5),
+                depth: Some("auto".to_string()),
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row["slug"] == "work::concepts/outside"),
+            "depth=auto expansion must not cross into a different collection: got {rows:?}"
+        );
     }
 
     #[test]
@@ -1488,13 +1991,14 @@ mod tests {
         let result = server
             .brain_search(BrainSearchInput {
                 query: "fundraising".to_string(),
+                collection: None,
                 wing: None,
                 limit: None,
             })
             .unwrap();
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
-        assert_eq!(rows[0]["slug"], "companies/acme");
+        assert_eq!(rows[0]["slug"], "default::companies/acme");
     }
 
     // D.6 — brain_search with natural-language '?' query returns valid JSON-RPC response
@@ -1506,6 +2010,7 @@ mod tests {
         // '?' would be invalid FTS5 syntax if passed raw — brain_search must sanitize.
         let result = server.brain_search(BrainSearchInput {
             query: "what is CLARITY?".to_string(),
+            collection: None,
             wing: None,
             limit: None,
         });
@@ -1541,6 +2046,7 @@ mod tests {
 
         let result = server
             .brain_list(BrainListInput {
+                collection: None,
                 wing: Some("people".to_string()),
                 page_type: Some("person".to_string()),
                 limit: None,
@@ -1549,6 +2055,235 @@ mod tests {
 
         let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "default::people/alice");
+    }
+
+    #[test]
+    fn brain_search_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-hit",
+            "---\ntitle: Default Hit\ntype: note\n---\nshared needle\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-hit",
+            "---\ntitle: Work Hit\ntype: note\n---\nshared needle\n",
+        );
+
+        let result = server
+            .brain_search(BrainSearchInput {
+                query: "shared".to_string(),
+                collection: Some("work".to_string()),
+                wing: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+    }
+
+    #[test]
+    fn brain_query_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-hit",
+            "---\ntitle: Default Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-hit",
+            "---\ntitle: Work Hit\ntype: note\n---\nsemantic overlap on robotics leadership\n",
+        );
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "robotics leadership".to_string(),
+                collection: Some("work".to_string()),
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/work-hit");
+    }
+
+    #[test]
+    fn brain_list_explicit_collection_filter_returns_only_named_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice Default\ntype: person\n---\nDefault Alice\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "people/alice",
+            "---\ntitle: Alice Work\ntype: person\n---\nWork Alice\n",
+        );
+
+        let result = server
+            .brain_list(BrainListInput {
+                collection: Some("work".to_string()),
+                wing: Some("people".to_string()),
+                page_type: Some("person".to_string()),
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::people/alice");
+    }
+
+    #[test]
+    fn read_tools_unknown_collection_filter_errors_clearly() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let query_error = server
+            .brain_query(BrainQueryInput {
+                query: "anything".to_string(),
+                collection: Some("missing".to_string()),
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap_err();
+        assert_eq!(query_error.code, ErrorCode(-32001));
+        assert!(query_error
+            .message
+            .contains("collection not found: missing"));
+
+        let search_error = server
+            .brain_search(BrainSearchInput {
+                query: "anything".to_string(),
+                collection: Some("missing".to_string()),
+                wing: None,
+                limit: None,
+            })
+            .unwrap_err();
+        assert_eq!(search_error.code, ErrorCode(-32001));
+        assert!(search_error
+            .message
+            .contains("collection not found: missing"));
+
+        let list_error = server
+            .brain_list(BrainListInput {
+                collection: Some("missing".to_string()),
+                wing: None,
+                page_type: None,
+                limit: None,
+            })
+            .unwrap_err();
+        assert_eq!(list_error.code, ErrorCode(-32001));
+        assert!(list_error.message.contains("collection not found: missing"));
+    }
+
+    #[test]
+    fn brain_search_defaults_to_single_active_collection() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        set_collection_state(&conn, "default", "detached");
+        let server = GigaBrainServer::new(conn);
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/only-active",
+            "---\ntitle: Only Active\ntype: note\n---\nsole active marker\n",
+        );
+
+        let result = server
+            .brain_search(BrainSearchInput {
+                query: "sole".to_string(),
+                collection: None,
+                wing: None,
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "work::notes/only-active");
+    }
+
+    #[test]
+    fn brain_query_defaults_to_write_target_when_multiple_collections_are_active() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-target",
+            "---\ntitle: Default Target\ntype: note\n---\nshared semantic marker\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-target",
+            "---\ntitle: Work Target\ntype: note\n---\nshared semantic marker\n",
+        );
+
+        let result = server
+            .brain_query(BrainQueryInput {
+                query: "shared semantic marker".to_string(),
+                collection: None,
+                wing: None,
+                limit: None,
+                depth: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "default::notes/default-target");
+    }
+
+    #[test]
+    fn brain_list_defaults_to_write_target_when_multiple_collections_are_active() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "work", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-target",
+            "---\ntitle: Default Target\ntype: note\n---\ndefault target body\n",
+        );
+        create_page_in_collection(
+            &server,
+            "work",
+            "notes/work-target",
+            "---\ntitle: Work Target\ntype: note\n---\nwork target body\n",
+        );
+
+        let result = server
+            .brain_list(BrainListInput {
+                collection: None,
+                wing: Some("notes".to_string()),
+                page_type: Some("note".to_string()),
+                limit: None,
+            })
+            .unwrap();
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["slug"], "default::notes/default-target");
     }
 
     // ── Phase 2 MCP tests ────────────────────────────────────
@@ -1561,6 +2296,50 @@ mod tests {
                 expected_version: None,
             })
             .unwrap();
+    }
+
+    fn create_page_in_collection(
+        server: &GigaBrainServer,
+        collection_name: &str,
+        slug: &str,
+        content: &str,
+    ) {
+        server
+            .brain_put(BrainPutInput {
+                slug: format!("{collection_name}::{slug}"),
+                content: content.to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+    }
+
+    fn insert_collection(conn: &Connection, id: i64, name: &str, is_write_target: bool) {
+        let root_path = std::env::temp_dir()
+            .join(format!(
+                "gbrain-mcp-{id}-{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .display()
+            .to_string();
+        fs::create_dir_all(&root_path).unwrap();
+        conn.execute(
+            "INSERT INTO collections (id, name, root_path, state, writable, is_write_target) \
+             VALUES (?1, ?2, ?3, 'active', 1, ?4)",
+            rusqlite::params![id, name, root_path, if is_write_target { 1 } else { 0 }],
+        )
+        .unwrap();
+    }
+
+    fn set_collection_state(conn: &Connection, name: &str, state: &str) {
+        conn.execute(
+            "UPDATE collections SET state = ?1 WHERE name = ?2",
+            rusqlite::params![state, name],
+        )
+        .unwrap();
     }
 
     fn page_id(conn: &Connection, slug: &str) -> i64 {
@@ -1773,7 +2552,8 @@ mod tests {
 
         let text = extract_text(&result);
         assert!(text.contains("Linked"));
-        assert!(text.contains("people/alice"));
+        assert!(text.contains("default::people/alice"));
+        assert!(text.contains("default::companies/acme"));
     }
 
     #[test]
@@ -1919,7 +2699,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["from_slug"], "people/alice");
+        assert_eq!(arr[0]["from_slug"], "default::people/alice");
         assert_eq!(arr[0]["relationship"], "works_at");
     }
 
@@ -2069,8 +2849,17 @@ mod tests {
 
         let text = extract_text(&result);
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(parsed["nodes"].as_array().unwrap().len() >= 2);
-        assert!(!parsed["edges"].as_array().unwrap().is_empty());
+        let node_slugs = parsed["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["slug"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(node_slugs.contains(&"default::people/alice"));
+        assert!(node_slugs.contains(&"default::companies/acme"));
+        assert!(parsed["edges"].as_array().unwrap().iter().any(|edge| {
+            edge["from"] == "default::people/alice" && edge["to"] == "default::companies/acme"
+        }));
     }
 
     #[test]
@@ -2201,8 +2990,101 @@ mod tests {
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
         assert!(!parsed.is_empty());
         assert!(parsed.iter().all(|row| {
-            row["page_slug"] == "people/alice" || row["other_page_slug"] == "people/alice"
+            row["page_slug"] == "default::people/alice"
+                || row["other_page_slug"] == "default::people/alice"
         }));
+    }
+
+    #[test]
+    fn brain_check_explicit_collection_slug_filters_to_resolved_page_when_slug_collides() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "memory", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\n## Assertions\nAlice works at Acme Corp.\nAlice works at Beta Corp.\n",
+        );
+        create_page_in_collection(
+            &server,
+            "memory",
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nMemory Alice is a person.\n",
+        );
+
+        server
+            .brain_check(BrainCheckInput {
+                slug: Some("default::people/alice".to_string()),
+            })
+            .unwrap();
+
+        let result = server
+            .brain_check(BrainCheckInput {
+                slug: Some("memory::people/alice".to_string()),
+            })
+            .unwrap();
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn brain_tags_explicit_collection_slug_updates_only_resolved_page_when_slug_collides() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "memory", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nDefault Alice\n",
+        );
+        create_page_in_collection(
+            &server,
+            "memory",
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nMemory Alice\n",
+        );
+
+        server
+            .brain_tags(BrainTagsInput {
+                slug: "memory::people/alice".to_string(),
+                add: Some(vec!["memory".to_string()]),
+                remove: None,
+            })
+            .unwrap();
+
+        let db = server.db.lock().unwrap();
+        let default_page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
+                ["people/alice"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let memory_page_id: i64 = db
+            .query_row(
+                "SELECT id FROM pages WHERE collection_id = 2 AND slug = ?1",
+                ["people/alice"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let default_tag_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE page_id = ?1",
+                [default_page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let memory_tags: Vec<String> = db
+            .prepare("SELECT tag FROM tags WHERE page_id = ?1 ORDER BY tag")
+            .unwrap()
+            .query_map([memory_page_id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(default_tag_count, 0);
+        assert_eq!(memory_tags, vec!["memory".to_string()]);
     }
 
     #[test]
@@ -2262,7 +3144,7 @@ mod tests {
 
         let text = extract_text(&result);
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(parsed["slug"], "people/alice");
+        assert_eq!(parsed["slug"], "default::people/alice");
     }
 
     #[test]
@@ -2417,6 +3299,7 @@ mod tests {
         let error = server
             .brain_gap(BrainGapInput {
                 query: "".to_string(),
+                slug: None,
                 context: None,
             })
             .unwrap_err();
@@ -2432,6 +3315,7 @@ mod tests {
         let result = server
             .brain_gap(BrainGapInput {
                 query: "who invented quantum socks".to_string(),
+                slug: None,
                 context: Some("test context".to_string()),
             })
             .unwrap();
@@ -2463,12 +3347,14 @@ mod tests {
         let r1 = server
             .brain_gap(BrainGapInput {
                 query: "same query".to_string(),
+                slug: None,
                 context: None,
             })
             .unwrap();
         let r2 = server
             .brain_gap(BrainGapInput {
                 query: "same query".to_string(),
+                slug: None,
                 context: None,
             })
             .unwrap();
@@ -2486,6 +3372,7 @@ mod tests {
         server
             .brain_gap(BrainGapInput {
                 query: "sensitive query".to_string(),
+                slug: None,
                 context: Some("sensitive query with extra details".to_string()),
             })
             .unwrap();
@@ -2514,6 +3401,7 @@ mod tests {
             server
                 .brain_gap(BrainGapInput {
                     query: format!("gap query {i}"),
+                    slug: None,
                     context: None,
                 })
                 .unwrap();
@@ -2538,6 +3426,7 @@ mod tests {
         server
             .brain_gap(BrainGapInput {
                 query: "unresolved gap".to_string(),
+                slug: None,
                 context: None,
             })
             .unwrap();
@@ -2577,6 +3466,362 @@ mod tests {
         assert!(parsed["embedding_count"].is_number());
         assert!(parsed["active_model"].is_string());
         assert!(parsed["db_size_bytes"].is_number());
+    }
+
+    #[test]
+    fn brain_collections_is_read_only_and_returns_frozen_schema_fields() {
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, 2, "archive", false);
+        insert_collection(&conn, 3, "restore", false);
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/default-page",
+            "---\ntitle: Default Page\ntype: note\n---\nDefault\n",
+        );
+
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections
+             SET ignore_parse_errors = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                1_i64,
+                r#"[{"code":"parse_error","line":2,"raw":"**]","message":"invalid glob"}]"#
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'detached',
+                 root_path = 'C:\\vaults\\archive-detached'
+             WHERE id = 2",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 watcher_released_at = '2026-04-24T00:00:00Z',
+                 restore_command_id = 'restore-1'
+             WHERE id = 3",
+            [],
+        )
+        .unwrap();
+        let snapshot_before = db
+            .prepare(
+                "SELECT id, state, root_path, needs_full_sync, ignore_parse_errors, restore_command_id, watcher_released_at
+                 FROM collections
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        drop(db);
+
+        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+
+        let db = server.db.lock().unwrap();
+        let snapshot_after = db
+            .prepare(
+                "SELECT id, state, root_path, needs_full_sync, ignore_parse_errors, restore_command_id, watcher_released_at
+                 FROM collections
+                 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(snapshot_after, snapshot_before);
+        drop(db);
+
+        assert_eq!(rows.len(), 3);
+        let expected_keys = [
+            "name",
+            "root_path",
+            "state",
+            "writable",
+            "is_write_target",
+            "page_count",
+            "last_sync_at",
+            "embedding_queue_depth",
+            "ignore_parse_errors",
+            "needs_full_sync",
+            "recovery_in_progress",
+            "integrity_blocked",
+            "restore_in_progress",
+        ];
+        for row in &rows {
+            let mut actual_keys = row.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+            actual_keys.sort();
+            let mut expected = expected_keys
+                .iter()
+                .map(|key| key.to_string())
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(actual_keys, expected);
+        }
+
+        let default = rows.iter().find(|row| row["name"] == "default").unwrap();
+        assert!(default["root_path"].as_str().is_some());
+        assert_eq!(default["state"], "active");
+        assert!(default["writable"].as_bool().unwrap());
+        assert!(default["is_write_target"].as_bool().unwrap());
+        assert_eq!(default["page_count"], 1);
+        assert!(default["last_sync_at"].is_null());
+        assert!(default["embedding_queue_depth"].as_i64().is_some());
+        assert!(!default["needs_full_sync"].as_bool().unwrap());
+        assert!(!default["recovery_in_progress"].as_bool().unwrap());
+        assert!(default["integrity_blocked"].is_null());
+        assert!(!default["restore_in_progress"].as_bool().unwrap());
+
+        let archive = rows.iter().find(|row| row["name"] == "archive").unwrap();
+        assert!(archive["root_path"].is_null());
+        assert_eq!(archive["state"], "detached");
+        assert!(archive["ignore_parse_errors"].is_null());
+
+        let parse_errors = default["ignore_parse_errors"].as_array().unwrap();
+        assert_eq!(parse_errors.len(), 1);
+        assert_eq!(parse_errors[0]["code"].as_str(), Some("parse_error"));
+        assert_eq!(parse_errors[0]["line"].as_i64(), Some(2));
+        assert_eq!(parse_errors[0]["raw"].as_str(), Some("**]"));
+        assert_eq!(parse_errors[0]["message"].as_str(), Some("invalid glob"));
+
+        let restore = rows.iter().find(|row| row["name"] == "restore").unwrap();
+        assert!(restore["root_path"].is_null());
+        assert_eq!(restore["state"], "restoring");
+        assert!(restore["restore_in_progress"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn brain_collections_surfaces_status_flags_and_terminal_precedence() {
+        const QUEUED_ID: i64 = 20_002;
+        const RUNNING_ID: i64 = 20_003;
+        const TAMPERED_ID: i64 = 20_004;
+        const REASON_ONLY_ID: i64 = 20_005;
+        const DUPLICATE_ID: i64 = 20_006;
+        const TRIVIAL_ID: i64 = 20_007;
+        const RESTORE_PENDING_ID: i64 = 20_008;
+        const WITHIN_WINDOW_ID: i64 = 20_009;
+        const ESCALATED_ID: i64 = 20_010;
+        const PRECEDENCE_ID: i64 = 20_011;
+        const ABSENT_ID: i64 = 20_012;
+
+        let (_dir, conn) = open_test_db();
+        insert_collection(&conn, QUEUED_ID, "queued", false);
+        insert_collection(&conn, RUNNING_ID, "running", false);
+        insert_collection(&conn, TAMPERED_ID, "tampered", false);
+        insert_collection(&conn, REASON_ONLY_ID, "reason-only", false);
+        insert_collection(&conn, DUPLICATE_ID, "duplicate", false);
+        insert_collection(&conn, TRIVIAL_ID, "trivial", false);
+        insert_collection(&conn, RESTORE_PENDING_ID, "restore-pending", false);
+        insert_collection(&conn, WITHIN_WINDOW_ID, "within-window", false);
+        insert_collection(&conn, ESCALATED_ID, "escalated", false);
+        insert_collection(&conn, PRECEDENCE_ID, "precedence", false);
+        insert_collection(&conn, ABSENT_ID, "absent", false);
+        let server = GigaBrainServer::new(conn);
+
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  needs_full_sync = 1
+              WHERE id = ?1",
+            [QUEUED_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  needs_full_sync = 1
+             WHERE id = ?1",
+            [RUNNING_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  integrity_failed_at = '2026-04-24T00:00:00Z'
+             WHERE id = ?1",
+            [TAMPERED_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'duplicate_uuid',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = ?1",
+            [DUPLICATE_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [REASON_ONLY_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'active',
+                  reconcile_halt_reason = 'unresolvable_trivial_content',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = ?1",
+            [TRIVIAL_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  restore_command_id = 'restore-pending-1'
+             WHERE id = ?1",
+            [RESTORE_PENDING_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  pending_manifest_incomplete_at = datetime('now', '-31 seconds')
+             WHERE id = ?1",
+            [WITHIN_WINDOW_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
+                  reconcile_halt_reason = 'duplicate_uuid',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = ?1",
+            [ESCALATED_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  integrity_failed_at = '2026-04-24T00:00:00Z',
+                  pending_manifest_incomplete_at = datetime('now', '-31 minutes'),
+                  reconcile_halt_reason = 'unresolvable_trivial_content',
+                  reconcile_halted_at = '2026-04-24T00:00:00Z'
+             WHERE id = ?1",
+            [PRECEDENCE_ID],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE collections
+             SET ignore_parse_errors = ?2
+             WHERE id = ?1",
+            rusqlite::params![
+                ABSENT_ID,
+                r#"[{"code":"file_stably_absent_but_clear_not_confirmed","line":0,"raw":"","message":".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly"}]"#
+            ],
+        )
+        .unwrap();
+        drop(db);
+
+        vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, true);
+        let result = server.brain_collections(BrainCollectionsInput {}).unwrap();
+        vault_sync::set_collection_recovery_in_progress_for_test(RUNNING_ID, false);
+
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&extract_text(&result)).unwrap();
+        let queued = rows.iter().find(|row| row["name"] == "queued").unwrap();
+        assert!(queued["needs_full_sync"].as_bool().unwrap());
+        assert!(!queued["recovery_in_progress"].as_bool().unwrap());
+        assert!(queued["integrity_blocked"].is_null());
+
+        let running = rows.iter().find(|row| row["name"] == "running").unwrap();
+        assert!(running["needs_full_sync"].as_bool().unwrap());
+        assert!(running["recovery_in_progress"].as_bool().unwrap());
+        assert!(running["integrity_blocked"].is_null());
+
+        let tampered = rows.iter().find(|row| row["name"] == "tampered").unwrap();
+        assert_eq!(
+            tampered["integrity_blocked"].as_str(),
+            Some("manifest_tampering")
+        );
+
+        let reason_only = rows
+            .iter()
+            .find(|row| row["name"] == "reason-only")
+            .unwrap();
+        assert!(reason_only["integrity_blocked"].is_null());
+
+        let duplicate = rows.iter().find(|row| row["name"] == "duplicate").unwrap();
+        assert_eq!(
+            duplicate["integrity_blocked"].as_str(),
+            Some("duplicate_uuid")
+        );
+
+        let trivial = rows.iter().find(|row| row["name"] == "trivial").unwrap();
+        assert_eq!(
+            trivial["integrity_blocked"].as_str(),
+            Some("unresolvable_trivial_content")
+        );
+
+        let restore_pending = rows
+            .iter()
+            .find(|row| row["name"] == "restore-pending")
+            .unwrap();
+        assert_eq!(restore_pending["state"], "restoring");
+        assert!(!restore_pending["restore_in_progress"].as_bool().unwrap());
+
+        let within_window = rows
+            .iter()
+            .find(|row| row["name"] == "within-window")
+            .unwrap();
+        assert!(within_window["integrity_blocked"].is_null());
+
+        let escalated = rows.iter().find(|row| row["name"] == "escalated").unwrap();
+        assert_eq!(
+            escalated["integrity_blocked"].as_str(),
+            Some("manifest_incomplete_escalated")
+        );
+
+        let precedence = rows.iter().find(|row| row["name"] == "precedence").unwrap();
+        assert_eq!(
+            precedence["integrity_blocked"].as_str(),
+            Some("manifest_tampering")
+        );
+
+        let absent = rows.iter().find(|row| row["name"] == "absent").unwrap();
+        let absent_errors = absent["ignore_parse_errors"].as_array().unwrap();
+        assert_eq!(absent_errors.len(), 1);
+        assert_eq!(
+            absent_errors[0]["code"].as_str(),
+            Some("file_stably_absent_but_clear_not_confirmed")
+        );
+        assert!(absent_errors[0]["line"].is_null());
+        assert!(absent_errors[0]["raw"].is_null());
+        assert_eq!(
+            absent_errors[0]["message"].as_str(),
+            Some(".gbrainignore absent but prior mirror exists; use `gbrain collection ignore clear <name> --confirm` to clear explicitly")
+        );
     }
 
     // ── brain_raw ────────────────────────────────────────────
@@ -2792,6 +4037,36 @@ mod tests {
     }
 
     #[test]
+    fn brain_raw_refuses_when_collection_needs_full_sync_even_if_not_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "people/alice".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 1}),
+                overwrite: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("CollectionRestoringError"));
+    }
+
+    #[test]
     fn brain_gap_rejects_oversized_context() {
         let (_dir, conn) = open_test_db();
         let server = GigaBrainServer::new(conn);
@@ -2800,6 +4075,7 @@ mod tests {
         let error = server
             .brain_gap(BrainGapInput {
                 query: "who invented quantum socks".to_string(),
+                slug: None,
                 context: Some(big_context),
             })
             .unwrap_err();
@@ -2817,9 +4093,509 @@ mod tests {
         server
             .brain_gap(BrainGapInput {
                 query: "boundary test query".to_string(),
+                slug: None,
                 context: Some(exact_context),
             })
             .unwrap();
+    }
+
+    #[test]
+    fn brain_gap_without_slug_succeeds_while_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let result = server
+            .brain_gap(BrainGapInput {
+                query: "record this globally".to_string(),
+                slug: None,
+                context: None,
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(parsed["id"].as_i64().is_some());
+
+        let db = server.db.lock().unwrap();
+        let page_id: Option<i64> = db
+            .query_row(
+                "SELECT page_id FROM knowledge_gaps WHERE id = ?1",
+                [parsed["id"].as_i64().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(page_id.is_none());
+    }
+
+    #[test]
+    fn brain_gap_with_slug_refuses_while_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/restore-gap",
+            "---\ntitle: Restore Gap\ntype: note\n---\ncontent\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_gap(BrainGapInput {
+                query: "page-bound gap".to_string(),
+                slug: Some("notes/restore-gap".to_string()),
+                context: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("CollectionRestoringError"));
+    }
+
+    #[test]
+    fn brain_gap_with_slug_binds_gap_to_page_id() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/bound-gap",
+            "---\ntitle: Bound Gap\ntype: note\n---\ncontent\n",
+        );
+
+        let result = server
+            .brain_gap(BrainGapInput {
+                query: "page-bound gap".to_string(),
+                slug: Some("notes/bound-gap".to_string()),
+                context: None,
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        let db = server.db.lock().unwrap();
+        let (page_id, stored_page_id): (i64, Option<i64>) = db
+            .query_row(
+                "SELECT p.id, g.page_id
+                 FROM pages p
+                 JOIN knowledge_gaps g ON g.id = ?1
+                 WHERE p.slug = 'notes/bound-gap'",
+                [parsed["id"].as_i64().unwrap()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(stored_page_id, Some(page_id));
+    }
+
+    #[test]
+    fn brain_gap_with_slug_refuses_when_collection_needs_full_sync() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/needs-sync-gap",
+            "---\ntitle: Needs Sync Gap\ntype: note\n---\ncontent\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_gap(BrainGapInput {
+                query: "page-bound gap".to_string(),
+                slug: Some("notes/needs-sync-gap".to_string()),
+                context: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("CollectionRestoringError"));
+        assert!(error.message.contains("needs_full_sync=true"));
+    }
+
+    // ── 17.5s2 write-interlock mutator matrix ────────────────
+    // brain_put + state='restoring'
+    #[test]
+    fn brain_put_refuses_when_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/blocked".to_string(),
+                content: "---\ntitle: Blocked\ntype: note\n---\nBlocked\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_put must refuse with CollectionRestoringError when state=restoring: {error:?}"
+        );
+    }
+
+    // ── 17.5s5 brain_link refused during restoring ───────────
+    #[test]
+    fn brain_link_refuses_when_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/alice",
+            "---\ntitle: Alice\ntype: person\n---\nAlice\n",
+        );
+        create_page(
+            &server,
+            "companies/acme",
+            "---\ntitle: Acme\ntype: company\n---\nAcme\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/alice".to_string(),
+                to_slug: "companies/acme".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_link must refuse with CollectionRestoringError when state=restoring: {error:?}"
+        );
+    }
+
+    // brain_link + needs_full_sync=1
+    #[test]
+    fn brain_link_refuses_when_collection_needs_full_sync() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/bob",
+            "---\ntitle: Bob\ntype: person\n---\nBob\n",
+        );
+        create_page(
+            &server,
+            "companies/initech",
+            "---\ntitle: Initech\ntype: company\n---\nInitech\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_link(BrainLinkInput {
+                from_slug: "people/bob".to_string(),
+                to_slug: "companies/initech".to_string(),
+                relationship: "works_at".to_string(),
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_link must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
+        );
+        assert!(error.message.contains("needs_full_sync=true"));
+    }
+
+    // ── 17.5s5 brain_check refused during restoring ──────────
+    #[test]
+    fn brain_check_refuses_when_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/check-restoring",
+            "---\ntitle: Check Restoring\ntype: note\n---\ncontent\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_check(BrainCheckInput {
+                slug: Some("notes/check-restoring".to_string()),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_check must refuse with CollectionRestoringError when state=restoring: {error:?}"
+        );
+    }
+
+    // brain_check + needs_full_sync=1
+    #[test]
+    fn brain_check_refuses_when_collection_needs_full_sync() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/check-needs-sync",
+            "---\ntitle: Check Needs Sync\ntype: note\n---\ncontent\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_check(BrainCheckInput {
+                slug: Some("notes/check-needs-sync".to_string()),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_check must refuse with CollectionRestoringError when needs_full_sync=1: {error:?}"
+        );
+        assert!(error.message.contains("needs_full_sync=true"));
+    }
+
+    // ── 17.5s5 brain_raw refused during restoring ────────────
+    #[test]
+    fn brain_raw_refuses_when_collection_is_restoring() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "people/carol",
+            "---\ntitle: Carol\ntype: person\n---\nCarol\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_raw(BrainRawInput {
+                slug: "people/carol".to_string(),
+                source: "crustdata".to_string(),
+                data: json!({"v": 1}),
+                overwrite: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "brain_raw must refuse with CollectionRestoringError when state=restoring: {error:?}"
+        );
+    }
+
+    // ── M1b-ii ordering proofs: interlock wins over OCC ──────
+    // Collection restoring + page EXISTS + no expected_version → CollectionRestoringError, not "already exists"
+    #[test]
+    fn brain_put_collection_interlock_wins_over_update_without_expected_version() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/interlock-exists",
+            "---\ntitle: Interlock\ntype: note\n---\nexisting\n",
+        );
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/interlock-exists".to_string(),
+                content: "---\ntitle: Interlock\ntype: note\n---\novewrite attempt\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "collection interlock must win over 'already exists' conflict: {error:?}"
+        );
+    }
+
+    // Collection restoring + page ABSENT + expected_version supplied → CollectionRestoringError, not "does not exist at version N"
+    #[test]
+    fn brain_put_collection_interlock_wins_over_ghost_expected_version() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let db = server.db.lock().unwrap();
+        db.execute(
+            "UPDATE collections SET state = 'restoring' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/ghost-version".to_string(),
+                content: "---\ntitle: Ghost\ntype: note\n---\ncontent\n".to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(
+            error.message.contains("CollectionRestoringError"),
+            "collection interlock must win over ghost-version OCC conflict: {error:?}"
+        );
+    }
+
+    // ── 17.5qq11 MCP path ────────────────────────────────────
+    #[test]
+    fn brain_put_refuses_when_collection_is_read_only() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        let db = server.db.lock().unwrap();
+        db.execute("UPDATE collections SET writable = 0 WHERE id = 1", [])
+            .unwrap();
+        drop(db);
+
+        let error = server
+            .brain_put(BrainPutInput {
+                slug: "notes/read-only-page".to_string(),
+                content: "---\ntitle: Read Only\ntype: note\n---\nhello\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap_err();
+
+        assert!(
+            error.message.contains("CollectionReadOnlyError"),
+            "brain_put must surface CollectionReadOnlyError when collection is read-only: {error:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn brain_put_happy_path_updates_file_and_clears_mechanical_artifacts() {
+        let (_dir, db_path, conn, vault_root) = open_test_db_with_vault();
+        let server = GigaBrainServer::new(conn);
+        let original = "---\ntitle: Happy\ntype: note\n---\nOriginal body\n";
+        let updated = "---\ntitle: Happy\ntype: note\n---\nUpdated body\n";
+
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/happy".to_string(),
+                content: original.to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+        server
+            .brain_put(BrainPutInput {
+                slug: "notes/happy".to_string(),
+                content: updated.to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap();
+
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert_eq!(
+            fs::read_to_string(vault_root.join("notes").join("happy.md")).unwrap(),
+            updated
+        );
+        let db = server.db.lock().unwrap();
+        assert_eq!(page_version(&db, "notes/happy"), 2);
+        assert_eq!(active_raw_import_count(&db, "notes/happy"), 1);
+    }
+
+    // ── 1.1b response completeness ───────────────────────────
+    #[test]
+    fn brain_gap_with_slug_response_includes_page_id() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+        create_page(
+            &server,
+            "notes/response-gap",
+            "---\ntitle: Response Gap\ntype: note\n---\ncontent\n",
+        );
+
+        let result = server
+            .brain_gap(BrainGapInput {
+                query: "gap with page bound".to_string(),
+                slug: Some("notes/response-gap".to_string()),
+                context: None,
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(
+            parsed["page_id"].as_i64().is_some(),
+            "brain_gap with slug must return page_id in response: {parsed}"
+        );
+    }
+
+    #[test]
+    fn brain_gap_without_slug_response_has_null_page_id() {
+        let (_dir, conn) = open_test_db();
+        let server = GigaBrainServer::new(conn);
+
+        let result = server
+            .brain_gap(BrainGapInput {
+                query: "global gap no page".to_string(),
+                slug: None,
+                context: None,
+            })
+            .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(
+            parsed["page_id"].is_null(),
+            "brain_gap without slug must return null page_id: {parsed}"
+        );
     }
 
     fn extract_text(result: &CallToolResult) -> String {

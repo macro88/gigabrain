@@ -83,7 +83,7 @@ If violations are found, `validate` exits with code 1:
 
 ### `call` — raw MCP tool invocation
 
-Invoke any of the 16 MCP tools directly from the command line. Useful for debugging and scripting.
+Invoke any of the 16 Phase 3 MCP tools directly from the command line. Useful for debugging and scripting. (The vault-sync-engine branch adds a 17th: `brain_collections`.)
 
 ```bash
 # Search via MCP tool
@@ -184,6 +184,6 @@ See `benchmarks/README.md` for prerequisites, Ollama setup, and expected runtime
 ## Related
 
 - [CLI Reference](/reference/cli/) — complete flag and subcommand reference
-- [MCP Server](/guides/mcp-server/) — all 16 MCP tool examples
+- [MCP Server](/guides/mcp-server/) — all MCP tool examples including `brain_collections`
 - [Intelligence Layer](/guides/intelligence-layer/) — Phase 2 graph, contradiction, and gap features
 - [Roadmap](/contributing/roadmap/) — full phase delivery plan

@@ -1,30 +1,63 @@
-updated_at: 2026-04-19T00:00:00Z
-focus_area: v0.9.3 implementation — fts5-search-robustness + assertion-extraction-tightening
-active_issues: [52, 53, 38, 55]
-active_branch: release/v0.9.3
+updated_at: 2026-04-25T09:30:00Z
+focus_area: vault-sync-engine post-quarantine-revision next-slice selection
+active_issues: []
+active_branch: spec/vault-sync-engine
 ---
 
 # What We're Focused On
 
-**Active changes (v0.9.4 target):**
+**Active change (vault-sync-engine):**
 
-1. `fts5-search-robustness` — apply-ready (4/4 artifacts). Covers #52 + #53.
-   Owner: Fry. Reviewers: Leela, Professor.
-   - Apply `sanitize_fts_query` in `gbrain search` (default on, `--raw` to bypass)
-   - Apply sanitizer in MCP `brain_search` handler
-   - Emit `{"error":...}` JSON on raw FTS5 errors
+1. `vault-sync-engine` — Watcher-core follow-up; quarantine lifecycle truth-repaired to the currently safe surface (`7.5`, partial `9.8`, `9.9`, `9.9b`, `17.5g7-i`). `17.5j` is reopened because quarantine restore has been backed out pending a smaller safe implementation; next slice not yet selected.
+    Owner lane: Fry. Reviewers: Professor, Nibbler. Test lane: Scruffy. Revision lane (quarantine): Mom.
+   - M1b-i closed the real write-interlock refusal seam for `17.5s2-s5`
+   - M1b-ii closed Unix precondition/CAS hardening for `12.2`, `12.3`, `12.4a`, `17.5l-s`
+   - M2a-prime closed the Windows platform gate for current vault-sync CLI handlers and truthfully narrowed `12.5` / `17.16a` to vault-byte entry points only
+   - M2b-prime closed the same-slug within-process mutex + narrow mechanical write-through proof seam (`12.4`, narrow `17.5k`, `17.17e`)
+   - M2c closed the explicit finalize-caller proof seam (`17.17b`) with a test-only invariant over production finalize helper call sites
+   - M3a closed `2.4c` as a reconciler-specific wording/closure note: `ignore::WalkBuilder` enumeration with fd-relative revalidation and WARN-skip symlink behavior, not a generic `readdir` walk claim
+   - N1 closed the MCP slug-routing truth seam only: slug-bearing MCP handlers now resolve collection-aware inputs first, page-referencing MCP outputs emit canonical `<collection>::<slug>` addresses, and ambiguity failures expose a stable machine-readable payload
+   - 13.3 closed the CLI parity/output seam only: slug-bearing CLI commands now fail closed on ambiguous bare slugs, accept explicit `<collection>::<slug>` routing, and emit canonical page addresses on CLI outputs that reference pages, including single-page `embed`
+     - 13.6 closed the read-only `brain_collections` MCP seam only: frozen 13-field output, truthful recovery/blocker/restore semantics, and parse-error-only `ignore_parse_errors` surfacing
+     - 13.5 closed the MCP read-filter seam only: `brain_search`, `brain_query`, and `brain_list` accept an optional `collection` filter, default to the sole active collection when exactly one exists, otherwise the write-target collection, and keep `brain_query depth="auto"` expansion fenced to that collection
+     - 9.10 / 9.11 closed the collection-ignore CLI seam only: `gbrain collection ignore add|remove|list|clear --confirm` now uses dry-run-first validation, explicit clear semantics, mirror refresh via ignore helpers, active-root reconcile proofs, and the current collection CLI surface emits stable JSON success payloads with non-zero error exits
+     - 17.5aa5 closed the deferred `brain_collections.ignore_parse_errors` widening only: stable-absence ignore diagnostics now surface on MCP with `line`/`raw` normalized to null, while parse-error entries remain unchanged
+      - Watcher core closed the narrow runtime seam only: serve now runs one watcher per active collection with a bounded queue, 1.5s debounce, reconcile-backed flushes, and path+hash self-write suppression with TTL expiry
+       - Quarantine lifecycle truth repair (Bender): restore has been backed out of the live CLI surface again. The safe landed seam is now `list|export|discard` plus TTL sweep/info count/dedup cleanup; restore remains deferred until it can guarantee crash-durable post-unlink cleanup and a no-replace install path.
+     - Pick the next truthful slice before widening into watcher-driven ignore reload, stats expansion, IPC, or broader mutator coverage
 
-2. `assertion-extraction-tightening` — apply-ready (4/4 artifacts). Covers #38, conditional #55.
-   Owner: Professor. Reviewers: Leela, Nibbler.
-   - Scope extraction to `## Assertions` sections + frontmatter only (Phase A–D)
-   - Phase E (semantic similarity gate for #55) is CONDITIONAL on post-Phase-A benchmark rerun
+**Completed in this branch:**
+- Batch H — Phase 0-3 restore/remap safety helpers + fresh-connection full-hash activation
+- Batch I — restore/remap orchestration + ownership recovery, including legacy write-gating and RCRT-only reopen
+- Batch J — plain sync active-root reconcile path + CLI finalize truth fix
+- Batch K1 — collection add/list plus truthful read-only gate
+- Batch K2 — offline restore integrity closure with CLI finalize path
+- Batch L1 — registry-startup scaffolding + restore-orphan startup recovery
+- Batch L2 — startup-only sentinel recovery
+- Batch M1a — writer-side sentinel crash core
+- Batch M1b-i — write-interlock closure
+- Batch M1b-ii — Unix precondition and CAS hardening
+- Batch M2a-prime — Windows platform gate + vault-byte read-only closure notes
+- Batch M2b-prime — same-slug mutex + narrow mechanical ordering proof
+- Batch M2c — explicit finalize-caller proof
+- Batch M3a — reconciler symlink-walk wording closure
+- Batch N1 — MCP slug-routing truth (`13.1`, `13.2`, `13.4` only)
+- Batch 13.3 — CLI slug parity / canonical output closure
+- Batch 13.5 — MCP collection-filter truth closure
+- Batch 13.6 — `brain_collections` MCP schema/truth closure (`13.6`, `17.5ddd` only)
+- Batch 9.10 / 9.11 — collection ignore CLI + success-summary truth closure
+- Batch 17.5aa5 — `brain_collections` ignore diagnostic widening closure
+- Batch watcher core — serve watcher runtime + self-write dedup closure (`6.1-6.4`, `7.1-7.4`, `7.6`)
+- Batch quarantine seam — dedup cleanup + quarantine list/export/discard + TTL/info (`7.5`, partial `9.8`, `9.9`, `9.9b`, `17.5g7-i`)
+- Batch quarantine revision — export timestamp honesty and discard gating remain landed; restore closure claims withdrawn by later truth repair
+- Batch quarantine truth repair (Bender) — backed quarantine restore out of the live CLI surface; reopened `9.8` / `17.5j` until a no-replace, crash-durable restore slice lands
 
-**Near-complete lanes to finish before v0.9.4:**
-- `configurable-embedding-model` (27/29 tasks)
-- `bge-small-dual-release-channels` (12/14 tasks)
-- `simplified-install` (17/18 tasks)
+**Explicitly deferred after quarantine revision:**
+- Online restore handshake, IPC socket work, and the `17.5pp` / `17.5qq*` series that depend on IPC security design
+- Broader MCP widening and remaining post-Tx-B / destructive restore surfaces beyond startup recovery
+- Full `12.1`, any broader `12.4` claim beyond same-slug within-process mutex, `12.6*`, `12.7`, watcher overflow/supervision/health/live ignore reload, quarantine `audit`, quarantine restore itself (until crash-durable cleanup + no-replace install land), restore overwrite/export-conflict policy, and any broader end-to-end watcher mutation choreography beyond the landed core seam
+- Broader DB-only mutator coverage beyond the narrowed `12.5` / `17.16a` vault-byte closure
+- Live/background recovery worker, IPC/live routing, and any claim that generic startup healing or remap reopen is already complete
+- Post-landing coverage/docs/release/cleanup/issues agenda remains queued until the vault-sync branch reaches an appropriate stop point
 
-**Already fixed in v0.9.2:**
-- #54 PARA type inference → close issue
-
-**Gate:** All v0.9.4 ship gates documented in `.squad/decisions/inbox/leela-v093-routing.md`.
+**Gate:** All closed tasks remain closed. No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes.

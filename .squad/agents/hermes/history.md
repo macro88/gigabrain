@@ -93,3 +93,29 @@
 - Coordinator: Pushed branch, opened PR #33
 
 **Outcome:** All tests pass, release contract coherent, PR #33 open and ready to merge.
+
+## 2026-04-25: Public Docs Refresh — vault-sync-engine promotion-ready pass
+
+**Role:** Docs-site engineer, promotion-readiness pass
+
+**What happened:**
+- Identified and fixed six stale/incorrect docs-site surfaces.
+- `index.mdx` homepage: replaced fake `"Server active at http://localhost:8080"` terminal output with an accurate three-command snippet (`init` → `import` → `serve`). GigaBrain serve is stdio, not HTTP.
+- `install.mdx`: updated version pins `v0.9.2` → `v0.9.4` in both the GitHub Releases download snippet and all `GBRAIN_VERSION` installer examples.
+- `getting-started.mdx`: updated "v4 schema" → "v5 schema" in step 01; updated "sixteen production tools" → "seventeen production tools" in the action banner.
+- `contributing.md`: updated repo layout `schema.sql` annotation "v4 DDL" → "v5 DDL".
+- `phase3-capabilities.md`: updated "16 MCP tools" → "17 MCP tools" in the `call` command description and the Related link at the bottom.
+- `mcp-server.md`: added `brain_collections` as a new vault-sync-engine tool table entry with a full 13-field response shape example. Added `## Phase 3 tool examples` header back after the vault-sync section.
+- `roadmap.md`: added a full vault-sync-engine section listing landed capabilities and explicitly noting restore/IPC as deferred. Cleaned up v0.9.4 version targets row (removed internal #55 issue reference).
+- Verified docs site build: 15 pages, zero errors.
+
+**Outcome:** Docs site is now promotion-ready for what is actually landed. All tool counts accurate (17). Restore and IPC are explicitly deferred in the roadmap — not advertised. Decisions written to `.squad/decisions/inbox/hermes-public-docs-refresh.md`.
+
+## Learnings
+
+- **Fake terminal output is a high-priority stale signal**: `gbrain serve` showing `"Server active at http://localhost:8080"` was the most misleading single line on the site. Any code block with simulated output should be reviewed on every branch that changes serve behavior.
+- **Tool count drift**: When new MCP tools land, update tool count references in: `mcp-server.md` table, `phase3-capabilities.md` description + Related section, `getting-started.mdx` action banner. There are at least four places.
+- **Schema version references**: `getting-started.mdx` step 01 prose, `contributing.md` repo layout annotation. These drift every schema bump.
+- **vault-sync-engine docs strategy**: Document capabilities as "In progress" in roadmap only until the branch merges. Deferred work (restore, IPC) must be explicitly named as deferred — silence reads as "not planned", explicit listing reads as "coming."
+- **Roadmap version targets**: Internal issue numbers (#55 etc.) should not appear in public-facing version target rows.
+- **Homepage and user funnel accuracy (2026-04-25):** User-facing docs misled the audience for months about the MCP surface: the snippet claimed 'Server active at http://localhost:8080' but gbrain serve is stdio JSON-RPC, not HTTP. The fix was not a footnote or a clarification — it was a replacement sequence showing the real transport (init → import → serve with no HTTP output). Never ship example code that contradicts the actual behavior; users will spend days debugging the wrong thing. When correcting this, also surface any major workflow steps that were missing from the funnel (e.g., import was omitted from the homepage but is mandatory to see results).

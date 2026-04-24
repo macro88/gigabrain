@@ -1064,7 +1064,29 @@ pub fn search_vec(
     query: &str,
     k: usize,
     wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
     conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(query, k, wing_filter, collection_filter, conn, false)
+}
+
+pub fn search_vec_canonical(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_internal(query, k, wing_filter, collection_filter, conn, true)
+}
+
+fn search_vec_internal(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    conn: &Connection,
+    canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
     if query.trim().is_empty() || k == 0 {
         return Ok(Vec::new());
@@ -1092,14 +1114,25 @@ pub fn search_vec(
     })?;
     let query_blob = embedding_to_blob(&query_embedding);
 
+    let slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
     let mut sql = format!(
-        "SELECT p.slug, p.title, p.summary, \
+        "SELECT {slug_expr}, p.title, p.summary, \
                 MAX(1.0 - vec_distance_cosine(pev.embedding, ?1)) AS score, \
                 p.wing \
          FROM {vec_table} pev \
          JOIN page_embeddings pe ON pev.rowid = pe.vec_rowid \
-         JOIN pages p ON p.id = pe.page_id \
-         WHERE pe.model = ?2"
+         JOIN pages p ON p.id = pe.page_id{collection_join} \
+         WHERE pe.model = ?2 \
+           AND p.quarantined_at IS NULL"
     );
 
     let mut params: Vec<Box<dyn ToSql>> = vec![Box::new(query_blob), Box::new(model_name)];
@@ -1107,6 +1140,12 @@ pub fn search_vec(
     if let Some(wing) = wing_filter {
         sql.push_str(" AND p.wing = ?3");
         params.push(Box::new(wing.to_owned()));
+    }
+
+    if let Some(collection_id) = collection_filter {
+        sql.push_str(" AND p.collection_id = ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        params.push(Box::new(collection_id));
     }
 
     let limit_index = params.len() + 1;
@@ -1348,7 +1387,7 @@ mod tests {
     #[test]
     fn search_vec_on_empty_db_returns_empty_vec() {
         let conn = open_test_db();
-        let results = search_vec("board member tech company", 5, None, &conn)
+        let results = search_vec("board member tech company", 5, None, None, &conn)
             .expect("empty db search should succeed");
 
         assert!(results.is_empty());
@@ -1400,7 +1439,7 @@ mod tests {
         )
         .expect("insert embedding metadata");
 
-        let err = search_vec("startup founder", 5, None, &conn).unwrap_err();
+        let err = search_vec("startup founder", 5, None, None, &conn).unwrap_err();
 
         assert!(matches!(err, SearchError::Internal { .. }));
     }
@@ -1437,7 +1476,7 @@ mod tests {
         )
         .expect("insert embedding metadata");
 
-        let results = search_vec("startup founder", 5, Some("people"), &conn)
+        let results = search_vec("startup founder", 5, Some("people"), None, &conn)
             .expect("vector search should succeed");
 
         assert_eq!(results.len(), 1);
@@ -1447,6 +1486,69 @@ mod tests {
             "unexpected score: {}",
             results[0].score
         );
+    }
+
+    #[test]
+    fn search_vec_excludes_quarantined_pages_from_results() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, 'person', ?2, ?3, '', '', '{}', 'people', '', 1)",
+            rusqlite::params!["people/alice", "Alice", "Founder"],
+        )
+        .expect("insert active page");
+        conn.execute(
+            "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version, quarantined_at) \
+             VALUES (?1, 'person', ?2, ?3, '', '', '{}', 'people', '', 1, '2026-04-22T00:00:00Z')",
+            rusqlite::params!["people/bob", "Bob", "Founder"],
+        )
+        .expect("insert quarantined page");
+
+        let active_page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch active page id");
+        let quarantined_page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/bob'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch quarantined page id");
+
+        let query_embedding = embed("startup founder").expect("embed query");
+        let query_blob = embedding_to_blob(&query_embedding);
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![1_i64, &query_blob],
+        )
+        .expect("insert active vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![2_i64, &query_blob],
+        )
+        .expect("insert quarantined vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'startup founder', 'hash-a', 2, 'State')",
+            rusqlite::params![active_page_id],
+        )
+        .expect("insert active embedding metadata");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 2, 'truth_section', 0, 'startup founder', 'hash-b', 2, 'State')",
+            rusqlite::params![quarantined_page_id],
+        )
+        .expect("insert quarantined embedding metadata");
+
+        let results = search_vec("startup founder", 5, Some("people"), None, &conn)
+            .expect("vector search should succeed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "people/alice");
     }
 
     #[test]

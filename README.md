@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.4` — Phase 3 complete, FTS5 search hardening, and assertion extraction tightening shipped. The dual-release line ships `airgapped` + `online` install channels with configurable BGE models in the online build. [See the roadmap →](#roadmap)
+**Status:** `v0.9.4` (released) — Phase 3 complete, FTS5 search hardening, and assertion extraction tightening shipped. Active development: `vault-sync-engine` branch adds collections, live-sync watcher, reconciler, and write-safety to the system. [See the roadmap →](#roadmap)
 
 ---
 
@@ -18,6 +18,7 @@ GigaBrain is built in explicit phases. Each phase has a hard gate — no phase b
 | **Phase 1** — Core storage + CLI | ✅ Complete | `gbrain init`, `import`, `get`, `put`, `search`, local embeddings, hybrid search, MCP server, `query`, `compact` |
 | **Phase 2** — Intelligence layer | ✅ Complete | `link`, `graph`, `check`, `gaps`; temporal links, contradiction detection, progressive retrieval, novelty checking, knowledge gaps |
 | **Phase 3** — Skills, Benchmarks + Polish | ✅ Complete (`v0.9.4` — search hardening + assertion tightening) | All 8 skills production-ready, 16 MCP tools, BEIR/corpus-reality/concurrency harnesses, `validate`/`call`/`pipe`/`skills doctor` CLI |
+| **vault-sync-engine** — Collections, live-sync, write safety | 🔄 In progress (`spec/vault-sync-engine` branch) | Collections model, stat-diff reconciler, file watcher, quarantine `list`/`export`/`discard`, write-through `brain_put`, `brain_collections` MCP tool; restore and IPC deferred |
 
 OpenSpec change proposals for all four phases are in [`openspec/changes/`](openspec/changes/). Review them before contributing — they are the design record for every major decision.
 
@@ -48,18 +49,21 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Features
 
-- **Configurable BGE models** — `GBRAIN_MODEL` / `--model` select `small` (default), `base`, `large`, `m3`, or a full Hugging Face model ID in the `online-model` build
-- **Dual release channels** — `airgapped` embeds BGE-small for offline use; `online` stays slimmer and downloads/caches the selected model on first semantic use
 - **SQLite everything** — FTS5 full-text search, `sqlite-vec` vector similarity, typed link graph — all in one `brain.db` file
 - **Local embeddings** — BAAI BGE family via [candle](https://github.com/huggingface/candle) (pure Rust, no ONNX). No OpenAI API key; online builds only need internet for the initial model download
-- **MCP server** — `gbrain serve` exposes all 16 tools over stdio JSON-RPC 2.0. Works with Claude Code, any MCP-compatible agent
+- **MCP server** — `gbrain serve` exposes 16 tools over stdio JSON-RPC 2.0 (17 on the vault-sync-engine branch). Works with Claude Code, any MCP-compatible agent
 - **Hybrid search** — FTS5 keyword + vector semantic search with set-union merge, exact-match short-circuit, and optional palace-style hierarchical filtering
+- **Live file watcher** *(vault-sync-engine branch)* — `gbrain serve` runs a per-collection watcher with 1.5 s debounce and reconcile-backed flushes so the brain stays current as you edit in Obsidian or any editor
+- **Collection management** *(vault-sync-engine branch)* — attach one or more vaults with `gbrain collection add`; per-collection writable/read-only, ignore patterns via `.gbrainignore`, and `<collection>::<slug>` routing across all CLI/MCP surfaces
+- **Quarantine lifecycle** *(vault-sync-engine branch)* — deleted or renamed pages with DB-only state (links, assertions, gaps) are quarantined rather than hard-deleted; inspect, export, or discard via `gbrain collection quarantine list|export|discard`
 - **Progressive retrieval** — token-budget-gated content expansion (summary → section → full page)
 - **Temporal knowledge graph** — typed links with validity windows, contradiction detection via assertions
 - **Knowledge gap tracking** — agent logs what it can't answer; research skill resolves gaps later
 - **Fat skills** — all 8 agent workflows live in markdown SKILL.md files, embedded in the binary and overridable
 - **Integrity validation** — `gbrain validate --all` checks links, assertions, and embeddings
 - **JSONL streaming** — `gbrain pipe` for shell pipeline automation; `gbrain call` for raw MCP tool invocation
+- **Configurable BGE models** — `GBRAIN_MODEL` / `--model` select `small` (default), `base`, `large`, `m3`, or a full Hugging Face model ID in the `online-model` build
+- **Dual release channels** — `airgapped` embeds BGE-small for offline use; `online` stays slimmer and downloads/caches the selected model on first semantic use
 
 ## Tech stack
 
@@ -179,6 +183,12 @@ If you initialize a DB with one model and later open it with another, GigaBrain 
 | `GBRAIN_DB` | Default database path for all commands |
 | `GBRAIN_MODEL` | Embedding model alias or full Hugging Face model ID for the online build |
 | `GBRAIN_CHANNEL` | Installer channel selection (`airgapped` or `online`) |
+| `GBRAIN_WATCH_DEBOUNCE_MS` | Watcher debounce window in milliseconds (default `1500`) |
+| `GBRAIN_QUARANTINE_TTL_DAYS` | Auto-discard TTL for clean quarantined pages (default `30`) |
+| `GBRAIN_RAW_IMPORTS_KEEP` | Per-page raw import history cap (default `10`) |
+| `GBRAIN_RAW_IMPORTS_TTL_DAYS` | TTL for inactive raw import rows (default `90`) |
+| `GBRAIN_RAW_IMPORTS_KEEP_ALL` | Set to `1` to disable raw import GC |
+| `GBRAIN_FULL_HASH_AUDIT_DAYS` | Rehash interval for `collection audit` (default `7`) |
 
 ---
 
@@ -204,6 +214,9 @@ gbrain get people/pedro-franceschi
 
 # Write/update a page
 cat updated.md | gbrain put people/pedro-franceschi
+
+# Collection-qualified slug (vault-sync-engine branch)
+gbrain get "work::people/pedro-franceschi"
 
 # Create a typed, temporal cross-reference
 gbrain link people/pedro-franceschi companies/brex \
@@ -243,6 +256,35 @@ echo '{"tool":"brain_search","input":{"query":"machine learning"}}' | gbrain pip
 # Skill inspection (Phase 3)
 gbrain skills list             # list active skills and resolution order
 gbrain skills doctor           # verify skill hashes and shadowing
+
+# --- Collection management (vault-sync-engine branch) ---
+
+# Attach a vault directory as a collection
+gbrain collection add work /path/to/my-obsidian-vault
+
+# List all collections
+gbrain collection list
+
+# Show extended collection status (ignore parse errors, recovery state, quarantine count)
+gbrain collection info work
+
+# Run a stat-diff reconcile against the active root
+gbrain collection sync work
+
+# Manage ignore patterns (.gbrainignore wrapper)
+gbrain collection ignore add work "drafts/**"
+gbrain collection ignore list work
+gbrain collection ignore remove work "drafts/**"
+gbrain collection ignore clear work --confirm
+
+# Quarantine — pages with DB-only state are quarantined rather than deleted
+gbrain collection quarantine list work
+gbrain collection quarantine export work --out quarantine.json
+gbrain collection quarantine discard work <page-slug>
+
+# Restore a vault root from a backup (offline path; leaves collection in pending-attach until finalized)
+gbrain collection restore work /path/to/backup-vault
+gbrain collection sync work --finalize-pending   # attach and reopen writes
 ```
 
 ## MCP integration
@@ -267,7 +309,9 @@ Add to your MCP client config (e.g. Claude Code):
 
 **Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
 
-All 16 tools are available when you run `gbrain serve`.
+**vault-sync-engine tools (collections):** `brain_collections` *(in `spec/vault-sync-engine` branch)* — returns per-collection status, state, ignore diagnostics, and recovery flags
+
+All 17 tools are available when you run `gbrain serve` from the vault-sync-engine branch (16 from the current `v0.9.4` release).
 
 ## Skills
 
@@ -325,7 +369,7 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ## Contributing
 
-GigaBrain is open for contributions. All three phases have shipped. The current release is `v0.9.4`, which adds FTS5 search hardening and assertion extraction tightening on top of the `v0.9.2` dual-channel line.
+GigaBrain is open for contributions. All three phases have shipped. The current release is `v0.9.4`, which adds FTS5 search hardening and assertion extraction tightening on top of the `v0.9.2` dual-channel line. Active development continues on the `spec/vault-sync-engine` branch, which adds the collections model, live-sync watcher, reconciler, and write-safety infrastructure.
 
 **How we work:**
 

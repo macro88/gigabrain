@@ -38,8 +38,9 @@ fn insert_link(
         })
         .unwrap();
     conn.execute(
-        "INSERT INTO links (from_page_id, to_page_id, relationship, valid_from, valid_until) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO links (
+            from_page_id, to_page_id, relationship, source_kind, valid_from, valid_until
+         ) VALUES (?1, ?2, ?3, 'programmatic', ?4, ?5)",
         rusqlite::params![from_id, to_id, rel, valid_from, valid_until],
     )
     .unwrap();
@@ -81,9 +82,9 @@ fn graph_cli_human_output_nests_depth_two_edges_under_their_parent() {
     assert_eq!(
         lines,
         vec![
-            "people/alice",
-            "  → companies/acme (works_at)",
-            "    → projects/rocket (owns)",
+            "default::people/alice",
+            "  → default::companies/acme (works_at)",
+            "    → default::projects/rocket (owns)",
         ],
         "text output must render depth-2 edges under their parent; got: {output}"
     );
@@ -104,11 +105,11 @@ fn graph_cli_human_output_skips_self_link_back_to_root() {
 
     assert_eq!(
         output.lines().collect::<Vec<_>>(),
-        vec!["people/alice"],
+        vec!["default::people/alice"],
         "self-links must not render the root back into the tree; got: {output}"
     );
     assert!(
-        !output.contains("→ people/alice"),
+        !output.contains("→ default::people/alice"),
         "text output must never contain '→ <root>' for a self-link; got: {output}"
     );
 }
@@ -138,11 +139,14 @@ fn graph_cli_human_self_link_plus_real_neighbour_renders_only_neighbour() {
 
     assert_eq!(
         lines,
-        vec!["people/alice", "  → companies/acme (works_at)"],
+        vec![
+            "default::people/alice",
+            "  → default::companies/acme (works_at)",
+        ],
         "self-link must be suppressed but real neighbours must still render; got: {output}"
     );
     assert!(
-        !output.contains("→ people/alice"),
+        !output.contains("→ default::people/alice"),
         "root must never appear as its own neighbour; got: {output}"
     );
 }
@@ -164,7 +168,7 @@ fn graph_cli_human_output_skips_cycle_back_to_root() {
 
     assert_eq!(
         output.lines().collect::<Vec<_>>(),
-        vec!["a", "  → b (related)"],
+        vec!["default::a", "  → default::b (related)"],
         "cycles must not render an already-on-path node back into the tree; got: {output}"
     );
 }
@@ -215,7 +219,7 @@ fn graph_cli_json_output_has_nodes_and_edges() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|n| n["slug"] == "people/alice")
+        .find(|n| n["slug"] == "default::people/alice")
         .expect("alice node must be present");
     assert!(alice.get("slug").is_some());
     assert!(alice.get("type").is_some());
@@ -223,8 +227,8 @@ fn graph_cli_json_output_has_nodes_and_edges() {
 
     // Verify edge output shape: from, to, relationship
     let edge = &parsed["edges"][0];
-    assert_eq!(edge["from"], "people/alice");
-    assert_eq!(edge["to"], "companies/acme");
+    assert_eq!(edge["from"], "default::people/alice");
+    assert_eq!(edge["to"], "default::companies/acme");
     assert_eq!(edge["relationship"], "works_at");
 }
 

@@ -33,6 +33,24 @@ fn open_disk_db() -> (rusqlite::Connection, tempfile::TempDir) {
     (conn, dir)
 }
 
+fn insert_page(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    uuid: &str,
+    page_type: &str,
+    title: &str,
+    truth: &str,
+    wing: &str,
+) {
+    conn.execute(
+        "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
+                            frontmatter, wing, room, version) \
+         VALUES (?1, ?2, ?3, ?4, '', ?5, '', '{}', ?6, '', 1)",
+        rusqlite::params![slug, uuid, page_type, title, truth, wing],
+    )
+    .expect("insert page");
+}
+
 fn fixtures_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -97,7 +115,7 @@ fn sms_exact_slug_returns_page_as_top_1() {
     ];
 
     for slug in &slugs {
-        let results = hybrid_search(slug, None, &conn, 5).expect("search");
+        let results = hybrid_search(slug, None, None, &conn, 5).expect("search");
         assert!(
             !results.is_empty(),
             "exact-slug search for '{slug}' returned no results"
@@ -128,7 +146,7 @@ fn timeline_retrieval_known_fact_appears_in_top_5() {
     ];
 
     for (query, expected_slug) in &cases {
-        let results = hybrid_search(query, None, &conn, 5).expect("hybrid search");
+        let results = hybrid_search(query, None, None, &conn, 5).expect("hybrid search");
         let slugs: Vec<&str> = results.iter().map(|r| r.slug.as_str()).collect();
         assert!(
             slugs.contains(expected_slug),
@@ -176,27 +194,24 @@ fn conflicting_ingest_contradiction_is_detected() {
     let conn = open_test_db();
 
     // Insert two pages with conflicting facts about the same entity
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('people/alice', 'person', 'Alice', '', \
-                 '## Assertions
-Alice works at Acme Corp.', \
-                 '', '{}', 'people', '', 1)",
-        [],
-    )
-    .expect("insert page 1");
-
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('sources/update', 'concept', 'Update', '', \
-                 '## Assertions
-Alice works at Beta Corp.', \
-                 '', '{}', 'sources', '', 1)",
-        [],
-    )
-    .expect("insert page 2");
+    insert_page(
+        &conn,
+        "people/alice",
+        "01969f11-9448-7d79-8d3f-c68f54761234",
+        "person",
+        "Alice",
+        "## Assertions\nAlice works at Acme Corp.",
+        "people",
+    );
+    insert_page(
+        &conn,
+        "sources/update",
+        "01969f11-9448-7d79-8d3f-c68f54761235",
+        "concept",
+        "Update",
+        "## Assertions\nAlice works at Beta Corp.",
+        "sources",
+    );
 
     // Extract assertions from both pages
     let page_a = gbrain::commands::get::get_page(&conn, "people/alice").expect("get alice");
@@ -228,25 +243,24 @@ Alice works at Beta Corp.', \
 fn prose_only_pages_do_not_create_false_contradictions() {
     let conn = open_test_db();
 
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('notes/research-a', 'concept', 'Research A', '', \
-                 'Alice works at Acme Corp. This paragraph is just narrative analysis.', \
-                 '', '{}', 'notes', '', 1)",
-        [],
-    )
-    .expect("insert prose page 1");
-
-    conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
-                            frontmatter, wing, room, version) \
-         VALUES ('notes/research-b', 'concept', 'Research B', '', \
-                 'Alice works at Beta Corp. This paragraph is also general prose.', \
-                 '', '{}', 'notes', '', 1)",
-        [],
-    )
-    .expect("insert prose page 2");
+    insert_page(
+        &conn,
+        "notes/research-a",
+        "01969f11-9448-7d79-8d3f-c68f54761236",
+        "concept",
+        "Research A",
+        "Alice works at Acme Corp. This paragraph is just narrative analysis.",
+        "notes",
+    );
+    insert_page(
+        &conn,
+        "notes/research-b",
+        "01969f11-9448-7d79-8d3f-c68f54761237",
+        "concept",
+        "Research B",
+        "Alice works at Beta Corp. This paragraph is also general prose.",
+        "notes",
+    );
 
     check::execute_check(&conn, None, true, None).expect("run check --all");
 
@@ -372,7 +386,7 @@ fn latency_100_queries_p95_under_250ms() {
     for i in 0..100 {
         let query = queries[i % queries.len()];
         let start = Instant::now();
-        let _ = hybrid_search(query, None, &conn, 10).expect("search");
+        let _ = hybrid_search(query, None, None, &conn, 10).expect("search");
         durations_ms.push(start.elapsed().as_secs_f64() * 1000.0);
     }
 
@@ -417,7 +431,7 @@ fn fts5_search_finds_all_fixture_pages_by_distinctive_terms() {
     ];
 
     for (term, expected_slug) in cases {
-        let results = search_fts(term, None, &conn, 10).expect("fts search");
+        let results = search_fts(term, None, None, &conn, 10).expect("fts search");
         let slugs: Vec<&str> = results.iter().map(|r| r.slug.as_str()).collect();
         assert!(
             slugs.contains(expected_slug),

@@ -90,6 +90,44 @@ Add to your MCP client config (example for Claude Code):
 | `brain_stats` | Brain statistics (page count, link count, contradiction count, db size) |
 | `brain_raw` | Store raw structured data (API responses, JSON) for a page |
 
+### vault-sync-engine — Collections and write safety
+
+| Tool | Description |
+| --- | --- |
+| `brain_collections` | Read-only collection status: health, state, recovery flags, and ignore diagnostics for all attached vaults |
+
+---
+
+## `brain_collections` — collection status
+
+```json
+{}
+```
+
+**Returns:** JSON array of collection records (`BrainCollectionView`). Each entry includes:
+
+```json
+[
+  {
+    "name": "notes",
+    "root_path": "/Users/alice/notes",
+    "state": "active",
+    "writable": true,
+    "is_write_target": true,
+    "page_count": 142,
+    "last_sync_at": "2026-04-25T09:01:00Z",
+    "embedding_queue_depth": 0,
+    "ignore_parse_errors": null,
+    "needs_full_sync": false,
+    "recovery_in_progress": false,
+    "integrity_blocked": null,
+    "restore_in_progress": false
+  }
+]
+```
+
+`state` values: `"active"` | `"restoring"` | `"detached"`. `root_path` is only populated for `"active"` collections. When `state` is `"restoring"` or `needs_full_sync` is `true`, all mutating tools on that collection return `CollectionRestoringError`. `integrity_blocked` is a string label when an integrity check has halted reconciliation, otherwise `null`.
+
 ---
 
 ## Phase 3 tool examples

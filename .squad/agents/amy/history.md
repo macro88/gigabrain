@@ -5,9 +5,28 @@
 - **Stack:** Rust, rusqlite, SQLite FTS5, sqlite-vec, candle + BGE-small-en-v1.5, clap, rmcp
 - **Created:** 2026-04-13T14:22:20Z
 
+## 2026-04-25: vault-sync-engine post-batch docs refresh
+
+**Role:** Docs truthfulness auditor — README, roadmap, getting-started, contributing
+
+**What happened:**
+- Audited README.md, docs/roadmap.md, docs/getting-started.md, docs/contributing.md against the vault-sync-engine tasks.md and now.md to identify stale claims.
+- Key drift found: (1) schema v4 referenced in two docs when v5 is live on the branch; (2) no mention of `gbrain collection` commands anywhere in user docs; (3) MCP tool count 16 when `brain_collections` makes it 17 on the branch; (4) no mention of quarantine lifecycle; (5) no watcher mention; (6) env var table missing 6+ new vault-sync vars.
+- Updated README.md: status line (vault-sync in progress), roadmap table (added vault-sync row), features section (3 new bullets), MCP tools section (17, with branch note), usage section (full collection command block), env var table (6 new vars), contributing note.
+- Updated docs/roadmap.md: added full vault-sync-engine section with landed items and explicit deferred table.
+- Updated docs/getting-started.md: v4→v5 schema reference, MCP tool count, added vault-sync collections section with quarantine note.
+- Updated docs/contributing.md: repository layout updated (schema.sql v4→v5, new modules: collections.rs, file_state.rs, fs_safety.rs, reconciler.rs, collection.rs, removed duplicate graph.rs).
+- Wrote 7 decisions to `.squad/decisions/inbox/amy-post-batch-docs.md`.
+
+**Outcome:** Four prose docs updated; zero untruthful restore/IPC claims introduced. docs/spec.md and AGENTS.md/CLAUDE.md remain stale and are blocked on future vault-sync implementation tasks (16.3–16.5, 16.8).
+
 ## Learnings
 
 - Docs must make a sophisticated local-first system feel approachable.
+- When a feature branch has partial landings (some tasks closed, others deferred), every user-facing doc claim must be traced to a closed task — never to an open one. Quarantine restore was the key example: task 9.8 was re-opened after a truth repair, so any claim that restore works would have been false.
+- The "deferred items" table in roadmap.md is the right place to park features that are architecturally scoped but not yet safe to ship. Keep it close to the "what landed" list so readers see both in one pass.
+- New env vars from a feature branch accumulate silently — audit the tasks.md for every `GBRAIN_*` variable (grep for the pattern) rather than relying on contributor docs to stay current.
+- When two docs both mention MCP tool count and one is a release (v0.9.4, 16 tools) and one is a branch (vault-sync, 17 tools), use conditional language rather than picking one number — "16 tools in the current release; 17 in the vault-sync-engine branch."
 - OpenSpec proposals are part of the writing input, not just implementation input.
 - The docs goal is excellent onboarding and reference quality.
 - Always define and apply a single status/install matrix across README and all docs pages at once — drift between surfaces confuses users and is hard to catch later.
@@ -142,3 +161,4 @@ The default channel can differ from what earlier proposals assumed. Docs claimin
 - When implementation tasks change fundamental defaults (like A.4 flipping Cargo defaults), documentation changes that completed before that implementation task must be re-validated. There is no automatic triggering mechanism; this must be manually surfaced at review time.
 - Descriptive English ("slimmer binary") is acceptable; contract terms ("slim channel") are not. The distinction needs explicit enforcement at review time.
 - Source-build docs and shell installer docs describe different defaults (online vs. airgapped) which is correct per the design. Users must be aware both paths are legitimate but different.
+- **Docs truthfulness during rapid feature churn (2026-04-25):** When vault-sync-engine batch work is landing weekly, keep all public docs synchronized but explicitly mark deferred work (e.g., 'quarantine restore is not yet implemented'). Schema version bumps, tool count changes (16→17), and feature presence changes are not optional updates — they immediately become truth claims visible to users and need docs to be either current or explicitly cautioned as branch-only.

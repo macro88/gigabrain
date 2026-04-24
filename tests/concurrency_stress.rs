@@ -13,6 +13,7 @@
 
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use gbrain::core::db;
 use gbrain::core::migrate::import_dir;
@@ -27,7 +28,10 @@ fn temp_db_path() -> (String, tempfile::TempDir) {
 }
 
 fn open_conn(path: &str) -> rusqlite::Connection {
-    db::open(path).unwrap_or_else(|e| panic!("open DB at {path}: {e}"))
+    let conn = db::open(path).unwrap_or_else(|e| panic!("open DB at {path}: {e}"));
+    conn.busy_timeout(Duration::from_secs(1))
+        .expect("set busy timeout");
+    conn
 }
 
 /// Insert a test page directly into the DB.

@@ -75,7 +75,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 gbrain init ~/brain.db
 ```
 
-This creates a new `brain.db` file with the full v4 schema — pages, embeddings, links, assertions, and the knowledge-gaps table.
+This creates a new `brain.db` file with the full v5 schema — pages, embeddings, links, assertions, knowledge-gaps table, and (on the vault-sync-engine branch) collections, file_state, and raw_imports tables.
 
 ### 2. Import an existing markdown directory
 
@@ -168,7 +168,9 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 **Phase 3 tools (gaps, stats, raw data):** `brain_gap`, `brain_gaps`, `brain_stats`, `brain_raw`
 
-All 16 tools are live. See [spec.md](spec.md#mcp-server) for tool signatures.
+**vault-sync-engine tools:** `brain_collections` *(in `spec/vault-sync-engine` branch)* — read-only per-collection status including state, ignore diagnostics, and recovery flags
+
+All 16 tools are live in the current `v0.9.4` release; 17 tools in the vault-sync-engine branch. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -372,6 +374,76 @@ cat queries.jsonl | gbrain pipe > results.jsonl
 gbrain skills list     # list active skills with source resolution path
 gbrain skills doctor   # verify SHA-256 hashes, detect override shadowing
 ```
+
+---
+
+## vault-sync-engine: Collections and live-sync
+
+> These commands are implemented on the `spec/vault-sync-engine` branch. They are not yet in a tagged release.
+
+### Attach a vault
+
+```bash
+# Attach a directory as a named collection
+gbrain collection add work /path/to/my-obsidian-vault
+
+# List all collections
+gbrain collection list
+
+# Show extended status: ignore errors, quarantine count, recovery flags
+gbrain collection info work
+```
+
+Once attached, `gbrain serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
+
+> **Unix only.** `gbrain serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `gbrain serve` returns `UnsupportedPlatformError`. The MCP server's read/write tools (`brain_get`, `brain_put`, `brain_query`, etc.) are cross-platform; only the live vault-sync watcher is Unix-gated.
+
+### Ignore patterns
+
+```bash
+# Add a glob to .gbrainignore (dry-run validates before writing)
+gbrain collection ignore add work "drafts/**"
+
+# List active patterns
+gbrain collection ignore list work
+
+# Remove a pattern
+gbrain collection ignore remove work "drafts/**"
+
+# Clear all user patterns (built-in defaults remain)
+gbrain collection ignore clear work --confirm
+```
+
+### Collection-aware slugs
+
+When multiple collections are active, prefix slugs with the collection name:
+
+```bash
+gbrain get "work::people/alice"
+gbrain put "work::people/alice" < page.md
+```
+
+`brain_search`, `brain_query`, and `brain_list` accept an optional `collection` filter; they default to the only active collection when exactly one exists.
+
+### Quarantine
+
+Pages that are deleted or renamed while holding DB-only state (links, assertions, knowledge gaps, contradictions, or `raw_data`) are quarantined rather than hard-deleted.
+
+```bash
+gbrain collection quarantine list work
+gbrain collection quarantine export work --out quarantine.json
+gbrain collection quarantine discard work <page-slug>
+```
+
+> **Unix only.** `gbrain collection quarantine restore` is implemented and available on Unix (macOS/Linux). On Windows it returns `UnsupportedPlatformError`. Restore moves a quarantined page back to active status and re-registers its slug in the collection:
+>
+> ```bash
+> gbrain collection quarantine restore work <page-slug> <relative-path>
+> ```
+>
+> The IPC/online-handshake path (automatic restore on watcher reconnect) remains deferred and is not yet wired.
+
+Auto-sweep TTL (`GBRAIN_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
 
 ---
 

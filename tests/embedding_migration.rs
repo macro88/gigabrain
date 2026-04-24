@@ -32,10 +32,15 @@ fn open_test_db() -> rusqlite::Connection {
 
 fn insert_page(conn: &rusqlite::Connection, slug: &str, title: &str, truth: &str) -> i64 {
     conn.execute(
-        "INSERT INTO pages (slug, type, title, summary, compiled_truth, timeline, \
+        "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, \
                             frontmatter, wing, room, version) \
-         VALUES (?1, 'person', ?2, '', ?3, '', '{}', 'people', '', 1)",
-        rusqlite::params![slug, title, truth],
+         VALUES (?1, ?2, 'person', ?3, '', ?4, '', '{}', 'people', '', 1)",
+        rusqlite::params![
+            slug,
+            gbrain::core::page_uuid::generate_uuid_v7(),
+            title,
+            truth
+        ],
     )
     .expect("insert page");
     conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
@@ -213,7 +218,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     assert_eq!(active_model_name(&conn), model_b_name);
 
     let results_b =
-        gbrain::core::inference::search_vec("knowledge brain embeddings", 10, None, &conn)
+        gbrain::core::inference::search_vec("knowledge brain embeddings", 10, None, None, &conn)
             .expect("search with model B");
 
     // All results should come from model B's embeddings
@@ -245,6 +250,7 @@ fn embedding_migration_zero_cross_model_contamination() {
     let results_a = gbrain::core::inference::search_vec(
         "software engineer distributed systems",
         10,
+        None,
         None,
         &conn,
     )
@@ -364,7 +370,7 @@ fn vec_search_on_empty_model_returns_no_results() {
     )
     .expect("deactivate others");
 
-    let results = gbrain::core::inference::search_vec("anything", 10, None, &conn)
+    let results = gbrain::core::inference::search_vec("anything", 10, None, None, &conn)
         .expect("search empty model");
 
     assert!(

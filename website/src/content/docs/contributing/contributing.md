@@ -21,7 +21,7 @@ Read [Getting Started](/guides/getting-started/) first if you haven't. Read the 
 gigabrain/
 ├── src/
 │   ├── main.rs               # CLI entrypoint (clap dispatch)
-│   ├── schema.sql            # Full v4 DDL (embedded via include_str!)
+│   ├── schema.sql            # Full v5 DDL (embedded via include_str!)
 │   ├── core/                 # Library modules
 │   │   ├── db.rs             # SQLite connection, schema init, WAL, sqlite-vec
 │   │   ├── types.rs          # All structs

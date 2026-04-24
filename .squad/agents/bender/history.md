@@ -164,3 +164,67 @@ This dual-release cycle validated the full team workflow:
 - **CI hermetic testing requires global env vars, not per-test guards.** A test setting `GBRAIN_FORCE_HASH_SHIM=1` via `EnvVarGuard` does NOT make the entire CI job hermetic — the CI job itself must set the env var.
 - **Fix velocity ≠ fix correctness.** Fry produced 4+ fix commits in rapid succession, addressing many bot comments. But the three blockers (which require deeper concurrency reasoning) were not addressed. Volume of fixes is not the same as blocker closure.
 **Lesson learned:** Implementation task ordering matters. When task A.4 changes a fundamental default (Cargo feature flags), document changes that happened before A.4 execution must be invalidated and re-checked after A.4 lands. There's no automatic re-trigger. This needs explicit mention in the pre-review checklist: "if any implementation task changed defaults, re-validate all public docs that mention that default."
+
+## 2026-04-24 M1b-i Write-Gate Proof Closure
+
+- **Scope:** 17.5s2–17.5s5 — write-interlock proof batch (tests/evidence only, no production changes).
+- **Finding:** No missing behavior. All five MCP mutators (`brain_put`, `brain_link`, `brain_check`, `brain_raw`, `brain_gap` slug-bound) already call `ensure_collection_write_allowed` before any mutation. The gate is consistently wired under task 11.8.
+- **New tests (6):** `brain_put_refuses_when_collection_is_restoring`, `brain_link_refuses_when_collection_is_restoring`, `brain_link_refuses_when_collection_needs_full_sync`, `brain_check_refuses_when_collection_is_restoring`, `brain_check_refuses_when_collection_needs_full_sync`, `brain_raw_refuses_when_collection_is_restoring`. All 6 pass.
+- **Pre-existing tests that already covered remaining matrix cells (5):** `brain_put`/`brain_raw` + `needs_full_sync`, `brain_gap` slug ×2, `brain_gap` slug-less.
+- **17.5s2 mutator matrix:** 5 mutators × 2 conditions = 10 cells, all proved. `brain_gap` slug-less correctly excluded (Read carve-out).
+- **Tasks closed:** 17.5s2 ✅, 17.5s3 ✅, 17.5s4 ✅, 17.5s5 ✅
+- **Lesson:** When auditing write-gate coverage, build the explicit (mutator × condition) matrix first. Ad-hoc sampling by condition or by op alone will miss cells.
+
+## 2026-04-24 M1b-ii/M1b-i Session Completion
+
+- **M1b-i proof lane COMPLETE:** Write-gate restoring-state proof closure (tests-only). Found no missing behavior. All mutators already call `ensure_collection_write_allowed` before mutation.
+- **M1b-ii implementation lane COMPLETE (Fry):** Unix precondition/CAS hardening. Real `check_fs_precondition()` helper with self-heal; separate no-side-effect pre-sentinel variant for write path.
+- **Inbox decisions merged:** Bender M1b-i write-gate closure + Fry M1b-ii precondition split decision. Both entries now in canonical `decisions.md`.
+- **Orchestration logs written:** `2026-04-24T12-53-00Z-bender-m1b-i-proof-lane.md` + `2026-04-24T12-54-00Z-fry-m1b-ii-implementation-lane.md`.
+- **Session log written:** `2026-04-24T12-55-00Z-m1b-session.md`.
+- **Status:** Awaiting final Professor + Nibbler gate approval for both M1b-i and M1b-ii.
+
+## 2026-04-25 Docs Validation — vault-sync-engine refresh pass
+
+- **Scope:** Validated all Amy (prose docs), Hermes (website), and Zapp (promo/website) doc changes from the 2026-04-25 vault-sync-engine post-batch refresh.
+- **Site build:** 15 pages, zero errors. ✅
+- **Finding (FIXED):** `docs/roadmap.md` Phase 1 and Phase 2 release lines still said "tag pending" for v0.1.0 and v0.2.0. Both tags are live. Fixed in commit `9f56a16`. Amy added the vault-sync section but missed cleaning up the stale Phase 1/2 release lines. Zapp's D4 decision only targeted the website surface.
+- **All other surfaces approved:** tool counts (16 released / 17 branch), schema version (v5), channel defaults (airgapped), vault-sync branch qualifiers, deferred items tables, install.mdx version pins (v0.9.4), homepage accuracy (no fake HTTP output).
+- **Decision written:** `.squad/decisions/inbox/bender-docs-validation.md`
+
+## Learnings
+
+- **When `docs/roadmap.md` and `website/contributing/roadmap.md` are updated in separate passes, both must be checked for the same stale language.** Zapp's D4 only fixed the website version. Amy updated docs/roadmap.md for vault-sync content but missed the pre-existing stale Phase 1/2 release lines. Rule: any docs-refresh checklist must diff both roadmap files together.
+- **"tag pending" is the most reliably stale string in docs.** Cross-check against `git tag -l` output on every docs validation pass that touches roadmap files.
+
+## Learnings
+
+- **Exact-slug shortcuts must fail closed before generic search fallback.**If a hybrid-query path recognizes a bare slug or `[[slug]]`, ambiguity is a routing failure, not a "no results" case. Returning `None` from the exact-slug fast path silently lies about the seam and hides duplicate-slug defects.
+- **For CLI parity claims, prove every slug-bearing entry point directly.** One `get` ambiguity test is not evidence for `graph`, `timeline`, `check`, `link`, `links`, `backlinks`, `unlink`, or exact-slug `query`. Build the command matrix first, then add one direct refusal assertion per command family so the task text stays truthful.
+- **For frozen MCP diagnostic schemas, test the full predicate, not just the label column.** A terminal discriminator like `integrity_blocked` must prove its timestamp/age gate, precedence, and negative cases (reason present without terminal state, queued recovery, pre-window restore) or reviewers will correctly reject it as overclaimed.
+- **When a restore seam still fails crash-durability and no-replace safety, back the surface out instead of inventing a bigger repair.** A deferred command with explicit task reopen is a better batch than pretending a risky restore is "close enough."
+
+## 2026-04-25 Quarantine Restore Re-Enable Validation
+
+- **Verdict:** APPROVED (conditional on Linux CI green for 5 `#[cfg(unix)]` tests).
+- **Scope:** Narrow quarantine-restore re-enable slice — `linkat` no-replace install, crash-durable rollback, env-gated test hooks, and full gate chain.
+- **Gate chain confirmed fail-closed:**
+  1. Double-gated on Windows: `ensure_unix_collection_command` (CLI) + `#[cfg(not(unix))]` (library). Both independently return `UnsupportedPlatformError`.
+  2. `ensure_collection_vault_write_allowed`: checks `state=Restoring`, `needs_full_sync`, and `writable=false` before any FS mutation.
+  3. `start_short_lived_owner_lease` → `acquire_owner_lease`: refuses live foreign serve-owner with `ServeOwnsCollectionError`.
+  4. Pre-check: `stat_at_nofollow` fd-relative, no-follow. Fires before tempfile creation.
+  5. Install: `linkat_parent_fd` — hard-link, not rename. Cannot silently overwrite a competing target.
+  6. Rollback: every unlink followed by parent `fsync`. Trace test verifies exact event sequence: `unlink:temp → fsync-after-unlink:temp → unlink:target → fsync-after-unlink:target`.
+  7. DB tx only commits after FS install succeeds; on DB failure, `rollback_target_entry` fires.
+  8. All three test hooks (pause, fail-after-install, trace-file) are env-gated no-ops in production.
+- **Tests run:** 1 platform-applicable test in `quarantine_revision_fixes.rs` ✅; 5 `#[cfg(unix)]` tests skipped (Windows); 25/25 `collection_cli_truth.rs` pass (including Windows fail-closed check ✅); 591/591 full suite pass (2 pre-existing unrelated failures).
+- **Minor observation (non-blocking):** `ensure_collection_vault_write_allowed` loads the collection twice — once directly, once through `check_writable`. No logic error, just a redundant DB read.
+- **Linux CI required:** The 5 Unix-specific tests in `quarantine_revision_fixes.rs` (non-Markdown target, live-owned, read-only, post-precheck race, rollback trace) must be confirmed green on Linux before full closure.
+- **Decision written:** `.squad/decisions/inbox/bender-restore-validation.md`
+
+## Learnings
+
+- **Double-gating (CLI dispatch + library `#[cfg(not(unix))]`) is stronger than either gate alone.** When validating platform exclusions, always check that both layers are in place. A platform regression in one leaves the other standing.
+- **Trace-file hooks prove rollback ordering without mocking the filesystem.** The `unlink:X → fsync-after-unlink:X` pattern is a reusable proof seam for any cleanup sequence that must guarantee fsync before returning. See `.squad/skills/quarantine-noreplace-rollback/SKILL.md`.
+- **When validating on Windows, enumerate which `#[cfg(unix)]` tests are being skipped and flag them explicitly.** "1 passed" looks weak but is correct if the other tests are platform-gated. Always note the skip count and where CI must close the gap.
+
