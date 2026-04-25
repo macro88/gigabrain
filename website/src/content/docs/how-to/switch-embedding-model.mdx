@@ -1,0 +1,96 @@
+---
+title: Switch embedding models
+description: Move from bge-small to bge-large (or any HF model), without corrupting your brain.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+Embedding models can't be swapped in place. The vector space is part of the brain's identity — chunks embedded by `bge-small` aren't comparable to chunks embedded by `bge-large`. The only safe migration is **export → init new → import**. This recipe walks through it.
+
+## Before you start
+
+- You're running the **online** build. The airgapped build is pinned to BGE-small.
+- You have free disk space equal to your current `brain.db`.
+
+## Step 1 — Export your existing brain
+
+```bash
+gbrain export ~/brain-export --db ~/brain.db
+```
+
+This writes one markdown file per page to `~/brain-export/`, preserving frontmatter and the compiled-truth + timeline split. (`--raw` if you need byte-exact roundtrip; for a model migration the canonical export is fine.)
+
+## Step 2 — Initialize a new brain with the target model
+
+```bash
+gbrain init ~/brain-large.db --model large
+# or:
+gbrain init ~/brain-multilingual.db --model m3
+# or any HF model ID (online build only):
+gbrain init ~/brain-custom.db --model intfloat/e5-large-v2
+```
+
+`init` writes the model identity into `brain_config`. From this point forward, every open of the new brain will validate against this model.
+
+## Step 3 — Import the export
+
+```bash
+gbrain import ~/brain-export --db ~/brain-large.db
+```
+
+The importer:
+
+- Walks the export directory.
+- Re-creates pages, links, tags, and timeline entries.
+- Enqueues an embedding job for every chunk under the new model.
+
+Embedding the whole corpus takes time proportional to the model's size and your CPU. BGE-small does ~1000 chunks/min on a modern laptop; BGE-large is roughly 4× slower.
+
+## Step 4 — Validate
+
+```bash
+gbrain stats --db ~/brain-large.db          # confirm page/embedding counts
+gbrain validate --db ~/brain-large.db       # link, assertion, embedding integrity
+gbrain query "any test query" --db ~/brain-large.db
+```
+
+## Step 5 — Swap
+
+When you're satisfied:
+
+```bash
+mv ~/brain.db ~/brain.db.bak                # keep a safety net
+mv ~/brain-large.db ~/brain.db
+```
+
+If you have an MCP server in production, restart it (or its parent) so it picks up the new file.
+
+## Why not in-place?
+
+Two reasons:
+
+- **Vector incomparability.** Different models live in different vector spaces. Mixing chunks would silently degrade retrieval quality with no error.
+- **Dimension change.** Different models have different vector widths (384 → 768 → 1024). The vec0 virtual table is dimension-typed; you can't widen it in place.
+
+The runtime check on every brain open is what enforces this — you can't accidentally open a `bge-small` brain with `--model large` and produce nonsense.
+
+## Faster: skip the export round-trip
+
+If you're already syncing a vault as a collection, you can skip the export:
+
+```bash
+gbrain init ~/brain-large.db --model large
+gbrain collection add notes ~/Documents/Obsidian --writable --db ~/brain-large.db
+gbrain serve --db ~/brain-large.db          # watcher will populate from the vault
+```
+
+The reconciler walks the vault and ingests every file fresh under the new model. This avoids the canonicalize-and-reimport round-trip entirely.
+
+## What you'll lose
+
+- **`raw_imports`** rows are not re-created from the canonical export. If you need byte-exact roundtrip retention, use `gbrain export --raw` and `gbrain import` will preserve them.
+- **`knowledge_gaps`** with `query_text` populated are exported as part of the JSON-RPC trail — but if you've cleared them, they're gone.
+- **`assertions`** that were inferred (rather than declared in frontmatter) are re-detected post-import; declared ones round-trip with the page.
+
+Everything else — page versions, timestamps, links, tags, timeline entries, contradictions — round-trips faithfully.

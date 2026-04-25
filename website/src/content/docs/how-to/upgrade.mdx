@@ -1,0 +1,113 @@
+---
+title: Upgrade your binary
+description: Bump to a new gbrain release with SHA-256 verification and a working rollback.
+guide:
+  eyebrow: How-to
+  accentBar: true
+---
+
+The `upgrade` skill walks an agent through this; this page is the same workflow for humans. It covers the version check, the safe-replace, and the post-upgrade validation.
+
+## Check what you have
+
+```bash
+gbrain version
+gbrain stats
+```
+
+Note the binary version and the schema version on the brain (`schema_version` in `brain_config`, currently `5`).
+
+## Find the new release
+
+```bash
+# Latest
+curl -fsSL https://api.github.com/repos/macro88/gigabrain/releases/latest | jq -r '.tag_name'
+
+# Or pin
+GBRAIN_VERSION=v0.9.8
+```
+
+Read the release notes before upgrading. Schema bumps require a migration window.
+
+## Re-run the installer
+
+The shell installer is the supported upgrade path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.8 sh
+```
+
+It:
+
+1. Downloads the matching asset for your platform.
+2. Verifies the SHA-256 checksum.
+3. Stages a tempfile in the install directory.
+4. Atomically renames it over the existing `gbrain` binary.
+5. Runs `gbrain version` to confirm.
+
+If you installed manually, repeat the manual steps:
+
+```bash
+ASSET="gbrain-darwin-arm64-airgapped"
+VERSION="v0.9.8"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
+curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}.sha256" -o "${ASSET}.sha256"
+shasum -a 256 -c "${ASSET}.sha256"
+chmod +x "${ASSET}"
+mv "${ASSET}" ~/.local/bin/gbrain
+```
+
+## Stop the MCP server first
+
+If `gbrain serve` is running (under Claude Code, Cursor, or anywhere else), stop it before swapping the binary:
+
+- macOS: quit Claude Code entirely, then upgrade.
+- Linux: `pkill gbrain` (or quit the parent process).
+
+The atomic `mv` is safe even with the binary in use, but the running process keeps the old version until restarted. Cleaner to stop, swap, restart.
+
+## Validate post-upgrade
+
+```bash
+gbrain version                                # should show new version
+gbrain validate --db ~/brain.db               # all integrity checks
+gbrain stats --db ~/brain.db                  # confirm schema_version
+gbrain skills doctor                          # confirm embedded skills updated correctly
+gbrain query "any test query" --db ~/brain.db  # smoke test
+```
+
+If any check fails, **stop and roll back.** Don't try to fix forward; the release notes will tell you whether the failure is expected (e.g. a schema migration that needs manual approval) or a regression.
+
+## Roll back
+
+If you kept the previous binary or you can re-download it from the GitHub releases page:
+
+```bash
+# Reinstall the previous version
+curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/install.sh \
+  | GBRAIN_VERSION=v0.9.7 sh
+
+gbrain version    # confirm
+```
+
+Brain databases written by a newer version may carry forward-incompatible state (a future schema, an unrecognized config row). Rolling back works cleanly if no migration ran; if a migration did run, restore your `brain.db` from backup.
+
+## Schema migrations
+
+When the schema version bumps:
+
+1. The release notes will say so explicitly.
+2. The first command run against an old brain will refuse to proceed — no implicit migrations.
+3. Use `gbrain validate` first (it'll surface what needs to change).
+4. Then run the documented migration.
+
+We don't auto-migrate. Auto-migrations are how databases die.
+
+## Skill upgrades
+
+When the binary upgrades, the embedded skills upgrade with it. Your overrides at `~/.gbrain/skills/` and in working directories survive — they always win. `gbrain skills doctor` shows you whether your override is now diverged from the new embedded default; review and decide whether to refresh.
+
+## Embedding model upgrades
+
+A binary upgrade does **not** change the embedding model recorded in your brain. Switching models requires the export/import dance — see [Switch embedding models](/how-to/switch-embedding-model/).
