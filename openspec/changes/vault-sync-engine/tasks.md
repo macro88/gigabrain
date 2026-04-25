@@ -125,6 +125,8 @@
 - [x] 6.1 Add `notify` crate (with `macos_fsevents` feature).
   > **Complete (watcher core slice):** Added `notify` with the real crate feature name `macos_fsevent` (singular; task wording used the conceptual plural) and wired it into the serve-only watcher path.
 - [x] 6.2 Per-collection watcher task: one `notify` recommended watcher per collection, events pushed into a bounded `tokio::mpsc` channel tagged with `CollectionId`.
+- [x] 6.2a `gbrain serve` normalizes any `state='active'` collection whose `root_path` is blank before watcher registration so invalid legacy rows do not crash startup.
+  > **Complete (Issue #81 repair):** serve now demotes blank-root active collections to `detached`, logs a WARN, and watcher selection keeps using `trim(root_path) != ''`. Regression coverage includes the collection-normalization seam plus a Unix watcher-selection proof.
 - [x] 6.3 Per-collection debounce buffer; default `GBRAIN_WATCH_DEBOUNCE_MS=1500` coalesces Obsidian bulk saves.
 - [x] 6.4 Batch processor drains the debounce buffer, runs stat-diff, commits updates.
 - [ ] 6.5 Create/Modify handler: re-ingest bytes; never self-write UUID on observed external edits.

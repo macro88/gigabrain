@@ -1,6 +1,6 @@
 # Getting Started with GigaBrain
 
-> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.7` keeps the current vault-sync release surface and adds the macOS release-build fix plus a canonical release-asset contract.
+> GigaBrain is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.8` keeps the current vault-sync release surface and adds the Issue #81 watcher-startup hotfix for legacy blank-root collections.
 
 ## What it does
 
@@ -15,7 +15,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.9.7`: it preserves the current vault-sync surface, fixes the macOS release build, and keeps `airgapped` + `online` assets on one canonical `gbrain-<platform>-<channel>` contract.
+> **Phase 3 is complete, and the first vault-sync slice is shipped.** The current release is `v0.9.8`: it preserves the current vault-sync surface and fixes `gbrain serve` startup when legacy active collections still carry blank root paths.
 >
 > See [roadmap.md](roadmap.md) for the full delivery plan.
 
@@ -26,7 +26,7 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.7` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for online |
 

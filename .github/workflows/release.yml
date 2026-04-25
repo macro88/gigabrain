@@ -210,7 +210,7 @@ jobs:
             cargo build --release --no-default-features --features bundled,online-model
             ```
 
-            This release preserves the current vault-sync surface while fixing the macOS release build and enforcing one canonical public release-asset contract across the installer, workflow, and release checks. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
+            This patch release preserves the current vault-sync surface and fixes Issue #81: `gbrain serve` now normalizes legacy active collections with blank root paths to `detached` before watcher registration, so empty-root bootstrap rows no longer break watcher startup. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
 
             ---
           draft: false

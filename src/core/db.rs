@@ -339,7 +339,7 @@ fn ensure_default_collection(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(
         "INSERT OR IGNORE INTO collections \
              (id, name, root_path, state, writable, is_write_target) \
-         VALUES (1, 'default', '', 'active', 1, 1);",
+         VALUES (1, 'default', '', 'detached', 1, 1);",
     )?;
     Ok(())
 }

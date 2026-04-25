@@ -2,7 +2,7 @@
 
 > Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
-**Status:** `v0.9.7` (release candidate) — current vault-sync surface plus the macOS release-build fix and a canonical release-asset contract shared across installer, workflow, docs, and release checks. [See the roadmap →](#roadmap)
+**Status:** `v0.9.8` (release candidate) — current vault-sync surface plus the Issue #81 watcher-startup hotfix for legacy active collections with blank root paths. [See the roadmap →](#roadmap)
 
 ---
 
@@ -79,18 +79,18 @@ Every knowledge page is a markdown file with this structure. GigaBrain stores th
 
 ## Quick start
 
-> `v0.9.7` keeps the current vault-sync surface and hardens release delivery: macOS release preflight now checks both channels and the public asset contract is centralized around `gbrain-<platform>-<channel>`.
+> `v0.9.8` keeps the current vault-sync surface and fixes Issue #81: `gbrain serve` now normalizes legacy active collections with blank root paths before watcher registration.
 
 ### Install options
 
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — airgapped default |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.7` airgapped + online assets |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — `v0.9.8` airgapped + online assets |
 | `npm install -g gbrain` | 🚧 Staged — online channel by default once published |
 | One-command curl installer | ✅ Available — airgapped by default; set `GBRAIN_CHANNEL=online` for the online asset |
 
-**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.7` using the canonical `gbrain-<platform>-<channel>` asset names. The npm package remains a single wrapper package and targets the `online` channel by default.
+**Build from source** defaults to the airgapped channel. **GitHub Releases** and the **shell installer** expose both channels for `v0.9.8` using the canonical `gbrain-<platform>-<channel>` asset names. The npm package remains a single wrapper package and targets the `online` channel by default.
 
 Install with the shell script:
 
@@ -125,7 +125,7 @@ curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/scripts/inst
 Download a pre-built binary from GitHub Releases:
 
 ```bash
-VERSION="v0.9.7"
+VERSION="v0.9.8"
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 ASSET="gbrain-${PLATFORM}-airgapped"   # or: gbrain-${PLATFORM}-online
 curl -fsSL "https://github.com/macro88/gigabrain/releases/download/${VERSION}/${ASSET}" -o "${ASSET}"
