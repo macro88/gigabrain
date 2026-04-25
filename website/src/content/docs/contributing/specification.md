@@ -1,7 +1,11 @@
 ---
-title: Spec
-description: The authoritative design document for schema, CLI, algorithms, and MCP.
+title: Specification
+description: The authoritative long-form design document for schema, CLI, algorithms, and MCP.
+sidebar:
+  label: Specification
 ---
+
+> This is the canonical long-form specification. For day-to-day reference, the short-form Reference pages — [CLI](/reference/cli/), [MCP tools](/reference/mcp/), [Configuration](/reference/configuration/), [Schema](/reference/schema/), [Page types](/reference/page-types/), [Errors](/reference/errors/) — are usually what you want.
 
 ## Spec metadata
 

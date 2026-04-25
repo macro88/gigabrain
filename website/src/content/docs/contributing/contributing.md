@@ -11,7 +11,7 @@ Welcome. This guide covers everything a new contributor needs to navigate the co
 
 GigaBrain is a local-first personal knowledge brain with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
 
-Read [Getting Started](/guides/getting-started/) first if you haven't. Read the [Spec](/reference/spec/) for the full technical specification.
+Read [Build your first brain](/tutorials/first-brain/) first if you haven't. Read the [Specification](/contributing/specification/) for the full technical specification.
 
 ---
 
@@ -273,7 +273,7 @@ To override a default skill locally, drop a `SKILL.md` in your working directory
 
 ## Getting help
 
-- Full technical spec: [Spec](/reference/spec/)
+- Full technical spec: [Specification](/contributing/specification/)
 - Phased delivery plan: [Roadmap](/contributing/roadmap/)
 - Agent instructions: [AGENTS.md](../AGENTS.md) and [CLAUDE.md](../CLAUDE.md)
 - Open an issue on GitHub for bugs or feature requests.
