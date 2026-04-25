@@ -2072,11 +2072,12 @@ fn sync_collection_watchers(
     db_path: &str,
     watchers: &mut HashMap<i64, CollectionWatcherState>,
 ) -> Result<(), VaultSyncError> {
+    let _ = detach_active_collections_with_empty_root_path(conn)?;
     let mut active = HashMap::new();
     let mut stmt = conn.prepare(
         "SELECT id, root_path, reload_generation
          FROM collections
-         WHERE state = 'active'",
+         WHERE state = 'active' AND trim(root_path) != ''",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -2106,6 +2107,41 @@ fn sync_collection_watchers(
         watchers.insert(collection_id, state);
     }
     Ok(())
+}
+
+#[cfg(any(test, unix))]
+fn detach_active_collections_with_empty_root_path(
+    conn: &Connection,
+) -> Result<Vec<i64>, VaultSyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name
+         FROM collections
+         WHERE state = 'active' AND trim(root_path) = ''",
+    )?;
+    let collections = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !collections.is_empty() {
+        conn.execute(
+            "UPDATE collections
+             SET state = 'detached',
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE state = 'active' AND trim(root_path) = ''",
+            [],
+        )?;
+        for (collection_id, name) in &collections {
+            eprintln!(
+                "WARN: serve_detached_empty_root collection={} collection_id={}",
+                name, collection_id
+            );
+        }
+    }
+    Ok(collections
+        .into_iter()
+        .map(|(collection_id, _)| collection_id)
+        .collect())
 }
 
 #[cfg(unix)]
@@ -4622,6 +4658,10 @@ mod tests {
         let snippet = &source[start..end];
 
         assert!(
+            snippet.contains("detach_active_collections_with_empty_root_path(conn)?;"),
+            "watcher sync must normalize empty root paths before watching: {snippet}"
+        );
+        assert!(
             snippet.contains("WHERE state = 'active'"),
             "watcher sync must only enumerate active collections: {snippet}"
         );
@@ -4638,6 +4678,66 @@ mod tests {
             snippet.contains("state.generation = generation;"),
             "replacement watchers must inherit the new reload_generation: {snippet}"
         );
+    }
+
+    #[test]
+    fn detach_active_collections_with_empty_root_path_normalizes_default_collection() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let work_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'active', root_path = '' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let detached = detach_active_collections_with_empty_root_path(&conn).unwrap();
+        assert_eq!(detached, vec![1]);
+
+        let active_ids = conn
+            .prepare("SELECT id FROM collections WHERE state = 'active' ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(active_ids, vec![work_id]);
+
+        let default_state: String = conn
+            .query_row("SELECT state FROM collections WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(default_state, "detached");
+    }
+
+    /// Regression test for issue #81.
+    ///
+    /// `gbrain serve` must not attempt to watch an empty collection root.
+    #[cfg(unix)]
+    #[test]
+    fn sync_collection_watchers_skips_active_collection_with_empty_root_path() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let work_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'active', root_path = '' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let mut watchers = HashMap::new();
+        sync_collection_watchers(&conn, &db_path, &mut watchers).unwrap();
+
+        assert!(watchers.contains_key(&work_id));
+        assert!(!watchers.contains_key(&1));
+
+        let default_state: String = conn
+            .query_row("SELECT state FROM collections WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(default_state, "detached");
     }
 
     #[test]
