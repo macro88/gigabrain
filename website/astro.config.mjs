@@ -47,6 +47,10 @@ export default defineConfig({
           items: ["guides/intelligence-layer", "guides/phase3-capabilities"],
         },
         {
+          label: "Integrations",
+          items: ["guides/hermes-integration"],
+        },
+        {
           label: "Architecture",
           items: ["reference/architecture", "reference/spec"],
         },

@@ -1,0 +1,81 @@
+---
+title: Integrating Hermes Agent
+description: Learn how to use GigaBrain as the primary semantic memory system for Hermes Agent.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+GigaBrain can function as a powerful, durable memory system for [Hermes Agent](https://github.com/mshumer/hermes). By moving beyond simple text-based memory to a structured, semantically searchable knowledge engine, Hermes gains the ability to recall complex relationships and project history across sessions.
+
+## Why use GigaBrain for Hermes?
+
+- **Semantic Retrieval**: Hermes can query "concepts" rather than just keywords.
+- **PARA Alignment**: Organizes knowledge into Projects, Areas, Resources, and Archives.
+- **Episodic Memory**: Use Timelines to track how a project or decision evolved over time.
+- **Native Tooling**: GigaBrain exposes 17+ tools via MCP (Model Context Protocol).
+
+## Setup Guide
+
+<Steps>
+
+1. ### Install GigaBrain
+   Ensure you have the latest version of GigaBrain installed on your system.
+   ```bash
+   # Install via the official script
+   curl -fsSL https://raw.githubusercontent.com/macro88/gigabrain/main/install.sh | sh
+   ```
+
+2. ### Configure the MCP Server
+   Add GigaBrain as a permanent server in your Hermes configuration file (`~/.hermes/config.yaml`).
+
+   ```yaml
+   mcp:
+     servers:
+       gigabrain:
+         command: "gbrain"
+         args: ["serve"]
+   ```
+
+3. ### Initialize your Docs Vault
+   Hermes works best when GigaBrain is indexing a directory structured using the **PARA** method.
+
+   ```bash
+   mkdir -p ~/docs/{1. Projects,2. Areas,3. Resources,4. Archive}
+   gbrain init ~/docs/brain.db
+   gbrain serve --watch ~/docs/
+   ```
+
+4. ### Update Hermes Memory Logic
+   To ensure Hermes uses GigaBrain instead of its default flat-file memory, you should instruct Hermes to use the `brain_put` and `brain_query` tools for all durable knowledge.
+
+</Steps>
+
+## Agent-Specific Instructions
+
+If you are an AI agent reading this, follow these protocols to manage memory:
+
+### Storing New Facts
+Use `brain_put` to write "Memory Pages" to the vault.
+- **Path Pattern**: `2. Areas/people/[name].md` for preferences, `1. Projects/[name].md` for task state.
+- **Content**: Use Markdown with a `compiled_truth` section for stable facts and a `timeline` section for events.
+
+### Retrieving Context
+At the start of a session or a complex task, run a semantic query to pull relevant truth into your active context.
+
+```bash
+# Example query for an agent
+gbrain query "What are the user's preferences for writing code?"
+```
+
+## Configuration Summary
+
+| Component | Setting |
+| :--- | :--- |
+| **Protocol** | MCP (Model Context Protocol) |
+| **Durable Store** | SQLite + Vector DB (`brain.db`) |
+| **Memory Org** | PARA Method |
+| **Auto-Sync** | Enabled via `gbrain serve --watch` |
+
+---
+
+*Note: For more advanced usage, see the [MCP Server Reference](/guides/mcp-server/).*
