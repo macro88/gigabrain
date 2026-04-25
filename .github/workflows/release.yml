@@ -232,7 +232,7 @@ jobs:
             cargo build --release --no-default-features --features bundled,online-model
             ```
 
-            **v0.9.6** ships the first vault-sync slice: collections, Unix-gated `gbrain serve`, live watcher sync, quarantine tooling, `brain_collections`, and narrow Unix quarantine restore. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
+            This release preserves the current vault-sync surface: collections, Unix-gated `gbrain serve`, live watcher sync, quarantine tooling, `brain_collections`, and narrow Unix quarantine restore. The `online` build still supports configurable BGE models via `GBRAIN_MODEL` / `--model`; `airgapped` embeds BGE-small-en-v1.5. npm installs the `online` channel; the shell installer defaults to `airgapped`.
 
             ---
           draft: false
