@@ -1,6 +1,6 @@
 {
   "name": "gbrain",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "GigaBrain personal knowledge brain CLI (online BGE-small channel)",
   "bin": {
     "gbrain": "bin/gbrain"

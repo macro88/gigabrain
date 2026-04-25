@@ -840,3 +840,8 @@ Ready for implementation and landing.
 - `src/core/vault_sync.rs` is the right regression seam for serve-only watcher bootstrapping: normalize invalid collection rows there and keep the proof close to watcher selection.
 - Cross-platform proof should target the deterministic normalization helper (`detach_active_collections_with_empty_root_path`), while the Unix-only watcher test can stay narrow and just prove the active watcher set excludes blank-root rows.
 - The default collection bootstrap is `root_path=''` plus `state='detached'` in `src/core/db.rs`; tests that want the old broken state must opt into it explicitly with `UPDATE collections SET state='active', root_path='' WHERE id = 1`.
+
+### 2026-04-25 11:35:00 - Issue #81 release-ready patch lane
+
+- When a hotfix PR is the next shippable patch, bump every public version truth that users can copy from (`Cargo.toml`, npm package metadata, runtime user agent, README/docs install snippets) in the same change or the release surface drifts immediately.
+- GitHub release body text is part of the product contract: keep install commands stable, but rewrite the explanatory paragraph so it names the actual hotfix instead of inheriting stale notes from the prior patch lane.
