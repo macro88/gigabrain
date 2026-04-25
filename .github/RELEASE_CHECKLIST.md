@@ -38,7 +38,8 @@ workflow did not complete successfully — do not hand-patch partial releases.
 
 The public asset schema is `gbrain-<platform>-<channel>` where `<platform>` ∈
 `{darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64}` and `<channel>` ∈
-`{airgapped, online}`. This is the same contract used by `install.sh`. Do not approve a
+`{airgapped, online}`. `.github/release-assets.txt` is the canonical manifest shared by
+`install.sh` validation, the release workflow, and release-check tests. Do not approve a
 release whose checklist, docs, or workflow diverge from this schema.
 
 ---

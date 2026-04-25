@@ -112,6 +112,9 @@ jobs:
       - name: Run installer profile tests
         run: sh tests/install_profile.sh
 
+      - name: Run release asset parity tests
+        run: sh tests/release_asset_parity.sh
+
       - name: Run installer release seam tests
         run: sh tests/install_release_seam.sh
 

@@ -4,7 +4,7 @@
 # Verifies that:
 #   1. Every install.sh-resolvable asset name (platform × channel) appears as an `artifact:`
 #      entry in .github/workflows/release.yml.
-#   2. The release.yml manifest's expected[] array contains exactly those same names.
+#   2. The release workflow consumes the canonical `.github/release-assets.txt` manifest.
 #   3. No asset is present in the workflow but absent from the installer's resolution logic
 #      (and vice versa).
 #
@@ -34,34 +34,34 @@ not_ok() {
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_SH="$SCRIPT_DIR/scripts/install.sh"
 RELEASE_YML="$SCRIPT_DIR/.github/workflows/release.yml"
+MANIFEST="$SCRIPT_DIR/.github/release-assets.txt"
+TEST_ROOT="$SCRIPT_DIR/target/test-release-asset-parity"
+BIN_DIR="$TEST_ROOT/bin"
+HOME_DIR="$TEST_ROOT/home"
 
-# ── Canonical manifest ─────────────────────────────────────────
-# This is the authoritative list: 4 platforms × 2 channels = 8 assets.
-# Update this list only when adding or removing a supported platform/channel,
-# and update install.sh + release.yml in the same commit.
-CANONICAL="
-gbrain-darwin-arm64-airgapped
-gbrain-darwin-arm64-online
-gbrain-darwin-x86_64-airgapped
-gbrain-darwin-x86_64-online
-gbrain-linux-x86_64-airgapped
-gbrain-linux-x86_64-online
-gbrain-linux-aarch64-airgapped
-gbrain-linux-aarch64-online
-"
+rm -rf "$TEST_ROOT"
+mkdir -p "$BIN_DIR" "$HOME_DIR"
+
+canonical_assets() {
+  grep -Ev '^(#|$|install\.sh$|.*\.sha256$)' "$MANIFEST"
+}
+
+manifest_entries() {
+  grep -Ev '^(#|$)' "$MANIFEST"
+}
 
 printf '\nRunning release asset parity tests...\n\n'
 
-# ── T1: install.sh resolve_platform + resolve_channel cover every canonical name ──
+# ── T1: install.sh resolve_platform + resolve_channel cover every canonical binary name ──
 # Source installer in test mode to get access to resolve_platform/resolve_channel helpers.
 GBRAIN_TEST_MODE=1 \
   GBRAIN_RELEASE_API_URL="https://example.invalid" \
   GBRAIN_RELEASE_BASE_URL="https://example.invalid" \
-  GBRAIN_INSTALL_DIR="/tmp/bender-parity-test-bin" \
+  GBRAIN_INSTALL_DIR="$BIN_DIR" \
   GBRAIN_NO_PROFILE=0 \
   GBRAIN_CHANNEL="airgapped" \
   GBRAIN_VERSION="v0.0.0-test" \
-  HOME="/tmp/bender-parity-test-home" \
+  HOME="$HOME_DIR" \
   . "$INSTALL_SH"
 
 # Simulate install.sh asset naming for all platform+channel combos.
@@ -73,7 +73,7 @@ simulate_asset() {
   printf 'gbrain-%s-%s' "$platform" "$channel"
 }
 
-for name in $CANONICAL; do
+for name in $(canonical_assets); do
   # Extract platform and channel from canonical name
   # Format: gbrain-<platform>-<channel>  where channel is last segment
   channel="${name##*-}"
@@ -87,8 +87,8 @@ for name in $CANONICAL; do
   fi
 done
 
-# ── T2: every canonical name appears as artifact: in release.yml ──
-for name in $CANONICAL; do
+# ── T2: every canonical binary appears as artifact: in release.yml ──
+for name in $(canonical_assets); do
   if grep -Fq "artifact: ${name}" "$RELEASE_YML"; then
     ok "T2[$name]: release.yml matrix has artifact: $name"
   else
@@ -96,49 +96,57 @@ for name in $CANONICAL; do
   fi
 done
 
-# ── T3: release.yml expected[] manifest contains every canonical name ──
-for name in $CANONICAL; do
-  if grep -Fq "$name" "$RELEASE_YML"; then
-    ok "T3[$name]: release.yml manifest expected[] lists $name"
-  else
-    not_ok "T3[$name]: release.yml manifest expected[] is missing $name"
-  fi
-done
+# ── T3: release.yml reads the canonical manifest directly ──
+if grep -Fq ".github/release-assets.txt" "$RELEASE_YML"; then
+  ok "T3: release.yml reads .github/release-assets.txt as the canonical manifest"
+else
+  not_ok "T3: release.yml does not read .github/release-assets.txt"
+fi
 
 # ── T4: no extra artifact: lines in release.yml beyond the canonical set ──
-# Count artifact: entries in the matrix; must equal 2 × canonical count (binary + checksum
-# is one artifact upload, so there should be exactly 8 artifact entries + 8 sha256 = handled
-# as pairs). Check that artifact: count equals canonical asset count.
 workflow_artifact_count=$(grep -c "artifact: gbrain-" "$RELEASE_YML" || true)
-canonical_count=$(printf '%s\n' $CANONICAL | grep -c "gbrain-" || true)
+canonical_count=$(canonical_assets | grep -c "gbrain-" || true)
 if [ "$workflow_artifact_count" = "$canonical_count" ]; then
   ok "T4: release.yml has exactly $canonical_count artifact: entries (no extras or gaps)"
 else
   not_ok "T4: release.yml has $workflow_artifact_count artifact: entries; want $canonical_count"
 fi
 
-# ── T5: RELEASE_CHECKLIST.md uses channel-suffixed names, not bare platform names ──
-CHECKLIST="$SCRIPT_DIR/.github/RELEASE_CHECKLIST.md"
-if [ -f "$CHECKLIST" ]; then
-  # Check that no bare (non-channel-suffixed) binary names appear in the checklist.
-  # Bare names look like: gbrain-darwin-arm64` or gbrain-linux-x86_64` without -airgapped/-online.
-  bare_count=$(grep -Ec 'gbrain-(darwin|linux)-(arm64|x86_64|aarch64)[^-]' "$CHECKLIST" || true)
-  if [ "$bare_count" = "0" ]; then
-    ok "T5: RELEASE_CHECKLIST.md contains no bare (unsuffixed) binary names"
-  else
-    not_ok "T5: RELEASE_CHECKLIST.md still has $bare_count bare binary name(s) without -airgapped/-online suffix"
-  fi
+# ── T5: canonical manifest counts remain closed ──
+manifest_count=$(manifest_entries | wc -l | tr -d ' ')
+if [ "$manifest_count" = "17" ]; then
+  ok "T5: canonical manifest has 17 release files (8 binaries + 8 checksums + install.sh)"
 else
-  not_ok "T5: .github/RELEASE_CHECKLIST.md not found"
+  not_ok "T5: canonical manifest has $manifest_count entries; want 17"
 fi
 
-# ── T6: installer does not attempt to download anything without channel suffix ──
-# Verify that install.sh always appends CHANNEL to the asset name (no fallback bare path).
+# ── T6: RELEASE_CHECKLIST.md uses channel-suffixed names and points at the manifest ──
+CHECKLIST="$SCRIPT_DIR/.github/RELEASE_CHECKLIST.md"
+if [ -f "$CHECKLIST" ]; then
+  bare_count=$(grep -Ec 'gbrain-(darwin|linux)-(arm64|x86_64|aarch64)[^-]' "$CHECKLIST" || true)
+  if [ "$bare_count" = "0" ] && grep -Fq ".github/release-assets.txt" "$CHECKLIST"; then
+    ok "T6: RELEASE_CHECKLIST.md contains no bare binary names and references the canonical manifest"
+  else
+    not_ok "T6: RELEASE_CHECKLIST.md is missing the canonical-manifest reference or still has bare binary names"
+  fi
+else
+  not_ok "T6: .github/RELEASE_CHECKLIST.md not found"
+fi
+
+# ── T7: installer does not attempt to download anything without channel suffix ──
 if grep -Fq 'gbrain-${PLATFORM}-${CHANNEL}' "$INSTALL_SH" || \
    grep -Fq '"gbrain-${PLATFORM}-${CHANNEL}"' "$INSTALL_SH"; then
-  ok "T6: install.sh asset name always includes CHANNEL suffix (no bare fallback path)"
+  ok "T7: install.sh asset name always includes CHANNEL suffix (no bare fallback path)"
 else
-  not_ok "T6: install.sh asset construction does not consistently include CHANNEL suffix"
+  not_ok "T7: install.sh asset construction does not consistently include CHANNEL suffix"
+fi
+
+# ── T8: spec docs describe the channel-suffixed schema ──
+if grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/docs/spec.md" && \
+   grep -Fq 'gbrain-<platform>-<channel>' "$SCRIPT_DIR/website/src/content/docs/reference/spec.md"; then
+  ok "T8: spec docs describe the channel-suffixed release asset schema"
+else
+  not_ok "T8: spec docs are missing the channel-suffixed release asset schema"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────

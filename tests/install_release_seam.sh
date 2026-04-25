@@ -19,6 +19,7 @@ not_ok() {
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_SH="$SCRIPT_DIR/scripts/install.sh"
 RELEASE_YML="$SCRIPT_DIR/.github/workflows/release.yml"
+MANIFEST="$SCRIPT_DIR/.github/release-assets.txt"
 TEST_ROOT="$SCRIPT_DIR/target/test-install-release-seam"
 STUBS_DIR="$TEST_ROOT/stubs"
 
@@ -57,8 +58,8 @@ check_case() {
   expected_asset="$5"
 
   PATH="$STUBS_DIR:$ORIGINAL_PATH"
-  GBRAIN_TEST_UNAME_S="$uname_s"
-  GBRAIN_TEST_UNAME_M="$uname_m"
+  export GBRAIN_TEST_UNAME_S="$uname_s"
+  export GBRAIN_TEST_UNAME_M="$uname_m"
   GBRAIN_CHANNEL="$channel"
 
   resolve_platform
@@ -72,16 +73,28 @@ check_case() {
     not_ok "${label}: installer resolved ${asset_name} (expected ${expected_asset})"
   fi
 
+  if grep -Fxq "${expected_asset}" "$MANIFEST"; then
+    ok "${label}: canonical manifest includes ${expected_asset}"
+  else
+    not_ok "${label}: canonical manifest is missing ${expected_asset}"
+  fi
+
   if grep -Fq "artifact: ${expected_asset}" "$RELEASE_YML"; then
     ok "${label}: release workflow builds ${expected_asset}"
   else
     not_ok "${label}: release workflow is missing artifact ${expected_asset}"
   fi
 
-  if grep -Fq "${checksum_name}" "$RELEASE_YML"; then
-    ok "${label}: release manifest includes ${checksum_name}"
+  if grep -Fq ".github/release-assets.txt" "$RELEASE_YML"; then
+    ok "${label}: release workflow reads the canonical manifest for ${checksum_name}"
   else
-    not_ok "${label}: release manifest is missing ${checksum_name}"
+    not_ok "${label}: release workflow does not read the canonical manifest for ${checksum_name}"
+  fi
+
+  if grep -Fxq "${checksum_name}" "$MANIFEST"; then
+    ok "${label}: canonical manifest includes ${checksum_name}"
+  else
+    not_ok "${label}: canonical manifest is missing ${checksum_name}"
   fi
 }
 
