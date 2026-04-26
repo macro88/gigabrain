@@ -1,6 +1,6 @@
 ---
-title: Why GigaBrain
-description: "A local-first brain that scales past thousands of markdown files — no cloud, no API keys, no compromise."
+title: Why Quaid
+description: "A local-first memory that scales past thousands of markdown files — no cloud, no API keys, no compromise."
 guide:
   eyebrow: Positioning
   accentBar: true
@@ -52,34 +52,34 @@ import GuideVisualPanel from "../../components/docs/GuideVisualPanel.astro";
 </p>
 
 <p>
-  <strong>GigaBrain</strong> flips that arrangement. It is an architectural approach to software — built with the same philosophy as a physical library: heavy, stable, inspectable, and entirely yours.
+  <strong>Quaid</strong> flips that arrangement. It is an architectural approach to software — built with the same philosophy as a physical library: heavy, stable, inspectable, and entirely yours.
 </p>
 
 <blockquote class="gb-guide-quote">
   Intelligence should not require a handshake with the cloud.
 </blockquote>
 
-## What makes GigaBrain different
+## What makes Quaid different
 
-GigaBrain holds four positions that, together, no other knowledge tool occupies:
+Quaid holds four positions that, together, no other knowledge tool occupies:
 
 - **Local-first.** Compute and storage both live on your machine. The model weights ship in the binary on the airgapped channel; on the online channel they're cached after a one-time download. Nothing leaves the box.
 - **Agent-native.** The MCP server is not an afterthought — it predates any GUI. The same surface that humans use through the CLI is exposed to Claude Code, Cursor, and any other MCP-compatible client over stdio.
-- **Single binary.** No container, no Python runtime, no service mesh. `gbrain` is one statically linked file. Drop it on a laptop, a Pi, or an air-gapped workstation and it works the same.
+- **Single binary.** No container, no Python runtime, no service mesh. `quaid` is one statically linked file. Drop it on a laptop, a Pi, or an air-gapped workstation and it works the same.
 - **Hybrid retrieval.** FTS5 for precise keyword matches and a local BGE vector index for semantic recall, fused with set-union and a short-match short-circuit. You don't pick keyword *or* semantic — both run, both rank, and the merged answer is what you read.
 
 ## Built for an agent-first world
 
-The same single-file brain answers full-text searches, semantic queries, graph exploration, contradiction checks, and MCP tool calls without handing custody of your data to anyone else.
+The same single-file memory answers full-text searches, semantic queries, graph exploration, contradiction checks, and MCP tool calls without handing custody of your data to anyone else.
 
-It also stays current. The v0.9.6 release added a live file watcher that follows your Obsidian vault as you edit — reconcile-backed, with a 1.5 s debounce and write-safety interlocks — so the brain that an AI agent reads is always the same brain you just updated. _(Unix/macOS/Linux only.)_
+It also stays current. The v0.9.6 release added a live file watcher that follows your Obsidian vault as you edit — reconcile-backed, with a 1.5 s debounce and write-safety interlocks — so the memory that an AI agent reads is always the same memory you just updated. _(Unix/macOS/Linux only.)_
 
 <GuideActionBanner
   title={"Ready to own the stack end to end?"}
   primaryHref={"/tutorials/install/"}
-  primaryText={"Install GigaBrain"}
-  secondaryHref={"https://github.com/macro88/gigabrain"}
+  primaryText={"Install Quaid"}
+  secondaryHref={"https://github.com/quaid-app/quaid"}
   secondaryText={"View on GitHub"}
 >
-  <p>Start with the install tutorial, build your first brain in ten minutes, and wire it into the tools and agents you already use.</p>
+  <p>Start with the install tutorial, build your first memory in ten minutes, and wire it into the tools and agents you already use.</p>
 </GuideActionBanner>

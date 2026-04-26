@@ -14,7 +14,7 @@ export default defineConfig({
     starlight({
       title: "Quaid",
       description:
-        "The personal knowledge brain. SQLite + FTS5 + vector embeddings in one file.",
+        "The personal knowledge memory. SQLite + FTS5 + vector embeddings in one file.",
       customCss: ["./src/styles/custom.css"],
       components: {
         Header: "./src/components/Header.astro",
@@ -36,7 +36,7 @@ export default defineConfig({
           label: "Tutorials",
           items: [
             "tutorials/install",
-            "tutorials/first-brain",
+            "tutorials/first-memory",
             "tutorials/connect-claude-code",
           ],
         },

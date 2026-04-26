@@ -1,14 +1,14 @@
 ---
 title: MCP tool reference
-description: Every brain_* tool exposed by gbrain serve, with parameters, returns, and JSON-RPC examples.
+description: Every memory_* tool exposed by quaid serve, with parameters, returns, and JSON-RPC examples.
 guide:
   eyebrow: Reference
   accentBar: true
 ---
 
-`gbrain serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Seventeen `brain_*` tools cover the read, write, graph, intelligence, and stats surfaces. This page is the canonical catalog.
+`quaid serve` exposes a stdio MCP server that speaks JSON-RPC 2.0. Seventeen `memory_*` tools cover the read, write, graph, intelligence, and stats surfaces. This page is the canonical catalog.
 
-The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `gbrain serve` and exchanging JSON-RPC over stdin/stdout. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
+The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
 
 ## Conventions
 
@@ -21,27 +21,27 @@ The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom r
 
 | Tool | Purpose | Mutates |
 | ---- | ------- | :-----: |
-| `brain_get` | Read a page | – |
-| `brain_put` | Create or update a page (OCC) | ✓ |
-| `brain_query` | Hybrid semantic + FTS5 query | – |
-| `brain_search` | FTS5 keyword search | – |
-| `brain_list` | List pages with filters | – |
-| `brain_link` | Create a temporal link | ✓ |
-| `brain_link_close` | Close a temporal link interval | ✓ |
-| `brain_backlinks` | List inbound links | – |
-| `brain_graph` | N-hop graph neighbourhood | – |
-| `brain_check` | Contradiction detection | – |
-| `brain_timeline` | Timeline entries for a page | – |
-| `brain_tags` | List, add, or remove tags | ✓ |
-| `brain_gap` | Log a knowledge gap (privacy-safe) | ✓ |
-| `brain_gaps` | List knowledge gaps | – |
-| `brain_stats` | Brain statistics | – |
-| `brain_collections` | List collection status | – |
-| `brain_raw` | Store raw structured data | ✓ |
+| `memory_get` | Read a page | – |
+| `memory_put` | Create or update a page (OCC) | ✓ |
+| `memory_query` | Hybrid semantic + FTS5 query | – |
+| `memory_search` | FTS5 keyword search | – |
+| `memory_list` | List pages with filters | – |
+| `memory_link` | Create a temporal link | ✓ |
+| `memory_link_close` | Close a temporal link interval | ✓ |
+| `memory_backlinks` | List inbound links | – |
+| `memory_graph` | N-hop graph neighbourhood | – |
+| `memory_check` | Contradiction detection | – |
+| `memory_timeline` | Timeline entries for a page | – |
+| `memory_tags` | List, add, or remove tags | ✓ |
+| `memory_gap` | Log a knowledge gap (privacy-safe) | ✓ |
+| `memory_gaps` | List knowledge gaps | – |
+| `memory_stats` | Memory statistics | – |
+| `memory_collections` | List collection status | – |
+| `memory_raw` | Store raw structured data | ✓ |
 
 ## Read tools
 
-### `brain_get`
+### `memory_get`
 
 > Get a page by slug.
 
@@ -53,13 +53,13 @@ Returns the rendered markdown of the page (compiled truth + timeline).
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-  "name":"brain_get","arguments":{"slug":"people/alice"}
+  "name":"memory_get","arguments":{"slug":"people/alice"}
 }}
 ```
 
 Errors: `NotFound`, `Ambiguity`.
 
-### `brain_search`
+### `memory_search`
 
 > FTS5 full-text search.
 
@@ -72,7 +72,7 @@ Errors: `NotFound`, `Ambiguity`.
 
 Returns a JSON array of `{slug, title, snippet, score}`.
 
-### `brain_query`
+### `memory_query`
 
 > Hybrid semantic + FTS5 query.
 
@@ -86,7 +86,7 @@ Returns a JSON array of `{slug, title, snippet, score}`.
 
 Returns a ranked, fused result list with optional progressive context up to the active token budget.
 
-### `brain_list`
+### `memory_list`
 
 > List pages with optional filters.
 
@@ -99,7 +99,7 @@ Returns a ranked, fused result list with optional progressive context up to the 
 
 ## Write tools
 
-### `brain_put`
+### `memory_put`
 
 > Write or update a page.
 
@@ -113,7 +113,7 @@ Errors: `Conflict` on OCC violation; `CollectionReadOnlyError` if the target col
 
 ```json
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-  "name":"brain_put",
+  "name":"memory_put",
   "arguments":{
     "slug":"people/alice",
     "content":"---\ntitle: Alice\ntype: person\n---\n# Alice\n\n…",
@@ -122,7 +122,7 @@ Errors: `Conflict` on OCC violation; `CollectionReadOnlyError` if the target col
 }}
 ```
 
-### `brain_raw`
+### `memory_raw`
 
 > Store raw structured data (API responses, JSON) for a page.
 
@@ -137,7 +137,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 
 ## Graph tools
 
-### `brain_link`
+### `memory_link`
 
 > Create a typed temporal link between two pages.
 
@@ -149,7 +149,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | `valid_from` | ISO-8601 | no |
 | `valid_until` | ISO-8601 | no |
 
-### `brain_link_close`
+### `memory_link_close`
 
 > Close a temporal link by its database ID.
 
@@ -158,7 +158,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | `link_id` | u64 | yes |
 | `valid_until` | ISO-8601 | yes |
 
-### `brain_backlinks`
+### `memory_backlinks`
 
 > List inbound backlinks for a page.
 
@@ -168,7 +168,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | `limit` | u32 | no | – |
 | `temporal` | string | no | `"current"` (alt: `"all"`) |
 
-### `brain_graph`
+### `memory_graph`
 
 > N-hop neighbourhood graph from a page.
 
@@ -180,7 +180,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 
 ## Intelligence tools
 
-### `brain_check`
+### `memory_check`
 
 > Run contradiction detection on a page or all pages.
 
@@ -188,7 +188,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | ----- | ---- | :------: |
 | `slug` | string | no (omit to scan globally) |
 
-### `brain_timeline`
+### `memory_timeline`
 
 > Show timeline entries for a page.
 
@@ -197,7 +197,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | `slug` | string | yes | – |
 | `limit` | u32 | no | 20 |
 
-### `brain_tags`
+### `memory_tags`
 
 > List, add, or remove tags on a page.
 
@@ -207,7 +207,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 | `add` | string[] | no |
 | `remove` | string[] | no |
 
-### `brain_gap`
+### `memory_gap`
 
 > Log a knowledge gap (privacy-safe: stores `query_hash`, not raw query).
 
@@ -219,7 +219,7 @@ Per `(slug, source)` only one row is kept active; older rows roll over per the c
 
 The raw query is **not** persisted unless explicitly approved via the `knowledge_gaps` approval workflow. See [Sensitivity contract](/agents/sensitivity-contract/).
 
-### `brain_gaps`
+### `memory_gaps`
 
 > List knowledge gaps.
 
@@ -230,13 +230,13 @@ The raw query is **not** persisted unless explicitly approved via the `knowledge
 
 ## Stats and collections
 
-### `brain_stats`
+### `memory_stats`
 
-> Brain statistics.
+> Memory statistics.
 
 No parameters. Returns counts (pages, links, embeddings, gaps), the active embedding model, and schema version.
 
-### `brain_collections`
+### `memory_collections`
 
 > List collection status for MCP clients.
 

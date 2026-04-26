@@ -18,7 +18,7 @@ const withBase = (path: string) => `${base}${path}`;
 
 const isReferencePage = currentPath.startsWith('/reference/');
 const isInstallPage = currentPath.startsWith('/tutorials/install/');
-const isWhyPage = currentPath.startsWith('/why-gigabrain/');
+const isWhyPage = currentPath.startsWith('/why-quaid/');
 
 const navItems = [
 	{
@@ -27,8 +27,8 @@ const navItems = [
 		active: !isReferencePage && !isInstallPage && !isWhyPage,
 	},
 	{
-		label: 'Why GigaBrain',
-		href: withBase('/why-gigabrain/'),
+		label: 'Why Quaid',
+		href: withBase('/why-quaid/'),
 		active: isWhyPage,
 	},
 	{
@@ -38,7 +38,7 @@ const navItems = [
 	},
 	{
 		label: 'GitHub',
-		href: 'https://github.com/macro88/gigabrain',
+		href: 'https://github.com/quaid-app/quaid',
 		active: false,
 	},
 	{

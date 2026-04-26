@@ -6,11 +6,11 @@ guide:
   accentBar: true
 ---
 
-The `knowledge_gaps` table is privacy-safe by construction. This page is the contract you must follow before letting any gap-derived text leave the brain. Read it before you call `brain_gap`. Read it again before you escalate one.
+The `knowledge_gaps` table is privacy-safe by construction. This page is the contract you must follow before letting any gap-derived text leave the memory. Read it before you call `memory_gap`. Read it again before you escalate one.
 
 ## The default
 
-When you call `brain_gap`, the row is created with:
+When you call `memory_gap`, the row is created with:
 
 - `query_hash` — SHA-256 of the original query. Always populated.
 - `query_text` — **NULL.**
@@ -33,7 +33,7 @@ There is no code path that stores raw text without an approval pair. None.
 
 > Hash-only. Default. No raw query stored.
 
-**Authorizes** — keeping a record that *some* query failed, dedup of repeated failures, internal counters and stats. Nothing leaves the brain.
+**Authorizes** — keeping a record that *some* query failed, dedup of repeated failures, internal counters and stats. Nothing leaves the memory.
 
 **Use when** — the gap is part of normal retrieval bookkeeping. No external research needed.
 
@@ -61,14 +61,14 @@ There is no code path that stores raw text without an approval pair. None.
 
 You, the agent, do not unilaterally escalate. Escalation is an **approval workflow**, not a tool call. Specifically:
 
-1. You detect the gap and call `brain_gap`. The gap is now `internal`.
+1. You detect the gap and call `memory_gap`. The gap is now `internal`.
 2. If retrieval fails repeatedly and the user wants to escalate, **the user (or a policy workflow) approves**.
 3. The approval populates `approved_by` and `approved_at`. It also sets:
    - For `redacted`: `redacted_query`, leaving `query_text` NULL.
    - For `external`: `query_text` with the original query.
 4. Only after the row carries an approval pair may an external call proceed.
 
-There is no `brain_gap_approve` MCP tool yet. Approval is currently effected by the user (or a policy workflow) updating the row directly, or via a future tool. Don't fake approvals.
+There is no `memory_gap_approve` MCP tool yet. Approval is currently effected by the user (or a policy workflow) updating the row directly, or via a future tool. Don't fake approvals.
 
 ## What you must not do
 
@@ -81,7 +81,7 @@ There is no `brain_gap_approve` MCP tool yet. Approval is currently effected by 
 
 - Log every weak query as a gap (hash-only).
 - Aggregate hashes (count distinct, dedup, see whether you've hit the same gap twice).
-- Surface the gap count to the user (`brain_gaps` returns counts; raw text is hidden).
+- Surface the gap count to the user (`memory_gaps` returns counts; raw text is hidden).
 - Suggest escalation, with an explanation of which tier is appropriate and why.
 
 ## Example flows
@@ -89,15 +89,15 @@ There is no `brain_gap_approve` MCP tool yet. Approval is currently effected by 
 ### Pure internal
 
 ```text
-brain_query "compliance contact for Belgium"
+memory_query "compliance contact for Belgium"
   → no strong results
-brain_gap query="compliance contact for Belgium" context="quarterly review"
+memory_gap query="compliance contact for Belgium" context="quarterly review"
   → row created, sensitivity=internal, query_text=NULL
-brain_gaps resolved=false
+memory_gaps resolved=false
   → 1 unresolved gap (hash + context only)
 ```
 
-User decides not to escalate. Nothing leaves the brain.
+User decides not to escalate. Nothing leaves the memory.
 
 ### Redacted escalation
 
@@ -106,12 +106,12 @@ gap created sensitivity=internal, hash=H
 user approves redaction with redacted_query="who covers EU compliance?"
   → sets approved_by, approved_at, sensitivity=redacted, redacted_query=...
 enrich skill fetches a reference list using the redacted variant
-brain_raw stores the response
-brain_put extracts facts into a new page
+memory_raw stores the response
+memory_put extracts facts into a new page
 gap resolved by linking resolved_by_slug=concepts/eu-compliance
 ```
 
-Original wording never leaves the brain.
+Original wording never leaves the memory.
 
 ### External escalation
 
@@ -124,16 +124,16 @@ findings ingested as a new page
 gap resolved
 ```
 
-Used sparingly. The raw query is now in the brain and may have been transmitted; both states require explicit consent.
+Used sparingly. The raw query is now in the memory and may have been transmitted; both states require explicit consent.
 
 ## Logging
 
-The MCP server logs `brain_gap` calls with the **hash**, not the text — matching the table policy. If you redirect logs to a SIEM or off-machine destination, no raw query text is in them by default.
+The MCP server logs `memory_gap` calls with the **hash**, not the text — matching the table policy. If you redirect logs to a SIEM or off-machine destination, no raw query text is in them by default.
 
 When sensitivity is `external` and `query_text` is populated, log behavior does not change at the server level. If you write your own audit log, you must respect the same defaults.
 
 ## Why this is structured this way
 
-The blast radius of "agent leaked a sensitive query to a third-party API" is large and irreversible. The contract makes it impossible by construction in the default case, and explicit-and-auditable in the exceptional case. This is the price of letting agents act on the brain.
+The blast radius of "agent leaked a sensitive query to a third-party API" is large and irreversible. The contract makes it impossible by construction in the default case, and explicit-and-auditable in the exceptional case. This is the price of letting agents act on the memory.
 
 If you find yourself wishing the contract were looser, you're probably the wrong abstraction layer for the work. Either escalate to the user, or accept the gap.

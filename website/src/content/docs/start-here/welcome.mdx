@@ -3,14 +3,14 @@ title: Welcome
 description: How to use these docs, and where to start whether you're a developer, an operator, or an agent.
 guide:
   eyebrow: Start here
-  displayTitle: Welcome to GigaBrain
+  displayTitle: Welcome to Quaid
   accentBar: true
 ---
 
 import GuideFeatureCard from "../../../components/docs/GuideFeatureCard.astro";
 import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
 
-GigaBrain is a personal knowledge brain that lives in a single file. It combines SQLite, FTS5, and local vector embeddings behind a thin CLI and an MCP server, so the same brain serves a human at the terminal and an agent over JSON-RPC.
+Quaid is a personal knowledge memory that lives in a single file. It combines SQLite, FTS5, and local vector embeddings behind a thin CLI and an MCP server, so the same memory serves a human at the terminal and an agent over JSON-RPC.
 
 These docs are organized in four lanes — **Tutorials** to learn, **How-to guides** to solve problems, **Explanation** to understand, and **Reference** to look things up — plus a dedicated **For agents** track that curates the same material from an agent's perspective.
 
@@ -18,11 +18,11 @@ These docs are organized in four lanes — **Tutorials** to learn, **How-to guid
 
 <div class="gb-guide-grid gb-guide-grid--two">
   <GuideFeatureCard icon="rocket" title="I want to try it now">
-    <p>Run the install command, build your first brain, and ask it a question — about ten minutes from cold start.</p>
-    <p><a href="/tutorials/install/">Install GigaBrain →</a></p>
+    <p>Run the install command, build your first memory, and ask it a question — about ten minutes from cold start.</p>
+    <p><a href="/tutorials/install/">Install Quaid →</a></p>
   </GuideFeatureCard>
   <GuideFeatureCard icon="puzzle" title="I'm wiring this into Claude Code">
-    <p>Connect a running brain to any MCP client over stdio. No keys, no proxy.</p>
+    <p>Connect a running memory to any MCP client over stdio. No keys, no proxy.</p>
     <p><a href="/tutorials/connect-claude-code/">Connect Claude Code →</a></p>
   </GuideFeatureCard>
   <GuideFeatureCard icon="document" title="I want to look something up">
@@ -45,16 +45,16 @@ These docs are organized in four lanes — **Tutorials** to learn, **How-to guid
 
 ## Conventions
 
-- Code blocks marked `bash` are real commands you can run. They assume `gbrain` is on your PATH and `~/brain.db` exists, unless stated otherwise.
+- Code blocks marked `bash` are real commands you can run. They assume `quaid` is on your PATH and `~/memory.db` exists, unless stated otherwise.
 - The label `(Unix)` next to a feature means it ships on macOS and Linux today; Windows parity for that surface is on the roadmap.
-- Where docs say "your brain" we mean the SQLite file (`brain.db`) — there is one per project, fully portable, and safe to copy.
+- Where docs say "your memory" we mean the SQLite file (`memory.db`) — there is one per project, fully portable, and safe to copy.
 
 <GuideActionBanner
   title="Ready to begin?"
   primaryHref="/tutorials/install/"
-  primaryText="Install GigaBrain"
-  secondaryHref="/why-gigabrain/"
+  primaryText="Install Quaid"
+  secondaryHref="/why-quaid/"
   secondaryText="Read the pitch"
 >
-  <p>Ten minutes to a working brain, or a five-minute read on why we built it this way.</p>
+  <p>Ten minutes to a working memory, or a five-minute read on why we built it this way.</p>
 </GuideActionBanner>
