@@ -7,12 +7,12 @@
 
 ## Problem
 
-`gbrain serve` crashes with `InvariantViolationError: failed to watch root` when any
+`quaid serve` crashes with `InvariantViolationError: failed to watch root` when any
 collection is in `state='active'` with an empty `root_path`.
 
 Root cause: `ensure_default_collection` in `db.rs` inserts the default collection with
-`state='active'` and `root_path=''`. On first `gbrain init`, before the user runs
-`collection add`, this is the initial state of the brain. `sync_collection_watchers`
+`state='active'` and `root_path=''`. On first `quaid init`, before the user runs
+`collection add`, this is the initial state of memory. `sync_collection_watchers`
 queries all `state='active'` collections and calls `watcher.watch("")`, which fails.
 
 This is an invariant violation in the schema: the codebase uses

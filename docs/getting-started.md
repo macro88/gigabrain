@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal knowledge brain: SQLite + FTS5 + local vector embeddings in one file. `v0.9.8` keeps the current vault-sync release surface and adds the Issue #81 watcher-startup hotfix for legacy blank-root collections.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. `v0.9.8` keeps the current vault-sync release surface and adds the Issue #81 watcher-startup hotfix for legacy blank-root collections.
 
 ## What it does
 

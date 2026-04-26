@@ -1,5 +1,5 @@
 ---
-title: Quaid - Personal Knowledge Brain
+title: Quaid - Personal AI Memory
 type: project
 created: 2026-04-06
 updated: 2026-04-13
@@ -21,9 +21,9 @@ sources:
   - Rowboat knowledge graph insight (2026-04-09)
 ---
 
-# Quaid - Personal Knowledge Brain
+# Quaid - Personal AI Memory
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
+> Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no internet, no Docker. Truly static single binary.
 
 Inspired by Garry Tan's GBrain work, with this spec adapting similar goals to a local-first Rust + SQLite architecture intended for portable, offline use.
 
@@ -2246,7 +2246,7 @@ quaid/
 ```markdown
 # Quaid
 
-Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One binary.
+Personal AI memory. SQLite + FTS5 + local vector embeddings. One binary.
 
 ## Architecture
 

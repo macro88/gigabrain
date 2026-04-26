@@ -1,6 +1,6 @@
 # Quaid
 
-> Open-source personal knowledge brain. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
+> Open-source personal AI memory. SQLite + FTS5 + vector embeddings in one file. Thin CLI harness, fat skill files. MCP-ready from day one. Runs anywhere. No API keys, no Docker. Airgapped + online release channels with configurable BGE models in the online build.
 
 **Status:** `v0.9.8` (release candidate) — current vault-sync surface plus the Issue #81 watcher-startup hotfix for legacy active collections with blank root paths. [See the roadmap →](#roadmap)
 

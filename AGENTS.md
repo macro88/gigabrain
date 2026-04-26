@@ -13,7 +13,7 @@ Pages have a `compiled_truth` section (always-current intelligence) and a `timel
 Read `skills/` — all workflow intelligence lives in SKILL.md files there.
 
 - `skills/ingest/SKILL.md` — how to ingest meeting notes, articles, documents
-- `skills/query/SKILL.md` — how to search and synthesize across the brain
+- `skills/query/SKILL.md` — how to search and synthesize across memory
 - `skills/maintain/SKILL.md` — how to detect contradictions and clean orphans
 - `skills/briefing/SKILL.md` — how to generate daily briefings
 - `skills/research/SKILL.md` — how to resolve knowledge gaps
@@ -21,7 +21,7 @@ Read `skills/` — all workflow intelligence lives in SKILL.md files there.
 ## Key commands
 
 ```bash
-quaid init ~/.quaid/memory.db          # create new brain
+quaid init ~/.quaid/memory.db          # create new memory store
 quaid import /path/to/notes/   # import markdown directory
 quaid query "who knows X?"     # hybrid semantic query
 quaid search "keyword"         # FTS5 full-text search

@@ -6,7 +6,7 @@ Welcome. This guide covers everything a new contributor needs to navigate the co
 
 ## What Quaid is
 
-Quaid is a local-first personal knowledge brain with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
+Quaid is a local-first personal AI memory layer with two BGE-small distribution channels: an `airgapped` embedded binary and a smaller `online` binary. Both wrap SQLite + FTS5 + local vector embeddings and expose the same CLI + MCP surface.
 
 Read [getting-started.md](getting-started.md) first if you haven't. Read [spec.md](spec.md) for the full technical specification.
 

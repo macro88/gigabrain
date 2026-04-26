@@ -1,6 +1,6 @@
 # Quaid
 
-Personal knowledge brain. SQLite + FTS5 + local vector embeddings. One binary.
+Personal AI memory. SQLite + FTS5 + local vector embeddings. One binary.
 
 ## Architecture
 
