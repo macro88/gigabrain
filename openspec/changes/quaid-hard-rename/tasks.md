@@ -81,13 +81,13 @@ All 17 tools in `src/mcp/server.rs` renamed. This is a user-visible breaking cha
 
 ## Phase G — Documentation
 
-- [ ] G.1 `README.md` — comprehensive pass: title, tagline, all `gbrain` CLI examples, all `GBRAIN_*` env var examples, all `brain_*` MCP tool examples, repo URL, install instructions.
-- [ ] G.2 `CLAUDE.md` — update product name, binary name, env vars, MCP tool names, default DB path.
-- [ ] G.3 `docs/spec.md` — update title, all CLI references, MCP tool table, env var table, default paths. Update `status` frontmatter field if it names the product.
-- [ ] G.4 `docs/getting-started.md` — all quickstart commands.
-- [ ] G.5 `docs/contributing.md` — all tool references.
-- [ ] G.6 `docs/roadmap.md` — product name, any CLI examples.
-- [ ] G.7 `docs/gigabrain-vs-qmd-friction-analysis.md` — update product-name references (or rename file if appropriate — consult with macro88 before renaming files in `docs/`).
+- [x] G.1 `README.md` — comprehensive pass: title, tagline, all `gbrain` CLI examples, all `GBRAIN_*` env var examples, all `brain_*` MCP tool examples, repo URL, install instructions.
+- [x] G.2 `CLAUDE.md` — update product name, binary name, env vars, MCP tool names, default DB path.
+- [x] G.3 `docs/spec.md` — update title, all CLI references, MCP tool table, env var table, default paths. Update `status` frontmatter field if it names the product.
+- [x] G.4 `docs/getting-started.md` — all quickstart commands.
+- [x] G.5 `docs/contributing.md` — all tool references.
+- [x] G.6 `docs/roadmap.md` — product name, any CLI examples.
+- [x] G.7 `docs/gigabrain-vs-qmd-friction-analysis.md` — update product-name references (or rename file if appropriate — consult with macro88 before renaming files in `docs/`).
 - [x] G.8 `website/` — update `package.json` (description, name if `gigabrain` appears), `DESIGN.md`, `SITE.md`, any Astro content pages, `astro.config.mjs` site title/description.
 
 ---
@@ -96,13 +96,13 @@ All 17 tools in `src/mcp/server.rs` renamed. This is a user-visible breaking cha
 
 All skill SKILL.md files use `gbrain` CLI examples and `brain_*` MCP tool calls.
 
-- [ ] H.1 `skills/ingest/SKILL.md` — all `gbrain` → `quaid`, `brain_*` → `memory_*`, `GBRAIN_*` → `QUAID_*`.
-- [ ] H.2 `skills/query/SKILL.md` — same.
-- [ ] H.3 `skills/maintain/SKILL.md` — same.
-- [ ] H.4 `skills/briefing/SKILL.md` — same.
-- [ ] H.5 `skills/research/SKILL.md` — same.
-- [ ] H.6 All remaining `skills/*/SKILL.md` files — same.
-- [ ] H.7 Run: `rg "gbrain|GigaBrain|brain_|GBRAIN_" skills/ --type md` to confirm zero remaining occurrences.
+- [x] H.1 `skills/ingest/SKILL.md` — all `gbrain` → `quaid`, `brain_*` → `memory_*`, `GBRAIN_*` → `QUAID_*`.
+- [x] H.2 `skills/query/SKILL.md` — same.
+- [x] H.3 `skills/maintain/SKILL.md` — same.
+- [x] H.4 `skills/briefing/SKILL.md` — same.
+- [x] H.5 `skills/research/SKILL.md` — same.
+- [x] H.6 All remaining `skills/*/SKILL.md` files — same.
+- [x] H.7 Run: `rg "gbrain|GigaBrain|brain_|GBRAIN_" skills/ --type md` to confirm zero remaining occurrences.
 
 ---
 
