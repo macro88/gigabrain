@@ -7,6 +7,13 @@
 
 ## Learnings
 
+### 2026-04-27 18:39:39 - Search skill PR landing
+
+- **User preference:** When preserving squad skill extracts, land them through a branch + draft PR flow instead of keeping them as local-only artifacts.
+- **Scope decision:** Keep `.squad/skills/compound-term-tiered-fts/`, `.squad/skills/deterministic-hybrid-proof/`, `.squad/skills/search-proof-contracts/`, and `.squad/skills/search-surface-coverage/`; delete stray local artifacts `.squad/git-commit-msg.txt`, `create_files.py`, `scribe-cleanup.py`, and `scribe-commit.bat`.
+- **Key paths:** This lane was coordination-only around `.squad/skills/`, `.squad/agents/fry/history.md`, and `.squad/decisions/inbox/fry-skill-pr-landing.md`.
+- **Workflow pattern:** In a shared dirty tree, safest landing path was `fetch origin/main` and branch from `origin/main` without disturbing another agent's unstaged changes.
+
 ### 2026-04-25 15:48:00 - Put/OCC lane closeout (2026-04-25T15-48-57Z)
 
 - **Orchestration log:** `.squad/orchestration-log/2026-04-25T15-48-57Z-fry.md` recorded lane closure
