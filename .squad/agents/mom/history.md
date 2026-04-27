@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- Batch 1 edge fix (2026-04-27): the root `.quaidignore` file is a control surface, not content. In `src/core/vault_sync.rs`, watcher classification must bypass the markdown-only path filter, emit a dedicated reload event, and let `src/core/ignore_patterns.rs::reload_patterns()` decide whether reconcile is safe. On parse failure or stable absence with a prior mirror, keep last-known-good patterns and skip reconcile rather than walking with stale ignore state.
 - Issue #79 / #80 macOS preflight audit (2026-04-25): PR #83's four macOS preflight jobs were not failing in `src/core/fs_safety.rs` anymore; they all died earlier in `.github/workflows/ci.yml` because `actions/cache` rejects cache keys containing commas from raw `matrix.features` values like `bundled,online-model`. The `stat.st_mode as u32` cast is present, but issue #80 stays operationally open until macOS preflight actually reaches `cargo check`.
 - Vault-sync CI burndown lane closeout (2026-04-25): Mom's edge-case fix lane landed in commits 56e44ce and 18ac3d7. Four targeted decisions (D-V1 through D-V4) fixed 6 failing CI tests constrained to `src/core/vault_sync.rs` and `src/core/raw_imports.rs`. Orchestration log at `.squad/orchestration-log/2026-04-25T15-48-57Z-mom.md` documents all decisions and test results (591 pass, 2 pre-existing Windows failures unrelated).
 - Quarantine restore artifact reconciliation (2026-04-25): Mom audited leftover restore glue from rejected Fry artifact, kept required pieces (fs_safety linkat, vault_sync leases, collection routing), dropped permanently-excluded `walk_to_parent_create_dirs`. Decisions D-MR1 and D-MR2 recorded in `.squad/decisions.md`. Commit 6a3d54c is wholly Mom-authored.
@@ -335,3 +336,6 @@ containing a mix of required glue and a dropped Fry artifact piece.
 **Artifact:** Orchestration log at .squad/orchestration-log/20260425T123739Z-mom-issue79-80-macos.md. Session log at .squad/log/20260425T123739Z-issue79-80-macos.md.
 
 **Lesson:** Workflow parameter constraints (cache-key format, matrix safety) are not obvious from CI failure output alone. Log inspection needed to find the ctions/cache validation error earlier in the job lifecycle.
+
+
+- Batch 1 edge-case implementation (6.8 + cleanup) complete (2026-04-27T23:51:40Z): .quaidignore watcher surface hardened with atomic pattern reload, markdown-only filter bypass, and last-known-good mirror preservation. Tasks 6.7a, 6.9, 6.10, 6.11 explicitly kept open. Orchestration log at .squad/orchestration-log/2026-04-27T23-51-40Z-mom.md.

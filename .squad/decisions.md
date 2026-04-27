@@ -9808,3 +9808,2985 @@ Date: 2026-04-25
 
 **Result:** Batch 1 scope now honestly closable under narrowed v0.10.0. Awaiting Mom to begin 6.7a implementation.
 
+
+
+---
+author: amy
+date: 2026-04-25
+type: docs-audit
+subject: hard-rename GigaBrain → Quaid across all prose docs
+status: audit-complete — no files edited yet
+---
+
+# Quaid Hard-Rename Docs Audit
+
+Read-only audit. No files were changed. This document maps every location in user-facing
+prose docs, skill files, and agent context files that must change when the product is renamed
+from GigaBrain/gbrain/brain to Quaid/quaid/memory.
+
+Scope of rename (per task spec):
+- Product name: **GigaBrain** → **Quaid**
+- CLI binary: **`gbrain`** → **`quaid`**
+- Core concept: **"brain"** → **"memory"** (context-specific — see § Nuance below)
+- MCP tools: **`brain_*`** → **`memory_*`**
+- Primary env var: **`GBRAIN_DB`** → **`QUAID_DB`**
+- All env vars: **`GBRAIN_*`** → **`QUAID_*`**
+- Default install dir: **`~/.gbrain/`** → **`~/.quaid/`**
+- Default DB filename: **`brain.db`** → **`memory.db`** (or `quaid.db` — see § Open questions)
+- Ignore file: **`.gbrainignore`** → **`.quaidignore`**
+- GitHub repo slug: **`gigabrain`** → **`quaid`** (in all URLs)
+- npm package: **`gbrain`** → **`quaid`**
+
+---
+
+## 1. README.md — Full audit
+
+### 1.1 Title and lede (line 1–3)
+- `# GigaBrain` → `# Quaid`
+- Lede tagline: "personal knowledge brain" → "personal knowledge memory"
+- "GigaBrain adapts the same core concept" → remove or rewrite; Garry Tan attribution
+  paragraph references "GBrain work" and "personal knowledge brain" — needs rewrite since
+  the project identity changes. The inspiration credit can be retained in prose but
+  "GigaBrain" as the product name must go.
+
+### 1.2 Status line (line 5)
+- `v0.9.8` status badge paragraph: "GigaBrain" x1 implicit (in roadmap reference, fine),
+  plus `gbrain serve` command → `quaid serve`.
+
+### 1.3 Roadmap table (lines 15–22)
+- All `gbrain` command references in the "What ships" column → `quaid`.
+- No product-name occurrences in the table headers but "GigaBrain" appears in section prose.
+
+### 1.4 "Why" section (lines 29–36)
+- "Every existing knowledge tool … GigaBrain is designed …" → "Quaid is designed …"
+
+### 1.5 "How it works" section (lines 40–48)
+- "GigaBrain stores them in a single SQLite database" → "Quaid stores them …"
+- "brain.db file" → "memory.db file" throughout this section.
+
+### 1.6 Features bullet list (lines 52–66)
+- `brain.db` → `memory.db` (or `quaid.db`)
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+- `gbrain serve` → `quaid serve`
+- `gbrain collection` → `quaid collection`
+- `gbrain collection quarantine` → `quaid collection quarantine`
+- `~/.gbrain/` → `~/.quaid/`
+
+### 1.7 Quick start / Install options (lines 82–141)
+- Script URLs: `macro88/gigabrain` → `macro88/quaid` (or whatever the new repo slug is)
+- `GBRAIN_CHANNEL=online` → `QUAID_CHANNEL=online`
+- `GBRAIN_NO_PROFILE=1` → `QUAID_NO_PROFILE=1`
+- Asset names: `gbrain-${PLATFORM}-airgapped` → `quaid-${PLATFORM}-airgapped`
+- Binary name in install commands: `gbrain` → `quaid`
+- `npm install -g gbrain` → `npm install -g quaid`
+- PATH line: `~/.local/bin/gbrain` → `~/.local/bin/quaid`
+- `GBRAIN_DB` → `QUAID_DB`
+
+### 1.8 Embedding model selection section (lines 157–177)
+- `GBRAIN_MODEL=large gbrain query` → `QUAID_MODEL=large quaid query`
+- `gbrain --model m3 query` → `quaid --model m3 query`
+- All `GBRAIN_MODEL` occurrences → `QUAID_MODEL`
+- "GigaBrain continues with embedded small" → "Quaid continues with embedded small"
+- DB init sentence: "GigaBrain errors before" → "Quaid errors before"
+
+### 1.9 Environment variables table (lines 182–192)
+All nine env vars must be renamed:
+- `GBRAIN_DB` → `QUAID_DB`
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+- `GBRAIN_CHANNEL` → `QUAID_CHANNEL`
+- `GBRAIN_WATCH_DEBOUNCE_MS` → `QUAID_WATCH_DEBOUNCE_MS`
+- `GBRAIN_QUARANTINE_TTL_DAYS` → `QUAID_QUARANTINE_TTL_DAYS`
+- `GBRAIN_RAW_IMPORTS_KEEP` → `QUAID_RAW_IMPORTS_KEEP`
+- `GBRAIN_RAW_IMPORTS_TTL_DAYS` → `QUAID_RAW_IMPORTS_TTL_DAYS`
+- `GBRAIN_RAW_IMPORTS_KEEP_ALL` → `QUAID_RAW_IMPORTS_KEEP_ALL`
+- `GBRAIN_FULL_HASH_AUDIT_DAYS` → `QUAID_FULL_HASH_AUDIT_DAYS`
+
+### 1.10 Usage section (lines 199–289)
+Every `gbrain` command → `quaid`. Also:
+- `~/brain.db` → `~/memory.db`
+- `brain_stats`, `brain_gap`, `brain_search` (in `gbrain call`/`gbrain pipe` examples)
+  → `memory_stats`, `memory_gap`, `memory_search`
+
+### 1.11 MCP integration section (lines 293–316)
+- MCP config key `"gbrain"` → `"quaid"` (the server alias is user-defined, but example
+  should use the new name)
+- `"command": "gbrain"` → `"command": "quaid"`
+- `"GBRAIN_DB"` → `"QUAID_DB"`
+- `brain.db` → `memory.db`
+- All 17 `brain_*` tool names → `memory_*`
+
+### 1.12 Skills section (lines 319–341)
+- `~/.gbrain/skills/` → `~/.quaid/skills/`
+- No product name occurrences but `gbrain skills list` / `gbrain skills doctor` → `quaid ...`
+
+### 1.13 PARA / page types section (lines 344–370)
+- `gbrain import` → `quaid import` (several occurrences)
+
+### 1.14 Contributing section (lines 372–391)
+- "GigaBrain is open for contributions" → "Quaid is open for contributions"
+- `gbrain serve`, `brain_collections` etc. → updated names
+- `docs/spec.md`, `openspec/changes/` references remain structurally accurate; no rename.
+
+### 1.15 Build from source section (lines 394–414)
+- `cargo build` comments reference no product name but the binary output path
+  `target/release/gbrain` → `target/release/quaid`
+- Repo clone URL: `github.com/macro88/gigabrain` → `github.com/macro88/quaid`
+
+### 1.16 Acknowledgements (lines 433–435)
+- "GigaBrain takes the same architecture" → "Quaid takes the same architecture"
+- "Same brain, different stack" → **nuanced rewrite needed** — "brain" here is Garry
+  Tan's concept, not the product word. Suggest: "Same memory architecture, different stack,
+  different deployment story."
+
+---
+
+## 2. docs/getting-started.md — Full audit
+
+### 2.1 Title and lede (lines 1–7)
+- `# Getting Started with GigaBrain` → `# Getting Started with Quaid`
+- Lede: "personal knowledge brain" → "personal knowledge memory"
+- `brain.db` → `memory.db`
+
+### 2.2 "What it does" section (lines 5–14)
+- "GigaBrain stores your knowledge" → "Quaid stores your knowledge"
+- `brain.db` file → `memory.db` file
+
+### 2.3 Status section (lines 18–21)
+- "The current release is `v0.9.8`" → adjust if needed; `gbrain serve` → `quaid serve`
+
+### 2.4 Install options table (lines 27–32)
+- `cargo build` note: binary name changes (output is `target/release/quaid`)
+- `npm install -g gbrain` → `npm install -g quaid`
+- `GBRAIN_CHANNEL=online` → `QUAID_CHANNEL=online`
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+
+### 2.5 Build from source (lines 39–56)
+- `git clone https://github.com/macro88/gigabrain` → updated repo URL
+- `cd gigabrain` → `cd quaid`
+- Binary path comment: `target/release/gbrain` → `target/release/quaid`
+- `cargo build --release --no-default-features --features bundled,online-model` stays the
+  same (Cargo feature flags are implementation-level, not user-facing names — but
+  post-rename the feature names may themselves change; flag for Fry)
+
+### 2.6 "Your first brain" section header + body (lines 61–79)
+- Section header: "Your first brain" → "Your first memory" (or "Your first Quaid database")
+  — see § Nuance for the "brain" → "memory" call
+- Post-install note: `GBRAIN_DB` → `QUAID_DB`
+- `gbrain init ~/brain.db` → `quaid init ~/memory.db`
+- Schema note: `v5 schema` language is fine; all `gbrain` command refs → `quaid`
+
+### 2.7 All command examples throughout (lines 83–460+)
+Every occurrence of `gbrain` → `quaid`. All `brain_*` MCP tool names → `memory_*`.
+All `GBRAIN_*` → `QUAID_*`. All `brain.db` → `memory.db`. All `~/.gbrain/` → `~/.quaid/`.
+
+### 2.8 MCP config JSON example (lines 155–163)
+Same as README: key `"gbrain"` → `"quaid"`, `"command": "gbrain"` → `"command": "quaid"`,
+`"GBRAIN_DB"` → `"QUAID_DB"`, `brain.db` → `memory.db`.
+
+### 2.9 "Connect an AI agent via MCP" section (lines 150–186)
+All 17 `brain_*` tool names in the bulleted list → `memory_*`.
+
+### 2.10 Skills section (lines 192–210)
+- `~/.gbrain/skills/` → `~/.quaid/skills/`
+- "GigaBrain" implicit in "the binary embeds default skills" — no hard rename needed but
+  could say "Quaid embeds default skills …"
+
+### 2.11 Environment variable table (lines 249–252)
+- `GBRAIN_DB` → `QUAID_DB`
+- Default value `./brain.db` → `./memory.db`
+
+### 2.12 Phase 2/3/vault-sync command sections (lines 258–460)
+Every `gbrain` command → `quaid`. Brain health section header "Brain health" → "Memory health"
+(or keep as "Health checks" for neutrality — see § Nuance).
+
+---
+
+## 3. docs/roadmap.md — Full audit
+
+### 3.1 Title and intro (line 1–3)
+- `# GigaBrain Roadmap` → `# Quaid Roadmap`
+- "GigaBrain is built in phases" → "Quaid is built in phases"
+
+### 3.2 Sprint 0 deliverables (lines 20–21)
+- `CLAUDE.md` and `AGENTS.md` refs remain fine structurally.
+
+### 3.3 Phase 1 narrative (lines 36–69)
+- "proves GigaBrain's value proposition" → "proves Quaid's value proposition"
+- All `gbrain` command refs → `quaid`
+- `brain_get`, `brain_put`, etc. → `memory_get`, `memory_put`, etc.
+
+### 3.4 Phase 2 narrative (lines 73–108)
+- "separate GigaBrain from a glorified FTS5 wrapper" → "separate Quaid from …"
+- All `gbrain` command refs → `quaid`
+- All `brain_*` MCP tool refs → `memory_*`
+
+### 3.5 Phase 3 narrative (lines 111–131)
+- All `brain_*` tool names in the delivered list → `memory_*`
+
+### 3.6 Version targets table (lines 154–159)
+- No product names; CLI commands only; update `gbrain` → `quaid` where present.
+
+### 3.7 vault-sync-engine section (lines 163–199)
+- `gbrain collection`, `gbrain serve`, `brain_collections`, `brain_put`,
+  `.gbrainignore`, `GBRAIN_QUARANTINE_TTL_DAYS`, `GBRAIN_WATCH_DEBOUNCE_MS` all need rename.
+- `brain_search`, `brain_query`, `brain_list` → `memory_search`, `memory_query`, `memory_list`
+
+---
+
+## 4. docs/contributing.md — Full audit
+
+### 4.1 Title and intro (lines 1–3)
+- `# Contributing to GigaBrain` → `# Contributing to Quaid`
+- "What GigaBrain is" → "What Quaid is"
+- "GigaBrain is a local-first personal knowledge brain" → "Quaid is a local-first personal
+  knowledge memory"
+
+### 4.2 Repository layout (lines 16–75)
+- Top-level directory label: `gigabrain/` → `quaid/`
+- Comment inside layout: no product names except in prose above the block.
+
+### 4.3 Build and test section (lines 81–100)
+- Binary path comment: `target/release/gbrain` → `target/release/quaid`
+
+### 4.4 Release process section (lines 106–123)
+- `gbrain serve` → `quaid serve`
+- Asset names: `gbrain-<platform>-airgapped` / `gbrain-<platform>-online`
+  → `quaid-<platform>-airgapped` / `quaid-<platform>-online`
+- npm package name note: `gbrain` package → `quaid` package
+
+### 4.5 Contributing section prose (lines 143–168)
+- "GigaBrain uses OpenSpec" → "Quaid uses OpenSpec"
+- `docs/spec.md` reference fine; "every meaningful code, docs, or architecture change" fine.
+
+---
+
+## 5. docs/spec.md — Full audit (representative — file is large)
+
+`spec.md` is 561 KB and was not fully read, but from the first 80 lines the following
+rename needs are clear:
+
+### 5.1 Front matter and title
+- `title: GigaBrain - Personal Knowledge Brain` → `title: Quaid - Personal Knowledge Memory`
+- `status: spec-complete-v4` — unchanged (version marker, not a name)
+- Tag `knowledge-base` fine; add `quaid` tag.
+
+### 5.2 Title heading
+- `# GigaBrain - Personal Knowledge Brain` → `# Quaid - Personal Knowledge Memory`
+
+### 5.3 "Repo (planned)" line
+- `GitHub.com/[owner]/gbrain` → `GitHub.com/[owner]/quaid`
+
+### 5.4 Product/concept prose throughout
+- All "GigaBrain" occurrences → "Quaid"
+- All `gbrain` CLI commands → `quaid`
+- All `brain_*` MCP tool names → `memory_*`
+- All `GBRAIN_*` → `QUAID_*`
+- All `brain.db` → `memory.db`
+- `brain_config` table name → `quaid_config` or `memory_config` (implementation-level;
+  flag for Fry — may affect schema DDL as well)
+- `~/.gbrain/` → `~/.quaid/`
+- Embedded Cargo.toml `[features]` block — feature names (`embedded-model`, `online-model`,
+  `bundled`) are technical identifiers, not product names; leave unless Fry renames them.
+
+### 5.5 Spec history / version notes
+- "v1 differentiator over Garry's spec" — rewrite to refer to Quaid rather than GigaBrain.
+- Research technique attribution paragraphs — keep intact; just swap product name.
+
+---
+
+## 6. docs/gigabrain-vs-qmd-friction-analysis.md — Full audit
+
+### 6.1 Title
+- `# GigaBrain vs QMD: Friction Analysis` → `# Quaid vs QMD: Friction Analysis`
+
+### 6.2 Throughout
+- "GigaBrain" (product) → "Quaid"
+- All `gbrain` commands → `quaid`
+- All `GBRAIN_*` → `QUAID_*`
+- `brain.db` → `memory.db`
+- "The Core Problem: … GigaBrain feels like effort" → "Quaid feels like effort"
+- Comparison table: "GigaBrain" column header → "Quaid"
+- Recommendation section: `gbrain sync`, `gbrain daemon install`, `gbrain status`,
+  `gbrain import` → `quaid` equivalents
+- Note: "OpenClaw skill for GigaBrain" → "OpenClaw skill for Quaid"; `gbrain_search`
+  function in skill example → `quaid_search` or `memory_search` (use `memory_search`
+  to align with MCP rename)
+
+---
+
+## 7. docs/openclaw-harness.md — Full audit
+
+### 7.1 Title and lede (line 1–3)
+- `# Using GigaBrain v0.9.6 as an OpenClaw Harness` → `# Using Quaid v0.9.6 as an OpenClaw Harness`
+- "GigaBrain works well as the memory and knowledge layer" — interesting: "memory" appears
+  here as a concept word, not a brand word. After rename, "Quaid works well as the memory
+  layer for agents" — this phrasing becomes more natural, not less.
+
+### 7.2 Prerequisites / init example
+- `gbrain init ~/brain.db` → `quaid init ~/memory.db`
+- `gbrain v0.9.6` → `quaid v0.9.6`
+
+### 7.3 Collection attach examples
+- All `gbrain collection ...` → `quaid collection ...`
+- `.gbrainignore` → `.quaidignore`
+
+### 7.4 OpenClaw config JSON (lines 59–71)
+- Server key `"gbrain"` → `"quaid"`
+- `"command": "gbrain"` → `"command": "quaid"`
+- `"GBRAIN_DB"` → `"QUAID_DB"`
+- `brain.db` → `memory.db`
+
+### 7.5 Live sync workflow and prose (lines 84–98)
+- All `gbrain` refs → `quaid`
+- `brain.db` → `memory.db`
+- "the GigaBrain MCP tools" → "the Quaid MCP tools"
+
+### 7.6 MCP usage patterns section (lines 99–end)
+- `brain_query`, `brain_search`, `brain_put`, `brain_get`, `brain_collections`
+  → `memory_query`, `memory_search`, `memory_put`, `memory_get`, `memory_collections`
+- "GigaBrain MCP tools" → "Quaid MCP tools"
+
+---
+
+## 8. AGENTS.md — Full audit
+
+### 8.1 Title and description
+- `# GigaBrain — Agent Instructions` → `# Quaid — Agent Instructions`
+- "Personal knowledge brain" → "Personal knowledge memory"
+- `brain.db` → `memory.db`
+
+### 8.2 "What this is" section
+- "GigaBrain stores your knowledge" → "Quaid stores your knowledge"
+- `brain.db` → `memory.db`
+
+### 8.3 Skill references
+- `skills/query/SKILL.md` — "how to search and synthesize across the brain"
+  → "how to search and synthesize across memory" (or "across your memory")
+  
+### 8.4 Key commands
+Every `gbrain` command → `quaid`. `~/brain.db` → `~/memory.db`.
+
+### 8.5 Constraints section
+- `brain_put` → `memory_put`
+- `brain_gap` → `memory_gap`
+- `brain_gap_approve` → `memory_gap_approve`
+
+### 8.6 Database schema section
+- `brain_config` table → `quaid_config` or `memory_config`
+- `page_embeddings_vec_384` (technical; leave for Fry)
+- `knowledge_gaps` table name — leave; it's a concept not a brand name
+
+### 8.7 MCP tools section
+- All `brain_*` → `memory_*`
+
+### 8.8 Optimistic concurrency section
+- `brain_put` → `memory_put`
+
+---
+
+## 9. CLAUDE.md — Full audit
+
+### 9.1 Title
+- `# GigaBrain` → `# Quaid`
+- "Personal knowledge brain" → "Personal knowledge memory"
+
+### 9.2 Architecture diagram
+- `brain.db` → `memory.db`
+
+### 9.3 Key files table
+- No product names in filenames; table is fine structurally.
+- `brain_config` table name in schema section → flag for Fry (DB-level rename)
+- `knowledge_gaps` — conceptual name, keep.
+
+### 9.4 Build section
+All references are cargo commands; no product names in the commands. Binary output path
+`target/release/gbrain` → `target/release/quaid` only in the comment, not the cargo command.
+
+### 9.5 Embedding model section
+- "GigaBrain defaults to …" → "Quaid defaults to …"
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+- `brain_config` table → flag for Fry
+
+### 9.6 Skills section
+- `~/.gbrain/skills/` → `~/.quaid/skills/`
+
+### 9.7 MCP tools section
+- All `brain_*` → `memory_*`
+
+### 9.8 Optimistic concurrency
+- `brain_put` → `memory_put`
+
+---
+
+## 10. skills/*/SKILL.md — Full audit
+
+All eight skill files have the same pattern of changes needed:
+
+### 10.1 Frontmatter `name:` field
+- `gbrain-ingest` → `quaid-ingest`
+- `gbrain-query` → `quaid-query`
+- `gbrain-maintain` → `quaid-maintain`
+- `gbrain-briefing` → `quaid-briefing`
+- `gbrain-research` → `quaid-research`
+- `gbrain-enrich` → `quaid-enrich`
+- `gbrain-alerts` → `quaid-alerts`
+- `gbrain-upgrade` → `quaid-upgrade`
+
+### 10.2 Frontmatter `description:` fields
+- "Ingest meeting notes … into GigaBrain" → "into Quaid"
+- "Answer questions from the brain" → "Answer questions from memory"
+- "Maintain brain integrity" → "Maintain memory integrity"
+- "Generate a structured 'what shifted' report from the brain" → "from memory"
+- "Resolve knowledge gaps … logged in the brain" → "logged in memory"
+- "Enrich brain pages" → "Enrich memory pages"
+- "monitors brain state" → "monitors memory state"
+- "safely replacing the `gbrain` binary" → "safely replacing the `quaid` binary"
+
+### 10.3 All CLI command examples in every skill file
+Every `gbrain <command>` → `quaid <command>`.
+
+### 10.4 All MCP tool names
+Every `brain_*` → `memory_*` (brain_put, brain_get, brain_gap, brain_raw, brain_query, etc.)
+
+### 10.5 skills/upgrade/SKILL.md — GitHub API URL
+- `https://api.github.com/repos/macro88/gigabrain/releases/latest`
+  → `https://api.github.com/repos/macro88/quaid/releases/latest`
+- Asset filename table: `gbrain-x86_64-…` → `quaid-x86_64-…`
+- "Back up existing binary": `$(which gbrain)` → `$(which quaid)`
+- Version output example: `gbrain 0.2.0 (commit abc1234)` → `quaid 0.2.0 (commit abc1234)`
+- SKILL.md prose: "keeping a `.bak` copy of the previous binary"
+  — `gbrain.new` → `quaid.new`
+
+### 10.6 skills/query/SKILL.md — GBRAIN_MODEL
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+- "Vector semantic … BGE-small-en-v1.5 … via `GBRAIN_MODEL` / `--model`"
+  → "via `QUAID_MODEL` / `--model`"
+
+### 10.7 skills/alerts/SKILL.md
+- `gbrain check --all` → `quaid check --all`
+- `brain_put` / `brain_link` → `memory_put` / `memory_link`
+
+### 10.8 skills/enrich/SKILL.md
+- "Enrich brain pages" → "Enrich memory pages"
+- `brain_raw` → `memory_raw`
+- `gbrain import` → `quaid import`
+
+### 10.9 skills/research/SKILL.md
+- "gaps logged in the brain" → "gaps logged in memory"
+- `brain_gap_approve` → `memory_gap_approve`
+- All `gbrain` command refs → `quaid`
+
+---
+
+## 11. phase2_progress.md — Full audit
+
+This is an internal handoff doc, not a user-facing doc, but it contains terminology:
+- `github.com/macro88/gigabrain/pull/22` → update URL if repo is renamed
+- MCP tool names listed (`brain_link`, `brain_link_close`, etc.) → `memory_*`
+- Note: this file is historical record; depending on policy it may be left as-is
+  or updated for consistency. Recommend a note at the top acknowledging the rename
+  rather than rewriting the historical record.
+
+---
+
+## 12. docs/contributing.md — Additional items not yet listed above
+
+### 12.1 GitHub labels script (lines 181–197)
+- Labels `"squad:fry"`, `"squad:bender"` etc. are team labels, not product names — leave.
+- Phase labels `"phase-1"` etc. — leave.
+
+---
+
+## "brain" → "memory" nuance guide
+
+### Always rename "brain" → "memory"
+These are clear product-branded uses of "brain" that must become "memory":
+- `brain.db` filename → `memory.db`
+- "personal knowledge brain" (product tagline) → "personal knowledge memory"
+- `brain_config` (SQLite table) → `memory_config` ← flag for Fry; affects schema DDL
+- `knowledge_gaps` table — keep as-is; "knowledge" is not a brand word
+- All `brain_*` MCP tool names → `memory_*`
+- "the brain" when used as "the Quaid database/index" → "memory" or "Quaid"
+- `~/.gbrain/` path → `~/.quaid/`
+- "GigaBrain" product name → "Quaid"
+- `gbrain` binary name → `quaid`
+
+### "brain" phrases that need contextual judgment
+These phrases use "brain" as a general English concept, not the product name:
+- "personal knowledge brain" (Garry Tan concept) — becomes "personal knowledge memory"
+  since that is what Quaid calls the concept now.
+- "compiled-truth / brain architecture" — keep "compiled-truth / timeline architecture"
+  (no brand word here).
+- "knowledge brain" (description of what Quaid is) → "knowledge memory" or just "knowledge store"
+  — "knowledge memory" reads better and matches Quaid's chosen concept word.
+- "wiki-brain" (generic concept in Why section) — becomes "wiki" or "markdown brain" → leave
+  "wiki-brain" as it describes the problem space, not the product.
+- "Same brain, different stack" (Acknowledgements) → "Same memory architecture, different stack"
+- "Brain health" (section header) → "Memory health" — straight rename.
+
+### "brain" phrases that should NOT be renamed
+- "Karpathy's compiled knowledge model" — no brand word; keep.
+- "above the line / below the line" architecture description — no brand word; keep.
+- References to Garry Tan's "GBrain" as a historical attribution — acknowledge as "Garry
+  Tan's GBrain" (his name for his project); do not rename that.
+
+---
+
+## Open questions for the team
+
+1. **Default DB filename:** The task spec says `memory.db` or `quaid.db`. Amy recommends
+   **`memory.db`** because: (a) it matches the concept rename "memory"; (b) it is consistent
+   with the `QUAID_DB` env var description; (c) `quaid.db` creates a name collision when
+   users have multiple Quaid instances. Fry to confirm before any file is edited.
+
+2. **GitHub repo slug:** The task says rename from `macro88/gigabrain`. Amy assumes the
+   new slug is `macro88/quaid`. All URL references should be updated together. Confirm
+   before editing — URLs that exist in scripts or CI will break if the rename is partial.
+
+3. **`brain_config` SQLite table:** Renaming this is a schema migration. Fry must confirm
+   the DDL change and migration strategy before Amy updates docs that reference it.
+
+4. **Cargo feature flag names (`embedded-model`, `online-model`, `bundled`):** These are
+   Rust source-level identifiers. Amy will update any docs that expose them to users
+   only if Fry renames them in Cargo.toml. They are not a docs-only concern.
+
+5. **`phase2_progress.md`:** Internal handoff doc with historical MCP tool names. Recommend
+   adding a rename notice at the top rather than rewriting tool names throughout.
+
+6. **`docs/gigabrain-vs-qmd-friction-analysis.md`:** This doc uses GigaBrain as the
+   product name throughout and also references `gbrain_search` as a hypothetical skill
+   function. Confirm whether this is a living user-facing reference or an archived analysis.
+   If archived, a rename notice at the top may be sufficient.
+
+---
+
+## File-by-file summary of change volume
+
+| File | Occurrences (approx.) | Rename type |
+|------|-----------------------|-------------|
+| `README.md` | ~80 | Product, CLI, MCP tools, env vars, paths, URLs |
+| `docs/getting-started.md` | ~70 | Product, CLI, MCP tools, env vars, paths |
+| `docs/roadmap.md` | ~40 | Product, CLI, MCP tools, env vars |
+| `docs/contributing.md` | ~30 | Product, CLI, asset names, npm package |
+| `docs/spec.md` | ~200+ (large file) | Product, CLI, MCP tools, env vars, schema |
+| `docs/openclaw-harness.md` | ~35 | Product, CLI, MCP tools, env vars, paths |
+| `docs/gigabrain-vs-qmd-friction-analysis.md` | ~25 | Product, CLI, comparison table |
+| `AGENTS.md` | ~25 | Product, CLI, MCP tools, schema, paths |
+| `CLAUDE.md` | ~20 | Product, CLI, MCP tools, env vars, paths |
+| `skills/ingest/SKILL.md` | ~15 | CLI commands |
+| `skills/query/SKILL.md` | ~15 | CLI commands, env var |
+| `skills/maintain/SKILL.md` | ~5 | CLI commands |
+| `skills/briefing/SKILL.md` | ~8 | CLI commands |
+| `skills/research/SKILL.md` | ~10 | CLI commands, MCP tools |
+| `skills/enrich/SKILL.md` | ~12 | CLI commands, MCP tools |
+| `skills/alerts/SKILL.md` | ~10 | CLI commands, MCP tools |
+| `skills/upgrade/SKILL.md` | ~15 | CLI commands, asset names, API URL |
+| `phase2_progress.md` | ~10 | MCP tools, URL |
+
+---
+
+## Decisions logged
+
+**Decision 1:** Use `memory.db` as the recommended default DB filename (not `quaid.db`).
+Rationale: aligns with the "memory" concept word and avoids a product-name collision in
+multi-instance setups. Pending Fry confirmation.
+
+**Decision 2:** The `brain_config` SQLite table is a schema-level concern. Docs will
+reference the new name only after Fry confirms the DDL rename and migration strategy.
+
+**Decision 3:** Garry Tan's "GBrain" attribution is preserved as a historical reference —
+it refers to his project, not ours. All references to "GigaBrain" (our product) are renamed;
+the Garry Tan credit stands.
+
+**Decision 4:** `phase2_progress.md` will receive a rename notice at the top rather than
+a full retroactive rewrite of historical tool names.
+
+**Decision 5:** The `.gbrainignore` file rename to `.quaidignore` must be coordinated with
+Fry as it affects file-system conventions used by the reconciler and watcher.
+
+# Decision: Quaid Hard Rename — Documentation & Skills Implementation
+
+**Date:** 2025-07-22  
+**Author:** Amy (Technical Writer)  
+**Status:** Implemented — Phases G and H complete
+
+---
+
+## What was done
+
+Applied the hard rename from GigaBrain/gbrain/brain terminology to Quaid/quaid/memory across all documentation, agent-facing markdown, and skill files:
+
+**Files updated (Phase G — Documentation):**
+- `README.md` — title, subtitle, all CLI examples, env vars, MCP tool names, install URLs, binary asset names
+- `CLAUDE.md` — product name, all CLI/MCP tool/env var references, architecture table, quaid_config
+- `AGENTS.md` — all CLI commands, MCP tool names, DB path, product description
+- `docs/spec.md` — comprehensive pass; ~245 occurrences resolved
+- `docs/getting-started.md` — all quickstart CLI examples
+- `docs/contributing.md` — repo layout, release process, tool references
+- `docs/roadmap.md` — all phase descriptions and CLI examples
+- `docs/gigabrain-vs-qmd-friction-analysis.md` — product name references; file not renamed (per tasks.md: consult macro88 first)
+
+**Files updated (Phase H — Skills):**
+- All 8 `skills/*/SKILL.md` files — gbrain→quaid CLI, brain_*→memory_* tools, GBRAIN_*→QUAID_* env vars
+
+---
+
+## Key decisions made during implementation
+
+### 1. "Garry Tan's GBrain" kept as historical reference
+The phrase "Garry Tan's GBrain work" in `README.md`, `CLAUDE.md`, and `docs/spec.md` was preserved. This is attribution to prior art (a Gist) and should remain as-is. The surrounding prose uses "Quaid" throughout.
+
+### 2. docs/gigabrain-vs-qmd-friction-analysis.md — file not renamed
+Per tasks.md instruction (G.7): "consult with macro88 before renaming files in `docs/`". All product-name content inside the file was updated; the filename itself was not changed. A follow-up decision from macro88 is needed.
+
+### 3. README subtitle and Why section rewritten
+The original opening used "personal knowledge brain" framing. The new subtitle is "Persistent memory for AI agents" to match the agent-first positioning in the proposal. The "Git doesn't scale past ~5,000 files" paragraph was removed; the Why section now leads with the agent use case.
+
+### 4. Default init path updated
+CLI examples throughout changed from `quaid init ~/memory.db` → `quaid init ~/.quaid/memory.db`, consistent with the `~/.quaid/` config directory rename.
+
+### 5. Upgrade skill binary filename pattern
+In `skills/upgrade/SKILL.md`, patterns like `gbrain.new`, `$(which gbrain)`, and `gbrain.new.sha256` were renamed to `quaid.new`, `$(which quaid)`, and `quaid.new.sha256`. These were not caught by the simple space/backtick patterns and required targeted fixes.
+
+### 6. spec.md upgrade section
+References to `https://github.com/[owner]/gbrain/releases/...` URLs updated to `[owner]/quaid`. Checksum staging file names updated from `gbrain.sha256` to `quaid.sha256`. Error message "Upgrade gbrain" updated to "Upgrade quaid".
+
+### 7. Comparison table in spec.md
+`| SQLite (gbrain) |` updated to `| SQLite (quaid) |`. The adjacent `PGLite (Garry's GBrain)` column header was preserved as it refers to Garry Tan's separate project.
+
+---
+
+## Phases not in scope for Amy
+
+Phases B–F (schema, Cargo, MCP server code, env vars in scripts, CI/release workflows) and Phases I–L (test suite, final audit, migration guide, PR) are owned by engineering roles per the ownership table in tasks.md.
+
+---
+
+## Verification
+
+Final check confirmed zero remaining occurrences of `GigaBrain|gbrain|GBRAIN_|brain\.db|~/.gbrain|macro88` in all updated files (excluding historical "Garry Tan's GBrain" references intentionally preserved).
+
+# Decision: Release note body — breaking-rename warning fix
+
+**Author:** Amy  
+**Date:** 2026-04-25  
+**File changed:** `.github/workflows/release.yml`  
+**Triggered by:** Nibbler rejection of final release approval
+
+---
+
+## Decisions recorded
+
+### 1. Breaking-rename callout must open the release body — not follow install instructions
+
+The previous body put `## Install` first, relegating all context to a single prose paragraph
+at the bottom. Nibbler's rejection was correct: a user scanning the release page sees the
+install commands before they see that this is a hard-breaking change. The new body opens with
+`## ⚠️ BREAKING RENAME — Read before upgrading` and a four-row table of required user actions,
+making it impossible to miss on any device or email preview.
+
+### 2. Migration guide pointer is mandatory in release notes for this rename
+
+`MIGRATION.md` exists and is thorough. Not linking to it in the release notes forced users to
+find it by browsing the repo. The new body includes a prominent bolded pointer immediately
+after the breaking-change table: `**→ Full step-by-step migration instructions: [MIGRATION.md](...)**`.
+
+### 3. "npm installs the `online` channel" removed; replaced with explicit deferred note
+
+The old prose stated "npm installs the `online` channel" as a present-tense fact. npm is
+**not** a live install path for `quaid` (see `RELEASE_CHECKLIST.md` deferred-channels gate
+and `MIGRATION.md` npm section). This is a factual error in release messaging that would
+mislead users into running `npm install -g quaid` and getting nothing. Replaced with a
+blockquote: *"npm — planned follow-on, not yet available. `quaid` is not in the public npm
+registry. Use the shell installer or a GitHub Releases binary above."*
+
+### 4. "This patch release" framing removed
+
+The phrase "This patch release" understated the severity of the change. A hard rename that
+breaks every user-facing surface, invalidates all existing databases, and requires manual
+MCP client reconfiguration is not a patch in any user-visible sense. The changelog prose was
+rewritten to open with the rename context and present the Issue #81 fix as a secondary item.
+
+### 5. No overlap with Zapp's RELEASE_CHECKLIST.md scope
+
+`.github/RELEASE_CHECKLIST.md` was left untouched. Zapp owns that file's sign-off gates.
+All changes were confined to the `body:` block of the `Create release` step in
+`.github/workflows/release.yml`.
+
+---
+
+## Files changed
+
+- `.github/workflows/release.yml` — `body:` block of the `Create release` step rewritten
+
+# Amy — Residual Rename Cleanup Decisions
+
+**Date:** 2026-04-25  
+**Task:** quaid-hard-rename residual audit — docs, openspec, benchmarks  
+**Requested by:** macro88
+
+---
+
+## Decisions
+
+### 1. `docs/gigabrain-vs-qmd-friction-analysis.md` renamed to `docs/quaid-vs-qmd-friction-analysis.md`
+
+**Decision:** Renamed the file. The content already used "Quaid" throughout and contained no old-brand product strings. Only the filename was stale. No cross-file references to the old filename were found (the one reference in `openspec/changes/quaid-hard-rename/tasks.md` is in the tasks list under G.7, which was already marked `[x]`).
+
+---
+
+### 2. "personal knowledge brain" replaced with "personal AI memory" across all Amy surfaces
+
+**Decision:** Replaced the product tagline "personal knowledge brain" with "personal AI memory layer" (prose) or "personal AI memory" (short form) in:
+- `README.md` (tagline)
+- `CLAUDE.md` (lede line)
+- `docs/spec.md` (frontmatter title, H1, lede quote, embedded CLAUDE.md block)
+- `docs/getting-started.md` (lede)
+- `docs/contributing.md` (intro paragraph)
+
+**Rationale:** "knowledge brain" is the old product-concept term. "AI memory" is the Quaid-aligned term consistent with the `memory_*` MCP tool names and `memory.db` default filename. Generic domain uses of "personal knowledge base" (e.g., in retrieval quality discussion in spec.md) were left untouched — those refer to the domain category, not the product.
+
+---
+
+### 3. `docs/openclaw-harness.md` — comprehensive `gbrain`/`GigaBrain` cleanup
+
+**Decision:** Full pass on the file. All changes applied:
+- `GigaBrain` → `Quaid`
+- `gbrain` CLI commands → `quaid`
+- `brain.db` → `memory.db`
+- `GBRAIN_DB` → `QUAID_DB`
+- `.gbrainignore` → `.quaidignore`
+- `brain_collections`, `brain_query`, `brain_search`, `brain_put`, `brain_get` → `memory_*` equivalents
+- "SQLite brain" → "SQLite memory store"
+
+**Rationale:** This file was the most visibly stale in the docs/ directory — it used GigaBrain branding throughout. Now reads as if Quaid was always the name.
+
+---
+
+### 4. `openspec/` prose updated (J.2 confirmed)
+
+**Decision:** Full pass across all `openspec/changes/` subdirectories (including `archive/`) excluding `quaid-hard-rename/` (which documents the rename itself). Zero remaining occurrences of `gbrain`, `GigaBrain`, `brain.db`, `brain_config`, or `GBRAIN_` confirmed by post-pass scan.
+
+J.2 in `openspec/changes/quaid-hard-rename/tasks.md` was already marked `[x]` and is now verified complete.
+
+---
+
+### 5. `AGENTS.md` — two minor old-concept fixes
+
+**Decision:** Updated two comment strings:
+- "search and synthesize across the brain" → "search and synthesize across memory"
+- "create new brain" (code comment) → "create new memory store"
+
+These were not product-name strings but used "brain" as a product concept, inconsistent with the Quaid memory model.
+
+---
+
+### 6. `benchmarks/README.md` — synthetic query fixture updated
+
+**Decision:** Changed query 3 from "knowledge brain sqlite embeddings" to "quaid memory sqlite embeddings" to remove the old product-concept phrasing from the documented baseline fixture. The `projects/quaid` result references were already updated by prior work.
+
+---
+
+## Items NOT changed (intentional)
+
+- `docs/spec.md` lines 2655, 2661, 2714, 2924: "personal knowledge base" in retrieval quality discussion — domain category term, not product name. Left as-is.
+- `docs/spec.md` line 28: "Inspired by Garry Tan's GBrain work" — historical attribution citation. Left as-is.
+- `.squad/` — explicitly out of scope per task instructions.
+- `website/` — owned by Hermes; not in Amy's surfaces.
+
+# Decision: `quaid call` doc truth fix — `memory_collections` exclusion
+
+**Author:** Bender  
+**Date:** 2026-04-25  
+**Context:** quaid-hard-rename — Nibbler reviewer blocker on `docs/getting-started.md`
+
+## Finding
+
+`docs/getting-started.md` §"Raw MCP tool invocation" claimed `quaid call` could invoke **any** MCP tool. This was false. `src/commands/call.rs` `dispatch_tool()` contains a 16-arm `match` covering:
+
+`memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`, `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`, `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
+
+The 17th tool, `memory_collections`, is implemented in `src/mcp/server.rs` (method `memory_collections`, line ~1327) but has no arm in `dispatch_tool()`. Passing `memory_collections` to `quaid call` falls through to `_ => Err("unknown tool: ...")`.
+
+## Decision
+
+Fix the doc wording only (no code change). Changed:
+
+> "Call any MCP tool directly from the CLI without starting the server:"
+
+to:
+
+> "Call MCP tools directly from the CLI without starting the server. The dispatcher covers the 16 stateless tools; `memory_collections` requires `quaid serve` and is not available via `quaid call`."
+
+## Rationale
+
+`memory_collections` is a vault-sync serve-side tool (reads live watcher/collection state from a running serve context). Wiring it into the headless `quaid call` dispatcher is a separate implementation decision that belongs to the vault-sync lane (Fry/Professor), not a docs cycle. The doc must not claim broader coverage than the shipped code provides.
+
+## Follow-on
+
+If vault-sync owners decide to add `memory_collections` to the `call` dispatcher, the doc sentence should be updated to remove the exclusion note.
+
+# Bender — Migration Blocker Fix
+
+**Date:** 2026-04-27  
+**Author:** Bender  
+**Scope:** Fix two Professor-rejected artifacts (`upgrade.mdx`, `schema.sql`) and create the missing `MIGRATION.md`.
+
+---
+
+## What Was Broken
+
+### 1. `src/schema.sql` — header version mismatch
+
+The file header read `-- memory.db schema — Quaid v5` while `SCHEMA_VERSION` in
+`src/core/db.rs` is `6`. Anyone reading the SQL file saw a version number that
+contradicted the runtime constant. Professor's rejection was correct.
+
+**Fix:** Header updated to `-- memory.db schema — Quaid v6`.
+
+---
+
+### 2. `website/src/content/docs/how-to/upgrade.mdx` — two false claims
+
+**Claim A:** Line 50 told users the current schema version is `5`. It is `6`.  
+**Fix:** Updated to `currently \`6\``.
+
+**Claim B:** The hard-rename `<Aside>` directed users to "`MIGRATION.md` at the
+repository root", which did not exist (tasks.md Phase K item K.1 was unchecked).  
+**Fix:** The reference now links to the file on GitHub
+(`https://github.com/quaid-app/quaid/blob/main/MIGRATION.md`), and `MIGRATION.md`
+has been created at the repository root (see below).
+
+---
+
+### 3. `MIGRATION.md` — did not exist (K.1 was unchecked)
+
+Created `MIGRATION.md` at the repository root covering all surfaces listed in K.1:
+
+- Binary rename (`gbrain` → `quaid`)
+- Env var table (`GBRAIN_*` → `QUAID_*`, all 8 user-facing vars)
+- MCP tool rename table (all 17 tools, `brain_*` → `memory_*`)
+- DB migration path (export with old binary → `quaid init` → `quaid import`)
+- Default DB path change (`~/.gbrain/brain.db` → `~/.quaid/memory.db`)
+- npm package rename
+- MCP client config update instructions
+
+---
+
+## Decision
+
+The upgrade doc and schema header are now internally consistent and point only to
+files that exist. `MIGRATION.md` satisfies task K.1 from the quaid-hard-rename
+checklist. Tasks K.1 can be marked done; L.3 (PR) remains open.
+
+No other artifacts were modified. Fry, Hermes, Amy, and Zapp remain locked out of
+revising these artifacts for this cycle per the reviewer rejection context.
+
+---
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| `src/schema.sql` | Header: `v5` → `v6` |
+| `website/src/content/docs/how-to/upgrade.mdx` | Schema version `5` → `6`; `MIGRATION.md` bare path → GitHub URL link |
+| `MIGRATION.md` | Created (was missing; K.1 deliverable) |
+
+# Bender Validation Audit — Quaid Hard Rename
+
+**Date:** 2026-04-25  
+**Auditor:** Bender  
+**Scope:** Read-only validation audit for `openspec/changes/quaid-hard-rename`. No code changes.  
+**Verdict:** OPEN — Rename is implementable, but several gaps in the proposal will make it incomplete even if the code compiles.
+
+---
+
+## Summary Judgment
+
+The proposal (`proposal.md`, `tasks.md`) covers the obvious surfaces correctly. However, four issues are **silent-failure risks** — the codebase will still compile while the rename is structurally incomplete. The test suite has hardcoded string assertions that must be updated atomically with the source changes or CI will gate incorrectly. A fifth issue (`gbrain_id`) is a scope question that requires an explicit decision before implementation starts.
+
+---
+
+## Critical Gaps (implementation WILL be incomplete unless addressed)
+
+### GAP-1: `gbrain_id` frontmatter field — not covered by the proposal
+
+`src/core/page_uuid.rs` reads and validates a `gbrain_id:` key from page YAML frontmatter. `src/core/markdown.rs` emits it on export. The `tests/roundtrip_raw.rs` byte-exact fixture literally contains `gbrain_id: 01969f11-9448-7d79-8d3f-c68f54761234\n` as the first frontmatter line. This field is user-visible data embedded in every exported page file on disk.
+
+The proposal's non-goals say "Renaming internal non-surface tables" — but `gbrain_id` is neither internal nor a table. It is a key in every page's YAML frontmatter. If it stays as `gbrain_id` after the rename, every page a user exports from `quaid` will still contain `gbrain_id:`.
+
+**Decision required:** Is `gbrain_id` → something else (e.g., `quaid_id`, `memory_id`) in scope? If yes, the roundtrip_raw fixture must change and it is a data-migration breaking change for anyone who has pages in their brain already. If no, document why the user-visible frontmatter key retains the old product name.
+
+**Files affected:** `src/core/page_uuid.rs`, `src/core/markdown.rs`, `src/core/types.rs` (test), `src/mcp/server.rs` (test fixture), `tests/roundtrip_raw.rs` (canonical fixture), `tests/roundtrip_semantic.rs`.
+
+---
+
+### GAP-2: Crate library name — `use gbrain::` across all integration tests
+
+`src/lib.rs` exposes the crate as `gbrain`. Once `Cargo.toml` renames `name = "gbrain"` to `name = "quaid"`, every file that uses `use gbrain::` will fail to compile:
+
+- `tests/roundtrip_raw.rs` — `use gbrain::core::db;`
+- `tests/roundtrip_semantic.rs` — `use gbrain::core::db;`
+- `tests/graph.rs`, `tests/assertions.rs`, `tests/collection_cli_truth.rs`, `tests/corpus_reality.rs`, `tests/concurrency_stress.rs`, `tests/embedding_migration.rs`, `tests/search_hardening.rs`, `tests/beir_eval.rs`, `tests/quarantine_revision_fixes.rs`, `tests/model_selection.rs`, `tests/watcher_core.rs`
+
+The proposal's Phase I audit command `rg "gbrain|brain_config|GBRAIN_" tests/ src/ --type rust` will catch these, but the Phase C task description does not explicitly call out `use gbrain::` imports as a consequence of the crate rename. Fry must know to update all `use gbrain::` → `use quaid::` in test files at the same time as `Cargo.toml`.
+
+**This is a build-gate failure, not just a test failure.** The crate rename is atomic with the import updates.
+
+---
+
+### GAP-3: Build-time env vars in `build.rs` and `src/core/inference.rs` — partially listed but not fully mapped
+
+`build.rs` sets three `cargo:rustc-env` variables at compile time:
+- `GBRAIN_EMBEDDED_CONFIG_PATH`
+- `GBRAIN_EMBEDDED_TOKENIZER_PATH`
+- `GBRAIN_EMBEDDED_MODEL_PATH`
+
+`src/core/inference.rs` reads them via `env!(...)`. `build.rs` also checks `GBRAIN_EMBEDDED_MODEL_DIR` and `GBRAIN_MODEL_DIR` as candidate model directory overrides, and hard-codes the default model cache lookup at `~/.gbrain/models/bge-small-en-v1.5`.
+
+Additionally, `src/core/inference.rs` uses:
+- `GBRAIN_FORCE_HASH_SHIM` — CI test env var (used in `.github/workflows/ci.yml` as `GBRAIN_FORCE_HASH_SHIM: "1"`)
+- `GBRAIN_HF_BASE_URL` — runtime HuggingFace base URL override
+- `GBRAIN_MODEL_CACHE_DIR` — runtime model cache directory override
+
+The proposal's Phase E env-var list (`proposal.md` table) covers the user-facing install vars but omits these six internal/build-time vars. All must be renamed for consistency.
+
+**CI will break**: `ci.yml` line 114 sets `GBRAIN_FORCE_HASH_SHIM: "1"` for the online-channel test run. If `inference.rs` is renamed to `QUAID_FORCE_HASH_SHIM` but the workflow still sets `GBRAIN_FORCE_HASH_SHIM`, the shim guard will silently stop working and the online-model test will attempt live downloads.
+
+---
+
+### GAP-4: `tests/install_profile.sh` has 14+ hardcoded `GBRAIN_DB` string assertions
+
+`install_profile.sh` tests T5, T6, T15, T16, T19, and others call `grep -Fq "export GBRAIN_DB="` against profile file contents. After `install.sh` is updated to write `QUAID_DB`, these tests will fail.
+
+Additionally `install_profile.sh` itself is sourced by `main()` tests with `GBRAIN_TEST_MODE=1`, `GBRAIN_CHANNEL=`, `GBRAIN_NO_PROFILE=`, etc. — all of which must be updated.
+
+Similarly, `tests/install_release_seam.sh` uses `GBRAIN_TEST_MODE`, `GBRAIN_RELEASE_API_URL`, `GBRAIN_RELEASE_BASE_URL`, `GBRAIN_INSTALL_DIR`, `GBRAIN_CHANNEL`, `GBRAIN_VERSION` as hard-coded env var names in the test setup. All 6 must change to `QUAID_*`.
+
+The proposal Phase I says "audit all test files" but does not call out that the shell test env var names are implementation-coupled assertions — not just CLI invocations.
+
+---
+
+### GAP-5: `tests/release_asset_parity.sh` — hardcoded `gbrain-` prefix checks
+
+`release_asset_parity.sh` T1 calls `simulate_asset "$platform" "$channel"` which formats `gbrain-%s-%s`. T2 checks `artifact: ${name}` in release.yml. T4 counts `artifact: gbrain-` lines. T5 asserts exactly 17 manifest entries. T7 checks for `'gbrain-${PLATFORM}-${CHANNEL}'` in `install.sh`. T8 checks for `gbrain-<platform>-<channel>` in spec docs.
+
+If the rename changes all artifacts to `quaid-*`, ALL of these assertions flip. The test itself is a contract checker — it must be updated in lock-step with the manifest, workflow, and installer.
+
+---
+
+## High-Risk Regressions to Verify
+
+### R-1: Schema breaking change — `SCHEMA_VERSION` bump is mandatory, not optional
+
+`src/core/db.rs` line 15: `const SCHEMA_VERSION: i64 = 5;`. The `open_with_model()` call checks stored schema version against `SCHEMA_VERSION`. If `brain_config` is renamed to `quaid_config` in `schema.sql` but `SCHEMA_VERSION` is not bumped, the `table_exists(conn, "brain_config")` fallback path in `read_brain_config` will silently treat the renamed table as a legacy DB. This must be bumped to 6 atomically with the DDL rename.
+
+### R-2: `format_model_mismatch` error message — hardcoded tool names
+
+`src/core/db.rs` lines 523, 536 format error messages containing:
+- `"rm {} && gbrain init"` 
+- `"GBRAIN_MODEL={} gbrain <command>"`
+
+After the rename these must say `quaid init` and `QUAID_MODEL={} quaid <command>`. Tests in `db.rs` lines 1034 and 1048 assert these exact substrings — they will fail (correctly) if the production message is updated but the assertion strings are not updated to match.
+
+### R-3: MCP tool names are derived from Rust method names by `rmcp` proc macro
+
+The `#[tool(tool_box)]` and `#[tool(description = "...")]` proc macros in `rmcp` derive the protocol-visible tool name from the Rust method name. There are NO separate `name = "..."` attributes on the `brain_*` methods. Renaming the Rust method `brain_get` → `memory_get` IS the protocol rename. Implementation must rename both in the same commit. Partial renaming (e.g., Rust method renamed, struct name `GigaBrainServer` not renamed) will not break compilation but is inconsistent. The `GigaBrainServer` struct name and the `"GigaBrain personal knowledge brain"` server instructions string in `get_info()` must both be updated.
+
+### R-4: `build.rs` user-agent string
+
+`build.rs` line 88: `user_agent("gigabrain-build/0.9.2")` — this is the HTTP user-agent sent to HuggingFace during model download. It hardcodes the old product name and an old version. Must be updated to `quaid-build/<version>` (or use `env!("CARGO_PKG_VERSION")`).
+
+### R-5: `.gitignore` must be updated
+
+`.gitignore` currently ignores `/brain.db`, `/brain.db-journal`, `/brain.db-shm`, `/brain.db-wal` and `packages/gbrain-npm/bin/gbrain.bin` / `gbrain.download`. After rename these should ignore `memory.db` (or `quaid.db`) variants and `quaid-npm/bin/quaid.bin`.
+
+If `.gitignore` is not updated, the new default DB filename will not be ignored and may accidentally get committed to git.
+
+### R-6: `packages/gbrain-npm/` directory and npm package
+
+The npm package directory is `packages/gbrain-npm/`. `package.json` has:
+- `"name": "gbrain"` → must become `"name": "quaid"` (or `@quaid-app/quaid`)
+- `"description": "GigaBrain..."` → updated
+- `"bin": { "gbrain": "bin/gbrain" }` → `"bin": { "quaid": "bin/quaid" }`
+- `"files": ["bin/gbrain", ...]` → `"files": ["bin/quaid", ...]`
+- `"repository": "macro88/gigabrain"` → `"quaid-app/quaid"`
+
+`postinstall.js` uses `GBRAIN_REPO`, `GBRAIN_RELEASE_BASE_URL`, `GBRAIN_RELEASE_TAG_URL` env vars, constructs asset names like `gbrain-darwin-arm64-online`, logs `[gbrain]` prefix, writes to `bin/gbrain.bin`. The `publish-npm.yml` workflow points at `packages/gbrain-npm` — if the directory is renamed, the workflow path must update.
+
+### R-7: `src/core/quarantine.rs`, `src/core/reconciler.rs`, `src/core/raw_imports.rs` — contain `GBRAIN_*` env refs
+
+These files contain `GBRAIN_*` env var references (from the grep count output). Phase E must not stop at `scripts/install.sh` — `rg "GBRAIN_"` across the full `src/` tree must be run and all hits addressed.
+
+---
+
+## Verification Checklist
+
+Implementation must prove all of the following before the PR is considered complete:
+
+### Build Gate
+- [ ] `cargo build --release` succeeds and produces a binary named `quaid` (not `gbrain`)
+- [ ] `cargo build --release --no-default-features --features bundled,online-model` succeeds
+- [ ] `cargo check --all-targets` produces zero errors
+
+### Test Gate
+- [ ] `cargo test` passes with zero failures (default / airgapped channel)
+- [ ] `cargo test --no-default-features --features bundled,online-model` passes (with `QUAID_FORCE_HASH_SHIM=1`)
+- [ ] `cargo test --test roundtrip_raw --test roundtrip_semantic` passes (uses `use quaid::`, fixture has correct frontmatter key for `gbrain_id` or confirmed no-change)
+- [ ] `sh tests/install_profile.sh` passes (all `GBRAIN_DB` string checks updated to `QUAID_DB`)
+- [ ] `sh tests/release_asset_parity.sh` passes (all `gbrain-` prefix checks updated to `quaid-`)
+- [ ] `sh tests/install_release_seam.sh` passes (all `GBRAIN_*` env var setup updated to `QUAID_*`)
+
+### Schema Gate
+- [ ] `SCHEMA_VERSION` has been bumped (5 → 6)
+- [ ] `brain_config` table DDL in `src/schema.sql` renamed to `quaid_config`
+- [ ] All `brain_config` SQL string literals in `src/core/db.rs` updated to `quaid_config`
+- [ ] Functions `read_brain_config`, `write_brain_config` renamed to `read_quaid_config`, `write_quaid_config`
+- [ ] Error messages in `db.rs` say `quaid init` not `gbrain init`
+
+### MCP Gate
+- [ ] `GigaBrainServer` struct renamed (suggested: `QuaidServer` or `MemoryServer`)
+- [ ] All 17 `brain_*` Rust methods renamed to `memory_*`
+- [ ] Server instructions string updated from `"GigaBrain personal knowledge brain"` to `"Quaid personal memory"`
+- [ ] `BrainGetInput`, `BrainPutInput`, etc. struct names updated (consistency — these are exposed in tool schemas)
+
+### Env Var Gate (exhaustive)
+- [ ] `GBRAIN_DB` → `QUAID_DB`
+- [ ] `GBRAIN_MODEL` → `QUAID_MODEL`
+- [ ] `GBRAIN_CHANNEL` → `QUAID_CHANNEL`
+- [ ] `GBRAIN_INSTALL_DIR` → `QUAID_INSTALL_DIR`
+- [ ] `GBRAIN_VERSION` → `QUAID_VERSION`
+- [ ] `GBRAIN_NO_PROFILE` → `QUAID_NO_PROFILE`
+- [ ] `GBRAIN_RELEASE_API_URL` → `QUAID_RELEASE_API_URL`
+- [ ] `GBRAIN_RELEASE_BASE_URL` → `QUAID_RELEASE_BASE_URL`
+- [ ] `GBRAIN_FORCE_HASH_SHIM` → `QUAID_FORCE_HASH_SHIM` (internal/test; also update `ci.yml`)
+- [ ] `GBRAIN_HF_BASE_URL` → `QUAID_HF_BASE_URL` (internal)
+- [ ] `GBRAIN_MODEL_CACHE_DIR` → `QUAID_MODEL_CACHE_DIR` (internal)
+- [ ] `GBRAIN_EMBEDDED_MODEL_DIR` → `QUAID_EMBEDDED_MODEL_DIR` (build)
+- [ ] `GBRAIN_MODEL_DIR` → `QUAID_MODEL_DIR` (build)
+- [ ] `GBRAIN_EMBEDDED_CONFIG_PATH` / `_TOKENIZER_PATH` / `_MODEL_PATH` (build-time rustc-env) → `QUAID_*`
+
+### CI / Release Gate
+- [ ] `.github/workflows/release.yml` artifact matrix uses `quaid-*` prefix
+- [ ] `.github/workflows/ci.yml` updates `GBRAIN_FORCE_HASH_SHIM` env var
+- [ ] `.github/release-assets.txt` all 16 binary entries updated to `quaid-*`
+- [ ] `.github/RELEASE_CHECKLIST.md` updated
+- [ ] Release body install instructions use `quaid-app/quaid`, `QUAID_CHANNEL`, `quaid-<platform>-<channel>` naming
+
+### Install Script Gate
+- [ ] `scripts/install.sh` `REPO` updated to `quaid-app/quaid`
+- [ ] All `GBRAIN_*` vars renamed to `QUAID_*` in install.sh
+- [ ] Asset naming changed from `gbrain-${PLATFORM}-${CHANNEL}` to `quaid-${PLATFORM}-${CHANNEL}`
+- [ ] Profile injection lines updated to write `QUAID_DB` not `GBRAIN_DB`
+- [ ] Install target path `${INSTALL_DIR}/gbrain` → `${INSTALL_DIR}/quaid`
+- [ ] Printed messages say `quaid` not `gbrain`
+
+### Final Audit Grep (must be zero hits outside `.squad/` history files)
+```
+rg -i "gbrain|gigabrain|brain\.db|brain_config|GBRAIN_" \
+  --type-add "text:*.{rs,md,toml,sh,yml,yaml,json,mjs,ts,js}" -t text -l \
+  --glob "!.squad/agents/*/history.md" \
+  --glob "!.squad/decisions*.md" \
+  --glob "!openspec/changes/quaid-hard-rename/**"
+```
+Expected: zero files. Any file that appears in this output represents an incomplete rename.
+
+---
+
+## Scope Question for macro88
+
+**`gbrain_id` frontmatter key** — The proposal does not address this. It appears in every exported page's YAML. Before implementation begins, macro88 must decide:
+
+1. **Rename it** (e.g., `quaid_id` or `memory_id`) — breaking change for anyone with existing pages. `roundtrip_raw.rs` fixture must change.
+2. **Leave it as `gbrain_id`** — product is named Quaid but every page carries a `gbrain_id:` key. Document this explicitly as "internal identifier, not renamed for migration safety."
+
+This decision gates the Phase B schema work. If it's renamed, the `page_uuid` validation code, the `markdown.rs` render path, and several test fixtures all change. If it's left alone, Phase I can skip `gbrain_id` patterns explicitly.
+
+---
+
+## Risky Regressions Not in the Proposal Tasks
+
+| Risk | Location | Why Dangerous |
+|------|----------|---------------|
+| `GBRAIN_FORCE_HASH_SHIM` not renamed in CI | `ci.yml` line 114 + `inference.rs` | Online-model CI test silently runs live downloads |
+| `build.rs` `user_agent` string | `build.rs` line 88 | Old product name in HF download headers (cosmetic but embarrassing post-release) |
+| `.gitignore` not updated | `.gitignore` | `memory.db` or `quaid.db` gets committed accidentally |
+| `packages/gbrain-npm/` dir not renamed | `publish-npm.yml` | npm publish workflow path breaks if dir is renamed without updating workflow |
+| `BrainGetInput` etc. struct names | `src/mcp/server.rs` | These names appear in MCP tool JSON schemas — users who introspect tool schemas see old branding |
+| `default_db_path` in `inference.rs` | `~/.gbrain` cache | Online model downloads cache to `~/.gbrain` not `~/.quaid` |
+| `src/commands/version.rs` | `println!("gbrain {}")` | `quaid version` prints `gbrain 0.x.x` |
+
+# Decision: docs/spec.md truth repair for default DB path and release asset naming
+
+**Author:** Bender  
+**Date:** 2026-04-25  
+**Change:** quaid-hard-rename  
+**Triggered by:** Nibbler reviewer rejection — spec.md misstated default DB path and release asset naming convention in user-breaking ways.
+
+---
+
+## What was wrong
+
+Six locations in `docs/spec.md` contained stale contract claims after the hard rename:
+
+| Location | Stale | Correct |
+|---|---|---|
+| CLI help block (`--db` default) | `./memory.db` | `~/.quaid/memory.db` |
+| DB path resolution list (item 3) | `./memory.db in current directory` | `~/.quaid/memory.db` |
+| Usage examples (`init` / `import`) | `~/my-memory.db`, `~/memory.db` | `~/.quaid/memory.db` |
+| Upgrade skill pre-check step 2 | `${QUAID_DB:-./memory.db}` | `${QUAID_DB:-~/.quaid/memory.db}` |
+| Upgrade skill download block | `quaid-${PLATFORM}` (no channel suffix) | `quaid-${PLATFORM}-${CHANNEL}` |
+| Rollback step DB_PATH resolve | `${QUAID_DB:-./memory.db}` | `${QUAID_DB:-~/.quaid/memory.db}` |
+| Quick install example | `quaid-${PLATFORM}` (no channel suffix) | `quaid-${PLATFORM}-${CHANNEL}` |
+
+## Validation performed
+
+- `src/core/db.rs` `default_db_path()` confirmed: `~/.quaid/memory.db` with `memory.db` fallback (no-HOME case only).
+- `.github/release-assets.txt` confirmed: all assets follow `quaid-<platform>-<channel>` naming (e.g., `quaid-darwin-arm64-airgapped`). No unsuffixed assets exist.
+- `.github/workflows/release.yml` confirmed: every matrix entry sets `artifact: quaid-<platform>-<channel>` explicitly.
+- Full forbidden-literal scan of `docs/spec.md`: zero `gigabrain`, `gbrain`, `brain_` occurrences.
+
+## Decision
+
+Apply surgical fixes to `docs/spec.md` only. README and docs/getting-started.md correctly point to `docs/spec.md` as the authority and already use the correct `~/.quaid/memory.db` default; no changes needed there after the spec is repaired.
+
+The upgrade skill and quick-install download blocks now use an explicit `CHANNEL` variable (defaulting to `airgapped`) instead of a bare `quaid-${PLATFORM}` string, matching the canonical asset manifest.
+
+### 2026-04-26T21:17:23+08:00: User directive
+**By:** macro88 (via Copilot)
+**What:** Hard-reset rename the project from GigaBrain/gbrain/brain to Quaid/quaid/memory everywhere; no backward compatibility, aliases, shims, or migration layers. Use Quaid for the product, quaid for the CLI, memory for the concept, QUAID_DB for the env var, ~/.quaid for config storage, memory.db as the default database file, and memory_* for MCP tool names.
+**Why:** User request — captured for team memory
+
+# Fry — issue #79 / #80 release lane decision
+
+- Date: 2026-04-25
+- Scope: release/v0.9.7, issues #79 and #80
+
+## Decision
+
+Use `.github/release-assets.txt` as the single authoritative public release-asset manifest for v0.9.7.
+
+## Why
+
+Issue #79 was not an installer lookup bug in isolation; it was a release-contract drift / partial-release problem amplified by the macOS build break from #80. A checked-in manifest lets the release workflow fail closed on missing assets, keeps installer seam tests honest, and gives docs/reviewer surfaces one exact contract to reference instead of repeating handwritten lists.
+
+## Consequences
+
+- Release verification now reads the manifest instead of maintaining an inline expected array in `release.yml`.
+- Release seam/parity tests validate installer/workflow/doc truth against that same manifest.
+- Checklist/spec/docs should point to the manifest when naming the public artifact family.
+
+# Fry — Issue #81 release-ready decision
+
+- **Date:** 2026-04-25
+- **Decision:** Ship PR #84 as patch release `v0.9.8`, and rewrite the GitHub release body to describe the empty-root watcher hotfix instead of reusing the prior `v0.9.7` macOS release-contract notes.
+- **Why:** The code fix in PR #84 is already the next patch candidate, so leaving product/version surfaces at `0.9.7` would mislabel the release and stale release-note prose would describe the wrong user-visible repair.
+- **Scope touched:** `Cargo.toml`, `Cargo.lock`, `packages/gbrain-npm/package.json`, `src/core/inference.rs`, `README.md`, `docs/getting-started.md`, `website/src/content/docs/guides/install.mdx`, `.github/workflows/release.yml`.
+
+# Fry — Issue #81 watcher empty-root decision
+
+- Decision: treat any `collections` row with `state='active'` and blank `root_path` as invalid legacy state during serve watcher bootstrap, and normalize it to `state='detached'` before watcher registration.
+- Why: the crash surface happens before any filesystem work worth preserving; demoting the row is safer than attempting to watch an empty path or silently keeping an impossible active root around.
+- Implementation seam: `src/core/vault_sync.rs::detach_active_collections_with_empty_root_path()` runs from watcher sync, logs `WARN: serve_detached_empty_root ...`, and leaves watcher selection gated on `trim(root_path) != ''`.
+
+# 2026-04-26: Hard rename runtime cutover
+
+**By:** Fry
+
+**What:** Implement the hard rename with no runtime legacy bridge: product `Quaid`, CLI `quaid`, user-facing concept `memory`, config dir `~/.quaid`, default database `memory.db`, env vars `QUAID_*`, MCP tools `memory_*`, and frontmatter UUID field `memory_id`.
+
+**Why:** The rename scope explicitly rejected aliases and shims. Existing pre-rename databases now fail closed unless re-exported and re-imported into a fresh Quaid database, which keeps the runtime surface honest and avoids hidden compatibility layers in schema/model metadata handling.
+
+**Consequences:**
+- Missing `quaid_config` on an existing database is treated as a schema-mismatch error, not a small-model fallback.
+- `quaid init` creates the parent directory for the default `~/.quaid\memory.db` path so the new default works on first use.
+- Package, installer, release workflow, and test surfaces all align on `quaid-*` assets and `QUAID_*` variables.
+
+# Fry — residual rename cleanup
+
+- Decision: treat `openspec/changes/quaid-hard-rename/` as the only intentional non-website location where legacy `GigaBrain`/`gbrain`/`brain_*` names may remain, because that change directory is the migration source of truth and must preserve the old-to-new mapping.
+- Action taken: cleaned remaining implementation-owned residuals in code, tests, scripts, benchmarks, and non-rename OpenSpec change/spec files so focused rename scans now isolate to the migration spec itself.
+
+# hermes-quaid-rename-audit
+
+**By:** Hermes  
+**Date:** 2026-04-25  
+**Status:** Audit complete — no edits made  
+**Task:** Read-only audit of all docs-site and website-facing surfaces requiring rename from GigaBrain/gbrain/brain → Quaid/quaid/memory
+
+---
+
+## Scope of rename (docs-site surfaces only)
+
+The rename touches every public-facing doc surface. Raw counts across `website/src/content/docs/` (35 files), `README.md`, and `docs/*.md`:
+
+| Term | Count |
+|------|-------|
+| `GigaBrain` (product name) | ~106 |
+| `gbrain` (CLI binary) | ~682 |
+| `brain.db` (default DB filename) | ~129 |
+| `brain_*` (MCP tool prefix) | ~435 |
+| `GBRAIN_*` (env vars) | ~69 |
+| `macro88/gigabrain` (GitHub repo URL) | ~29 |
+| `~/brain` (default DB path pattern) | ~86 |
+
+---
+
+## File-level inventory
+
+### website/astro.config.mjs
+- `title: "GigaBrain"` → `title: "Quaid"`
+- `description:` tagline → update product name
+- `href: "https://github.com/macro88/gigabrain"` → new repo URL
+- `const repo = ... ?? "gigabrain"` → `?? "quaid"` (GitHub Pages base path fallback)
+- Sidebar entry `"why-gigabrain"` → `"why-quaid"` (requires file rename below)
+
+### website/package.json
+- `"name": "gigabrain-docs"` → `"name": "quaid-docs"`
+
+### website/SITE.md
+- Title "GigaBrain Documentation Site" → "Quaid Documentation Site"
+- References to `why-gigabrain` guide slug
+
+### website/src/content/docs/index.mdx (homepage)
+- Hero title, tagline, "What makes GigaBrain different" heading
+- Install URL `macro88/gigabrain` → updated repo URL
+- CLI snippet: `gbrain init ~/brain.db` → `quaid init ~/memory.db`
+- CLI snippet: `GBRAIN_DB=~/brain.db gbrain serve` → `QUAID_DB=~/memory.db quaid serve`
+- Tool count card: `brain_*` tool description → `memory_*`
+- "Live Vault Sync" card: GigaBrain watches → Quaid watches
+- All `gbrain` commands in "Get running in seconds" block
+
+### website/src/content/docs/why-gigabrain.mdx ← FILE RENAME REQUIRED
+- Rename to `why-quaid.mdx`
+- All `GigaBrain` product name references → `Quaid`
+- Navigation sidebar entry (in astro.config.mjs) must be updated simultaneously
+
+### website/src/content/docs/start-here/welcome.mdx
+- `displayTitle: Welcome to GigaBrain` → `Welcome to Quaid`
+- Product description paragraph: GigaBrain → Quaid
+- `gbrain` CLI references in conventions block
+- `brain.db` → `memory.db`
+- Links: "Install GigaBrain" → "Install Quaid"
+
+### website/src/content/docs/tutorials/install.mdx
+- Title "Install GigaBrain" → "Install Quaid"
+- Install URL `macro88/gigabrain` → updated repo URL
+- `gbrain` binary refs throughout → `quaid`
+- `GBRAIN_VERSION=v0.9.8` → `QUAID_VERSION=v0.9.8`
+- `~/.local/bin/gbrain` → `~/.local/bin/quaid`
+- `~/.gbrain/skills/`, `~/.gbrain/models/` → `~/.quaid/skills/`, `~/.quaid/models/`
+- `~/brain.db` default path → `~/memory.db`
+
+### website/src/content/docs/tutorials/first-brain.mdx
+- "GigaBrain useful" prose → Quaid
+- `gbrain init ~/brain.db` → `quaid init ~/memory.db`
+- All `gbrain` CLI commands → `quaid`
+- `GBRAIN_DB` → `QUAID_DB`
+- `~/.gbrain/skills/` → `~/.quaid/skills/`
+- `brain.db` WAL sidecar references
+
+### website/src/content/docs/tutorials/connect-claude-code.mdx
+- "GigaBrain via the MCP server" → Quaid
+- `gbrain serve` → `quaid serve`
+- MCP config key `"gbrain":` → `"quaid":`
+- `GBRAIN_DB` → `QUAID_DB`
+- `brain.db` → `memory.db`
+- All `brain_*` tool names → `memory_*` (brain_get, brain_put, brain_query, brain_search, brain_list, brain_link, brain_link_close, brain_backlinks, brain_graph, brain_check, brain_timeline, brain_tags, brain_gap, brain_gaps, brain_stats, brain_collections, brain_raw)
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+
+### website/src/content/docs/reference/cli.mdx
+- `gbrain` binary name throughout → `quaid`
+- `GBRAIN_DB` → `QUAID_DB`
+- `GBRAIN_MODEL` → `QUAID_MODEL`
+- `./brain.db` default path → `./memory.db`
+- `brain_config` table name → `memory_config` (or `quaid_config` — **open decision**)
+- Every command example: `gbrain init`, `gbrain get`, `gbrain put`, etc. → `quaid *`
+
+### website/src/content/docs/reference/mcp.mdx
+- `gbrain serve` → `quaid serve`
+- All 17 `brain_*` tool names in table and section headers → `memory_*`
+- All JSON-RPC examples: `"name":"brain_get"` → `"name":"memory_get"` etc.
+- "Seventeen `brain_*` tools" → "Seventeen `memory_*` tools"
+
+### website/src/content/docs/reference/configuration.mdx
+- All `GBRAIN_*` env var names → `QUAID_*` (10 variables)
+- `./brain.db` default → `./memory.db`
+- `~/.gbrain/` filesystem layout → `~/.quaid/`
+- `brain_config` table name → `memory_config`
+- `gbrain config`, `gbrain compact`, `gbrain skills doctor` → `quaid *`
+- "GigaBrain reads configuration" → "Quaid reads configuration"
+
+### website/src/content/docs/reference/schema.mdx
+- `brain.db` file name → `memory.db`
+- GitHub link `macro88/gigabrain` → updated repo URL
+- `brain_config` table name → `memory_config`
+- All `gbrain` CLI command refs → `quaid`
+- `brain_check`, `brain_link` tool refs → `memory_check`, `memory_link`
+
+### website/src/content/docs/reference/errors.mdx
+- (Not fully read — likely contains `gbrain`/`brain_*` error context)
+
+### website/src/content/docs/reference/page-types.mdx
+- (Not fully read — likely contains `gbrain` CLI refs)
+
+### website/src/content/docs/explanation/architecture.mdx
+- Product name "GigaBrain" → "Quaid"
+- `brain.db` in architecture diagram → `memory.db`
+- `gbrain` serve/CLI refs → `quaid`
+
+### website/src/content/docs/explanation/hybrid-search.mdx
+### website/src/content/docs/explanation/page-model.mdx
+### website/src/content/docs/explanation/skills-system.mdx
+### website/src/content/docs/explanation/embedding-models.mdx
+### website/src/content/docs/explanation/privacy.mdx
+- All: product name GigaBrain → Quaid, `gbrain` CLI → `quaid`, `GBRAIN_*` → `QUAID_*`
+
+### website/src/content/docs/agents/quickstart.mdx
+- "connecting to a GigaBrain" → "connecting to a Quaid"
+- `gbrain serve` → `quaid serve`
+- `brain.db` → `memory.db`
+- All `brain_*` tool names → `memory_*`
+
+### website/src/content/docs/agents/tool-catalog.mdx
+- All 17 `brain_*` section headers → `memory_*`
+- All "→ [reference](/reference/mcp/#brain_*)" anchor links → `#memory_*`
+
+### website/src/content/docs/agents/skill-workflows.mdx
+### website/src/content/docs/agents/sensitivity-contract.mdx
+- (Not fully read — will contain `brain_gap`, `brain_put` etc. → `memory_*`)
+
+### website/src/content/docs/how-to/collections.mdx
+- `gbrain collection` → `quaid collection`
+- `.gbrainignore` → `.quaidignore` (**open decision: file name change**)
+- `brain_put`, `brain_link` → `memory_put`, `memory_link`
+
+### website/src/content/docs/how-to/import-obsidian.mdx
+### website/src/content/docs/how-to/write-pages.mdx
+### website/src/content/docs/how-to/build-graph.mdx
+### website/src/content/docs/how-to/contradictions-and-gaps.mdx
+### website/src/content/docs/how-to/airgapped-vs-online.mdx
+### website/src/content/docs/how-to/switch-embedding-model.mdx
+### website/src/content/docs/how-to/skills.mdx
+### website/src/content/docs/how-to/upgrade.mdx
+### website/src/content/docs/how-to/troubleshooting.mdx
+- All: `gbrain` → `quaid`, `GBRAIN_*` → `QUAID_*`, `brain.db` → `memory.db`, `brain_*` tools → `memory_*`, `~/.gbrain/` → `~/.quaid/`
+
+### website/src/content/docs/integrations/hermes.mdx
+- "GigaBrain can function…" → "Quaid can function…"
+- Install URL `macro88/gigabrain` → updated
+- MCP config YAML: `gigabrain:` key → `quaid:`
+- `command: "gbrain"` → `command: "quaid"`
+- `GBRAIN_DB` → `QUAID_DB`
+- `brain.db` → `memory.db`
+- `brain_put`, `brain_query` → `memory_put`, `memory_query`
+- "GigaBrain exposes 17 tools" → "Quaid exposes 17 tools"
+- SQLite comment `brain.db` → `memory.db`
+
+### website/src/content/docs/contributing/roadmap.md
+- Product name GigaBrain → Quaid throughout
+- All `gbrain` CLI refs → `quaid`
+- All `brain_*` MCP tool names → `memory_*`
+- `.gbrainignore` → `.quaidignore`
+- Schema table `brain_config` → `memory_config`
+
+### website/src/content/docs/contributing/specification.md
+- Title "GigaBrain — Personal Knowledge Brain" → "Quaid — Personal Knowledge Brain"  
+- Repo URL `GitHub.com/macro88/gigabrain` → updated
+- All `gbrain`/`GigaBrain` → `quaid`/`Quaid`
+- `brain_*` MCP tool refs → `memory_*`
+
+### website/src/content/docs/contributing/contributing.md
+- "Contributing to GigaBrain" → "Contributing to Quaid"
+- Repo layout block: `gigabrain/` root dir label → `quaid/`
+- All `gbrain` CLI commands → `quaid`
+
+### docs/contributing.md (non-website source)
+- Same as website version above
+
+### docs/roadmap.md (non-website source)
+- Same as website contributing/roadmap.md above
+
+### docs/spec.md (non-website source)
+- Extensive: product name, repo URL, all CLI + MCP surface references
+
+### docs/getting-started.md (non-website source, referenced but not read in full)
+- All `gbrain`/`GigaBrain`/`GBRAIN_*` references
+
+### README.md
+- Product name GigaBrain → Quaid in headline and tagline
+- Inspiration attribution (Garry Tan's GBrain — attribution stays but product name changes)
+- All `gbrain` CLI commands throughout
+- All `GBRAIN_*` env vars
+- Install URLs `macro88/gigabrain` → updated
+- `brain.db` default file → `memory.db`
+- `~/.gbrain/` → `~/.quaid/`
+
+---
+
+## Open decisions requiring team input before implementation
+
+| # | Decision |
+|---|----------|
+| **D-Q1** | Default DB filename: `memory.db` or `quaid.db`? Task spec says either; pick one canonical name for all docs. |
+| **D-Q2** | `brain_config` SQLite table rename: `memory_config` or `quaid_config`? This affects both schema docs and runtime. |
+| **D-Q3** | Vault ignore file: `.gbrainignore` → `.quaidignore` or `.quaid-ignore`? |
+| **D-Q4** | GitHub repo URL: will the repo be renamed to `macro88/quaid`? Affects all install URLs, raw script URLs, and the `astro.config.mjs` base-path fallback. |
+| **D-Q5** | npm package: `gbrain` → `quaid`? Affects install.mdx npm row and README install table. |
+
+---
+
+## Implementation note for the team
+
+The rename is purely mechanical — search-and-replace with the above mapping — but it must be done atomically across all surfaces in a single commit. The astro.config.mjs sidebar entry and the `why-gigabrain.mdx` file rename must be co-ordinated (rename file + update sidebar key simultaneously) or the docs build breaks.
+
+Recommend: Fry or a general-purpose agent executes the rename after D-Q1 through D-Q5 are resolved.
+
+# Decision: Website rename GigaBrain → Quaid (G.8)
+
+**Date:** 2026-04-26  
+**Author:** Hermes (Docs Site Engineer)  
+**Status:** Accepted  
+**Scope:** `website/` — all 56 source files
+
+## Summary
+
+Completed task G.8 of the `quaid-hard-rename` OpenSpec change. All website docs, config,
+and content files have been updated from the old `GigaBrain / gbrain / brain_*` naming to
+`Quaid / quaid / memory_*`.
+
+## Decisions made
+
+### 1. `.gbrainignore` → `.quaidignore`
+
+**Decision:** Rename to `.quaidignore` in all docs references.
+
+**Rationale:** The file is user-visible (users create it in their vault directories).
+Since this is a hard product rename and the proposal covers all user-visible surfaces,
+keeping `.gbrainignore` would be an inconsistency. Updated in `collections.mdx`,
+`roadmap.md`, and `specification.md`.
+
+### 2. `brain_gap_approve` → `memory_gap_approve`
+
+**Decision:** Rename to `memory_gap_approve` even though it is not in the 17-tool
+official rename list in `proposal.md`.
+
+**Rationale:** The tool is a planned future tool that follows the `memory_*` naming
+convention. Leaving it as `brain_gap_approve` in docs while all other tools are
+`memory_*` would be confusing. Updated in `sensitivity-contract.mdx` and
+`specification.md`.
+
+### 3. Spec-draft tool names in `specification.md`
+
+**Decision:** Rename all spec-draft `brain_*` tool names to `memory_*` in `specification.md`.
+
+**Rationale:** `specification.md` is public-facing docs. Even tool names not yet
+implemented should follow the new convention. Renamed: `brain_ingest`, `brain_links`,
+`brain_unlink`, `brain_timeline_add`, `brain_tag`, `brain_briefing`,
+`brain_ingest_meeting` → `memory_*` equivalents.
+
+## Files changed
+
+- `website/package.json` — `"name": "quaid-docs"`
+- `website/SITE.md` — product name
+- `website/astro.config.mjs` — title, sidebar slug, social href, repo/owner defaults
+- `website/src/content/docs/why-quaid.mdx` (renamed from `why-gigabrain.mdx`)
+- 43 content MDX/MD files — all `gbrain`/`brain_*`/`GBRAIN_*`/`brain.db`/`~/.gbrain/` references
+
+## Verification
+
+- `astro build` passed: 37 pages built with zero errors.
+- Post-build grep scan: zero remaining old-brand occurrences in `website/src/`.
+
+# Hermes — Residual Rename Cleanup Decisions
+
+**Date:** 2026-04-25  
+**Agent:** Hermes  
+**Task:** Residual old-brand audit — close all remaining GigaBrain/gbrain/brain traces from website surfaces
+
+---
+
+## Decision 1: Rename tutorial route `/tutorials/first-brain/` → `/tutorials/first-memory/`
+
+**Decision:** Rename `tutorials/first-brain.mdx` to `tutorials/first-memory.mdx` and update the route throughout the site.
+
+**Rationale:** The tutorial slug `first-brain` is a visible URL in the browser, in the sidebar nav, and in all internal links. Leaving it as `first-brain` after the product rename to Quaid/memory would be the most prominent remaining old-brand trace for any user who looks at the URL bar. A clean rename removes it from every user-facing surface simultaneously.
+
+**Impact:** All internal links updated (`/tutorials/first-brain/` → `/tutorials/first-memory/`). Sidebar nav entry updated. Old `.mdx` file deleted.
+
+---
+
+## Decision 2: Replace product-term `brain` with `memory` throughout website docs
+
+**Decision:** Systematically replace "brain" (as a product/instance noun referring to the local knowledge store) with "memory" across all website `.mdx`/`.md` content.
+
+**Rationale:** "brain" is the old product-instance term from the GigaBrain era (e.g. `brain.db`, `brain_*` MCP tools, "initialize a brain", "your first brain"). The rename spec maps this to "memory" (e.g. `memory.db`, `memory_*` tools). Inconsistent terminology — Quaid binary, but still "a brain" in prose — fragments the product identity and confuses users.
+
+**Scope of replacements:**
+- Prose: "a brain" / "your brain" / "the brain" / "this brain" → "a memory" / "your memory" / "the memory" / "this memory"
+- Titles: "Build your first brain" → "Build your first memory"
+- Code/examples: `memory.db`, `memory_*` MCP tool names, `~/.quaid/`, `QUAID_DB`, `QUAID_MODEL`
+- GitHub URL: `macro88/gigabrain` → `quaid-app/quaid`
+
+**Preserved:** Idiomatic English metaphor "second brain" in tagline left as-is where it describes a concept rather than the product instance (one occurrence reviewed in context).
+
+---
+
+## Decision 3: Retain `gb-guide-grid` CSS class names in HTML/Astro templates
+
+**Decision:** Do NOT rename CSS classes such as `gb-guide-grid`, `gb-guide-stack`, etc.
+
+**Rationale:** These are internal CSS identifiers not visible to end users (no rendered text, no public URL). Renaming them would require a coordinated CSS + template change with no user-visible benefit. Deferring to a dedicated CSS pass if/when the design system is revisited.
+
+---
+
+## Files changed in this cleanup pass
+
+| File | Action |
+|------|--------|
+| `website/src/content/docs/index.mdx` | Brand + CLI + URL updates |
+| `website/src/content/docs/tutorials/first-brain.mdx` | Deleted (replaced by `first-memory.mdx`) |
+| `website/src/content/docs/tutorials/first-memory.mdx` | Created (renamed + fully updated) |
+| `website/src/content/docs/tutorials/install.mdx` | Brand + path + CLI updates |
+| `website/src/content/docs/tutorials/connect-claude-code.mdx` | Brand + tool-name + CLI updates |
+| `website/src/content/docs/start-here/welcome.mdx` | Brand updates |
+| `website/src/content/docs/why-quaid.mdx` | Residual brand traces |
+| `website/src/content/docs/how-to/**` | CLI + env var + path updates (all how-to pages) |
+| `website/src/content/docs/reference/**` | CLI + tool name + env var updates |
+| `website/src/content/docs/explanation/**` | Brand + product term updates |
+| `website/src/content/docs/agents/**` | Tool name updates (`brain_*` → `memory_*`) |
+| `website/src/content/docs/integrations/**` | Product name updates |
+| `website/src/content/docs/contributing/**` | CLI + product name updates |
+| `website/astro.config.mjs` | Sidebar nav: `tutorials/first-brain` → `tutorials/first-memory` |
+| `website/SITE.md` | Product name update |
+| `website/src/components/**` | Brand/product references in components |
+
+**Verification result:** Zero matches for `gbrain|GigaBrain|macro88/gigabrain|GBRAIN_|first-brain|brain\.db` across all `website/` content after cleanup.
+
+# Decision: Concurrent-open busy-timeout fix (benchmark lane)
+
+**Date:** 2026-04-25  
+**Author:** Kif  
+**Affects:** `src/core/db.rs` → `open_connection`  
+**CI run:** 24898484969 on head 18ac3d7
+
+---
+
+## What failed
+
+`concurrent_readers_see_consistent_data` in `tests/concurrency_stress.rs` panicked on
+every run.  Four reader threads each called `open_conn` → `db::open()` simultaneously
+against an already-initialized on-disk database.  The panic was at line 31
+(`db::open(path).unwrap_or_else(...)`) and line 320 (`handle.join().expect("reader thread
+panicked")`).
+
+## Root cause
+
+`open_connection` in `src/core/db.rs` calls `Connection::open(path)` and then immediately
+runs `execute_batch(schema.sql)`.  The schema batch begins with `PRAGMA journal_mode = WAL`
+followed by multiple `CREATE TABLE IF NOT EXISTS` statements — DDL that requires a write
+lock.  No busy timeout was set before this batch, so any thread that couldn't acquire the
+write lock immediately received `SQLITE_BUSY` and the `?` propagation caused the panic.
+
+The coordinator's fix in `tests/concurrency_stress.rs` added `conn.busy_timeout(1s)` to
+the `open_conn` helper, but that call runs *after* `db::open()` returns — too late to
+protect schema initialization.
+
+## Why this is a runtime bug, not just a test fluke
+
+Any two `gbrain` processes opening the same `brain.db` simultaneously (e.g. a background
+`gbrain serve` and a foreground `gbrain query`) will hit the same failure.  The busy timeout
+must be applied before DDL, not after.
+
+## Fix
+
+`src/core/db.rs`, `open_connection`:
+
+```rust
+let conn = Connection::open(path)?;
+// Set busy timeout *before* schema DDL so concurrent opens don't race on the
+// write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
+conn.busy_timeout(Duration::from_secs(5))?;
+conn.execute_batch(include_str!("../schema.sql"))?;
+```
+
+Five seconds is a conservative production ceiling.  The test helper's 1-second
+post-open override is harmless and was left untouched.
+
+## Verification
+
+```
+running 4 tests
+test wal_compact_during_open_reader_both_succeed ... ok
+test concurrent_readers_see_consistent_data ... ok
+test parallel_occ_exactly_one_write_wins ... ok
+test duplicate_ingest_from_two_threads_produces_one_row ... ok
+
+test result: ok. 4 passed; 0 failed
+```
+
+`corpus_reality` (8/8 non-ignored) and `embedding_migration` (3/3) also pass.  
+The two pre-existing lib failures (`open_rejects_nonexistent_parent_dir`,
+`init_rejects_nonexistent_parent_directory`) reproduce identically on the unmodified head
+and are out of scope for this lane.
+
+## Benchmark lane status
+
+All offline benchmark / stress gates are green.  No regressions introduced.
+
+# Decision: Align publish-npm.yml to "npm not yet live" contract
+
+**Date:** 2025-07-25  
+**Author:** Leela  
+**Status:** Accepted
+
+## Context
+
+`.github/workflows/publish-npm.yml` was triggering automatically on every `v*.*.*` tag via a
+`push: tags` event. This directly contradicts the truthful stance held by:
+
+- `README.md` — npm row marked "❌ Not yet published — use binary release or build from source"
+- `docs/getting-started.md` — same row with identical wording
+- `MIGRATION.md` — "quaid is staged but not yet in the public registry — `npm install -g quaid` will not work yet"
+- `.github/RELEASE_CHECKLIST.md` — npm listed under **Deferred distribution channels**, explicitly labelled "not available; label as planned follow-on, not yet live"
+
+Nibbler's rejection cited this contradiction correctly.
+
+Zapp and Amy are locked out of this artifact cycle (prior rejected release-message artifacts).
+
+## Decision
+
+Replace the `push: tags` trigger in `publish-npm.yml` with `workflow_dispatch` only.
+
+This is the smallest safe change that:
+1. Removes the contradiction — no auto-publish fires on release tags.
+2. Preserves the full workflow so it is ready to activate when npm goes live (flip trigger back to `push: tags` at that point).
+3. Adds a comment in the file stating the rationale so the next person knows why it is manual-only.
+4. Does not introduce any forbidden legacy literals.
+
+## Alternatives considered
+
+- **Delete the workflow** — too destructive; the pipeline work should not be lost.
+- **Add `if: false` to the job** — less clear than removing the trigger; YAML linters may warn.
+- **Keep trigger but gate on a repo variable** — adds indirection with no benefit over `workflow_dispatch`.
+
+## Affected files
+
+- `.github/workflows/publish-npm.yml` — trigger changed from `push: tags` to `workflow_dispatch`
+
+## Follow-on
+
+When the npm channel is opened, the trigger should be restored to:
+
+```yaml
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+```
+
+and the explanatory comment removed. The `RELEASE_CHECKLIST.md` npm deferred-channel checkbox
+should be updated at the same time.
+
+# Batch 1 — Watcher Reliability: Scope, Sequencing, and Release Gate
+
+**By:** Leela  
+**Date:** 2026-04-28  
+**Release target:** v0.10.0  
+**Status:** ⚠️ SUPERSEDED — Professor rejected this artifact on 2026-04-28. See `leela-batch1-repair.md` for the authoritative repaired scope.
+
+---
+
+## 1. Authoritative Task List
+
+Batch 1 contains exactly **13 open tasks**. All are currently `- [ ]` in `tasks.md`:
+
+| Task ID | Description | Paired Test(s) |
+|---------|-------------|----------------|
+| 6.7a | Overflow recovery worker (500ms poll, `needs_full_sync` clear) | 17.5w, 17.5x, 17.5aaa2 |
+| 6.8 | `.quaidignore` live reload via `WatchEvent::IgnoreFileChanged` | 17.5y, 17.5z, 17.5aa |
+| 6.9 | Native-first watcher, poll fallback on init error with WARN | 17.5aaa3 |
+| 6.10 | Per-collection supervisor with crash/restart + exponential backoff | 17.5aaa4 |
+| 6.11 | Watcher health in `memory_collections` + `quaid collection info` | — |
+| 17.5w | `needs_full_sync=1` clears within 1s via recovery worker | (test body for 6.7a) |
+| 17.5x | Recovery worker skips `state='restoring'` collections | (test body for 6.7a) |
+| 17.5y | Valid `.quaidignore` edit refreshes mirror + reconciles | (test body for 6.8) |
+| 17.5z | Single-line parse failure preserves last-known-good mirror | (test body for 6.8) |
+| 17.5aa | Absent `.quaidignore` with prior mirror → WARN, mirror unchanged | (test body for 6.8) |
+| 17.5aaa2 | Watcher overflow sets `needs_full_sync=1`, recovery within 1s | (test body for 6.7a) |
+| 17.5aaa3 | Watcher auto-detects native, downgrades to poll on init error | (test body for 6.9) |
+| 17.5aaa4 | Watcher supervisor restarts on panic with exponential backoff | (test body for 6.10) |
+
+**Already closed and NOT in scope:** 17.5aa2, 17.5aa3, 17.5aa4, 17.5aa4b, 17.5aa4c, 17.5aa5, 17.5aaa, 17.5aaa1.
+
+---
+
+## 2. Honesty Constraints — Non-Negotiable Pre-Conditions
+
+From `now.md` (2026-04-28): **"No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes."**
+
+This is a hard blocker. Fry cannot start a single line of Batch 1 body until Professor issues a pre-gate on the new interfaces. Specifically, Professor must sign off on:
+
+1. `ReconcileMode::OverflowRecovery` variant in `reconciler.rs` — the authorization contract for calling `full_hash_reconcile_authorized` from the serve loop's recovery timer.
+2. `WatcherMode` enum (`Native` | `Poll` | `Crashed` | `Inactive`) added to `CollectionWatcherState` — this struct change ripples into 6.10 (backoff fields) and 6.11 (health reporting).
+3. The `last_overflow_recovery` timer placement in `start_serve_runtime()` relative to existing timers (`last_heartbeat`, `last_quarantine_sweep`, `last_dedup_sweep`).
+
+Without Professor's gate, Batch 1 is not open.
+
+---
+
+## 3. Hidden Dependencies
+
+### 6.9 → 6.10 → 6.11 (strict chain)
+- 6.9 must land first: it introduces `WatcherMode` and the `mode` field on `CollectionWatcherState`.  
+- 6.10 adds `last_watcher_error` and `backoff_until: Option<Instant>` to the same struct — cannot land without 6.9's struct changes.  
+- 6.11 reads `WatcherMode` from the process-global registry — cannot surface correct values without both 6.9 and 6.10.
+
+### 6.11 schema extension note
+Task 13.6's closure note says "frozen 13-field read-only collection object." Task 6.11 explicitly adds three new fields: `watcher_mode`, `watcher_last_event_at`, `watcher_channel_depth`. This is a documented extension, not a schema violation. However, Fry must add a closure note to 13.6 (addendum, not rewrite) acknowledging the three new fields so the audit trail is clean. Nibbler will flag this if not pre-addressed.
+
+### `memory_collections` on Windows
+The three watcher health fields must return `null` (not an error) when the collection is on Windows. The platform gate for vault-sync CLI surfaces is `#[cfg(unix)]`; the MCP tool `memory_collections` is cross-platform. The health fields belong to a cross-platform response shape, so they should null out on Windows rather than be cfg-excluded.
+
+---
+
+## 4. Fry's Execution Sequence
+
+**Phase 0 (gate):**
+- Professor issues pre-gate on `ReconcileMode::OverflowRecovery`, `WatcherMode`, and timer placement.  
+- No Fry code written until this clears.
+
+**Phase 1 (parallel, after Professor gate):**
+- Fry: 6.7a + tests 17.5w, 17.5x, 17.5aaa2 in `src/core/vault_sync.rs`
+- Fry: 6.8 + tests 17.5y, 17.5z, 17.5aa in `src/core/vault_sync.rs`
+
+**Phase 2:**
+- Fry: 6.9 (`WatcherMode` enum + poll fallback + test 17.5aaa3)
+
+**Phase 3 (parallel, after 6.9):**
+- Fry: 6.10 + test 17.5aaa4 (backoff state machine)
+- Fry: 6.11 (health surface in `vault_sync.rs` + `commands/collection.rs`)
+
+**Phase 4 (review):**
+- Nibbler adversarial review on 6.9 (mock failed native init path) and 6.10 (simulated disconnect + backoff timing).
+- Nibbler also confirms 6.11 null-out on Windows is correct.
+
+---
+
+## 5. Test Lane Requirements Before "Batch 1 Done"
+
+All tests are inline `#[cfg(test)]` modules per project convention:
+
+| Requirement | Owner |
+|-------------|-------|
+| `cargo test` passes clean with all 13 tasks covered | Scruffy |
+| Coverage ≥ 90% (all new paths hit) | Scruffy |
+| 17.5w: `needs_full_sync` clears within 1s in serve loop | Fry → Scruffy verify |
+| 17.5x: `state='restoring'` blocks recovery (NOT cleared) | Fry → Scruffy verify |
+| 17.5aaa2: channel-overflow integration (sets flag, recovery runs) | Fry → Scruffy verify |
+| 17.5aaa3: mock failed native init, assert poll fallback + WARN | Nibbler adversarial |
+| 17.5aaa4: simulate watcher disconnect, assert backoff timing | Nibbler adversarial |
+
+Scruffy runs the full test suite after Phase 3 completes. Nibbler adversarial review is required specifically for 6.9 and 6.10 before merge.
+
+---
+
+## 6. v0.10.0 Release Gate
+
+The release is greenlit when ALL of the following are true:
+
+1. **All 13 Batch 1 tasks marked `[x]`** in `tasks.md` with truthful closure notes.
+2. **`cargo test` passes** on the `spec/vault-sync-engine` branch with zero failures.
+3. **Coverage ≥ 90%** confirmed by Scruffy.
+4. **Nibbler adversarial sign-off** on 6.9 + 6.10 review lanes.
+5. **13.6 closure addendum** in `tasks.md` documenting the three new watcher health fields.
+6. **`Cargo.toml` version bumped to `0.10.0`**.
+7. **`CHANGELOG.md` / release notes** include: overflow recovery, `.quaidignore` live reload, native/poll watcher fallback, per-collection supervisor with backoff, and watcher health MCP + CLI surface.
+
+---
+
+## 7. What Is NOT In Batch 1
+
+These remain deferred and must not be reopened by Fry during this batch:
+
+- Online restore handshake, IPC socket work (`17.5pp` / `17.5qq*`)
+- Quarantine restore (backed out; `9.8`, `17.5j` remain open)
+- Watcher overflow/supervision beyond the crashed-state surface in 6.10
+- Embedding worker (Batch 2)
+- UUID write-back (Batch 3)
+- Any broader `12.1`, `12.4`, `12.6*` claims
+
+# Decision: Migration docs fix — CLI truthfulness + zero-trace enforcement
+
+**Date:** 2026-04-25  
+**Author:** Leela  
+**Triggered by:** Professor rejection of migration guidance (cycle: quaid-hard-rename)
+
+---
+
+## Context
+
+The Professor rejected `MIGRATION.md` and `website/src/content/docs/how-to/upgrade.mdx`
+on two grounds:
+
+1. **CLI lie** — the export step called `gbrain export --out backup/` (and in upgrade.mdx,
+   `<old-binary> export > backup/`). The real CLI signature is a positional path argument:
+   `quaid export <path>`. There is no `--out` flag and no stdout export flow.
+
+2. **Zero-trace violation** — literal legacy names (`gbrain`, `GigaBrain`, `GBRAIN_`,
+   `brain_*`, `~/.gbrain/...`) were present in `MIGRATION.md`, which is a public
+   non-hidden surface.
+
+Amy, Hermes, Zapp, Fry, and Bender are locked out for this cycle.
+
+---
+
+## Decisions taken
+
+### 1. Export command corrected
+
+`MIGRATION.md` line 113: `gbrain export --out backup/` → `<old-binary> export backup/`  
+`upgrade.mdx` line 32: `<old-binary> export > backup/` → `<old-binary> export backup/`
+
+Rationale: `src/commands/export.rs` and `src/main.rs` confirm the `Export` variant takes
+a positional `path: String` field. No `--out` flag exists. The stdout-redirect form (`>`)
+was also wrong — `export_dir` writes files to a directory path, not to stdout.
+
+### 2. Legacy literal names masked across MIGRATION.md
+
+All occurrences of the literal legacy binary name, product name, env-var prefix, MCP tool
+prefix, and default DB path have been replaced with opaque placeholders consistent with
+the style already established in `upgrade.mdx`:
+
+| Pattern | Replacement |
+|---------|-------------|
+| literal old binary | `<old-binary>` |
+| literal old npm package | `<old-package-name>` |
+| literal old env prefix `GBRAIN_` | `<LEGACY>_` |
+| literal old MCP prefix `brain_` | `<old-prefix>_` |
+| literal old default DB path | `*(legacy default path)*` |
+| title/prose product name | generic "Legacy → Quaid" / "legacy binary" |
+
+### 3. Coupled docs verified clean
+
+`README.md`, `docs/getting-started.md`, `docs/contributing.md`, `docs/roadmap.md`,
+and `docs/openclaw-harness.md` contain no legacy literal names. No changes needed.
+
+---
+
+## Ownership lock-out
+
+Amy, Hermes, Zapp, Fry, and Bender are excluded from this fix cycle per the rejection
+context. Leela self-executed. Re-review by Professor before merge.
+
+---
+author: leela
+date: 2026-04-25
+status: proposed
+change: quaid-hard-rename
+---
+
+# Decision: quaid-hard-rename — Lead routing memo
+
+## Context
+
+macro88 has directed a complete hard rename of the GigaBrain/gbrain/brain surface to Quaid/quaid/memory. This is the largest single cross-cutting change the team has taken on: 230+ files, a breaking schema change, 17 MCP tool renames, full CI/artifact renaming, and every piece of user-facing documentation. The OpenSpec change is at `openspec/changes/quaid-hard-rename/`.
+
+## Decisions made
+
+### 1. Default DB file: `memory.db` (not `quaid.db`)
+
+The user specified "memory.db or quaid.db". I am resolving this as **`memory.db`** at path `~/.quaid/memory.db`. Rationale: the conceptual layer is explicitly named "memory" (MCP tools are `memory_*`, concept is `memory`), and naming the file after the concept mirrors the original `brain.db` convention. The product name (`quaid`) appears in the directory, not the filename.
+
+If macro88 has a strong preference for `quaid.db`, override this before Phase B lands.
+
+### 2. Scope of `.squad/` history files
+
+Agent history files (`.squad/agents/*/history.md`, `.squad/log/`) are **excluded** from the rename. They are a historical record and retroactively rewriting them would corrupt the audit trail. The final Phase J audit scan must explicitly exclude `.squad/` from its zero-match assertion.
+
+### 3. Breaking schema change: no automatic migration
+
+Consistent with the "no legacy support, no aliases, no shims" directive: the `brain_config` → `quaid_config` rename is handled as a clean schema version bump with no fallback reading of the old table name. Users must export and re-init. This is documented in the migration guide (Phase K).
+
+### 4. vault-sync-engine branch must coordinate first
+
+The `vault-sync-engine` branch is in-flight (`spec/vault-sync-engine`) and touches many of the same files (400+ files changed). This rename **must not** be started until one of:
+- vault-sync-engine is merged to `main`, OR
+- Fry, Professor, and Nibbler confirm they will rebase vault-sync onto the rename branch after it lands
+
+This is the single hardest sequencing constraint on the entire change. Violating it means a very large, risky merge conflict resolution.
+
+### 5. MCP tool rename is user-breaking
+
+Every MCP client config referencing `brain_*` tool names will silently stop working after this change. The migration guide (Phase K) and release notes must call this out explicitly and provide the full old→new mapping before the first `quaid` tag is published.
+
+## Parallel work that can start now
+
+The following tracks are independent of each other and can be assigned in parallel once vault-sync coordination is confirmed:
+
+| Track | Owner lane | Key dependency |
+|-------|-----------|----------------|
+| **B — Schema** | Professor | Must land first; gates D (MCP rename depends on quaid_config) |
+| **C — Cargo/binary** | Fry | Independent of B |
+| **E — Env vars** | Fry | Independent of B |
+| **F — CI/Release** | Zapp/Kif | Independent of B; depends on C for artifact names |
+| **G — Docs** | Scribe/Amy | Independent of B, C |
+| **H — Skills** | Amy/Scribe | Independent of all above |
+
+## What must wait
+
+| Track | Waits for |
+|-------|-----------|
+| **D — MCP tool rename** | B (schema) — can technically start in parallel but reviewers should gate on B being confirmed |
+| **I — Tests** | B + C + D + E (needs final names stable) |
+| **J — Final audit** | All phases |
+| **K — Migration guide** | J complete |
+| **L — PR** | K + I |
+
+## Key invariants reviewers must enforce
+
+1. **No `brain_*` tool name** remains in any `#[tool(name = "...")]` annotation.
+2. **No `GBRAIN_*`** env var in any source, script, workflow, or doc (excluding `.squad/` history).
+3. **`brain_config` completely absent** from `src/schema.sql` and `src/core/db.rs`.
+4. **`SCHEMA_VERSION` is bumped** — verify the constant value is greater than the last released version.
+5. **Schema DDL + SCHEMA_VERSION + test fixtures in one atomic commit** — no partial schema commits.
+6. **Default path is `~/.quaid/memory.db`** — not `~/.gbrain/` or `brain.db`.
+7. **Binary is `quaid`** — `cargo build --release` must not produce `gbrain`.
+8. **Zero legacy shims** — no aliases, no compatibility forwarders anywhere.
+9. **Migration guide exists before the first `quaid` tag** — Phase K cannot be deferred to post-release.
+10. **vault-sync coordination confirmed in writing** before any implementation PR is raised.
+
+# Decision: README.md + docs/getting-started.md truth repair
+
+**Date:** 2026-04-25
+**Author:** Leela
+**Trigger:** Nibbler + Professor reviewer rejections; zero-trace audit
+
+---
+
+## Context
+
+Both `README.md` and `docs/getting-started.md` contained claims that conflicted with
+the current shipped CLI surface documented in `.squad/identity/now.md` and audited
+against `src/schema.sql` and `src/core/db.rs`.
+
+---
+
+## Decisions made
+
+### 1. GBrain literals removed from README.md
+
+Two `GBrain` occurrences in README.md (the inline "GBrain work" link text on line 11
+and the Acknowledgements paragraph) were replaced with neutral descriptive text
+referencing Garry Tan's compiled knowledge model. The hyperlink target (Garry Tan's
+gist) is preserved; only the forbidden literal was excised.
+
+**Rationale:** Zero-trace audit flagged these; they are legacy product-name adjacents
+that must not appear post-rename.
+
+### 2. npm install row changed to "Not yet published"
+
+Both files had `🚧 Staged — online channel by default once published` for the npm row.
+This was changed to `❌ Not yet published — use binary release or build from source`.
+
+**Rationale:** Nibbler's rejection cited npm wording implying imminent publication.
+The npm package is not published and no publish date is known. "Staged" overstates
+readiness. The new wording is truthful and directs users to working install paths.
+
+### 3. Quarantine restore claims removed
+
+**README.md:** Removed "narrowly restore on Unix" from the quarantine lifecycle
+feature bullet; removed `discard|restore` from the roadmap table (now `discard` only);
+removed `quaid collection restore` and `--finalize-pending` commands from the
+usage block; removed "narrow Unix restore" from the Contributing blurb.
+
+**getting-started.md:** Replaced the block claiming
+`quaid collection quarantine restore` is "implemented and available on Unix"
+with a single deferred-surface note: "Quarantine restore is deferred in the current
+release. The safe landed surface is `list`, `export`, and `discard` only."
+Also removed `serve`/restore from the vault-sync section header callout.
+
+**Rationale:** `.squad/identity/now.md` explicitly states restore has been backed out
+of the live CLI surface. Professor's rejection cited schema/restore surface conflicts
+with now.md. Both reviewers flagged overstated restore claims.
+
+### 4. Schema version corrected in getting-started.md
+
+Line 78 said "full v5 schema". `src/schema.sql` header and `SCHEMA_VERSION` constant
+in `src/core/db.rs` are both 6. Corrected to "full v6 schema".
+
+---
+
+## Files touched
+
+- `README.md`
+- `docs/getting-started.md`
+
+## Files consulted for validation
+
+- `.squad/identity/now.md`
+- `src/schema.sql`
+- `src/core/db.rs`
+- `openspec/changes/quaid-hard-rename/proposal.md`
+
+# Decision: Release Contract Alignment (quaid-hard-rename)
+
+**Date:** 2026-05-XX  
+**Author:** Leela  
+**Triggered by:** Nibbler/Professor rejection of prior release surfaces authored by Amy and Zapp
+
+---
+
+## Context
+
+The release surface (`release.yml`, `RELEASE_CHECKLIST.md`, `MIGRATION.md`) contained three
+independent contract violations that caused reviewer rejection:
+
+1. **Broken online installer command** — `QUAID_CHANNEL=online` was placed before `curl`, not
+   piped to `sh`. The env var never reached the shell interpreter. Silent failure on every
+   online install attempt.
+
+2. **Shell installer listed as unsupported** — `RELEASE_CHECKLIST.md` under "Deferred
+   distribution channels" explicitly listed the `curl | sh` one-command installer as "not
+   available." This contradicts the release workflow, install.sh, and README, which all
+   document and ship the shell installer as a primary path.
+
+3. **npm showing as an installable step** — `MIGRATION.md`'s npm section included
+   `npm install -g quaid` inside the code block (as a step to execute), followed immediately
+   by a note saying it isn't available yet. The checklist's migration gate reinforced the
+   confusion by requiring `packages/quaid-npm/` to be present. npm is a follow-on; no npm
+   package ships in the hard-rename release.
+
+---
+
+## Decisions Made
+
+1. The online installer override command is the `| QUAID_CHANNEL=online sh` pipe-pattern,
+   consistent with the README and install.sh implementation. This is the canonical form.
+
+2. The shell installer (`curl ... | sh`) IS a supported install path for the hard-rename
+   release. The checklist now explicitly lists it under "Supported install paths."
+
+3. npm is deferred. `MIGRATION.md` instructs users to uninstall the pre-rename package but
+   does NOT present `npm install -g quaid` as an executable step. The checklist's migration
+   gate item is reworded to reflect follow-on status; the `packages/quaid-npm/` gate is
+   removed from the hard-rename release requirement.
+
+---
+
+## Affected Files
+
+- `.github/workflows/release.yml` — online installer command corrected
+- `.github/RELEASE_CHECKLIST.md` — supported/deferred install path sections reconciled; npm gate reworded
+- `MIGRATION.md` — npm section rewritten to not present an unavailable command as a step
+
+---
+
+## Reviewer note
+
+Amy and Zapp are locked out of this cycle. The fixes are structural/content only —
+no logic or workflow behavior changed. Nibbler should re-review the three files against
+the ship contract before the next tag is cut.
+
+# Mom — Batch 1 edge memo
+
+## What I fixed
+
+- Closed **6.8** honestly. `src/core/vault_sync.rs` now treats the root `.quaidignore` as a live control file instead of dropping it at the markdown-only watcher filter.
+- The watcher emits a dedicated `IgnoreFileChanged` event, debounces it with other watch traffic, reloads the mirror through `src/core/ignore_patterns.rs::reload_patterns(...)`, and only runs reconcile after a successful atomic parse.
+- Added focused proofs for:
+  - `.quaidignore` change → mirror refresh + reconcile
+  - invalid glob → last-known-good mirror preserved, parse errors surfaced, reconcile skipped
+  - deleted `.quaidignore` with prior mirror → mirror preserved, stable-absence error surfaced, reconcile skipped
+
+## False-closure risks still open
+
+Do **not** check off these Batch 1 items yet:
+
+1. **6.7a overflow recovery**
+   - Current code sets `needs_full_sync=1` on channel overflow, but the serve loop does **not** run the promised 500ms overflow-recovery poller.
+   - Real consequence: an overflow can leave a collection dirty until manual sync / restart / some other attach path, which is weaker than the spec.
+
+2. **6.9 native→poll fallback**
+   - `start_collection_watcher(...)` still hard-fails on `notify::recommended_watcher(...)` init/config/watch errors.
+   - There is no `PollWatcher` downgrade path yet, so native watcher init failure is still a startup/runtime kill seam.
+
+3. **6.10 watcher crash/restart backoff**
+   - `poll_collection_watcher(...)` returns `InvariantViolation` on disconnected channels.
+   - The serve loop currently ignores that error and keeps the dead watcher entry in the map; `sync_collection_watchers(...)` then sees matching root/generation and does **not** replace it. That is a permanent silent-sync-loss risk, not a restarted supervisor with backoff.
+
+4. **6.11 watcher health reporting**
+   - `quaid collection info` still lacks watcher mode / last-event time / channel depth.
+   - `memory_collections` must remain frozen per the Batch 1 repair note, so any temptation to "close" 6.11 by widening MCP would be dishonest.
+
+## Decision
+
+- **Decision:** Close only `6.8` from the Batch 1 failure lane. Keep `6.7a`, `6.9`, `6.10`, and `6.11` open until their actual runtime guarantees exist.
+
+## 2026-04-26: Public default memory path must track runtime truth
+
+**By:** Mom
+
+**What:** Public docs that describe the default database location must state `~/.quaid/memory.db`, because `src/core/db.rs` resolves the default path under the user's home directory and only falls back to bare `memory.db` when home-directory resolution fails.
+
+**Why:** Stale examples like `./memory.db`, `~/memory.db`, or `$HOME/memory.db` create a false contract and break upgrade/install guidance. Docs may still show custom `--db` or `QUAID_DB` overrides, but any claim about the default path has to match the runtime path builder exactly.
+
+# Decision: docs/spec.md must describe the shipped MCP surface, not the superseded design surface
+
+**Author:** Mom  
+**Date:** 2026-04-26  
+**Change:** quaid-hard-rename  
+**Triggered by:** Professor + Nibbler rejection of `docs/spec.md` for documenting non-landed MCP tools and approval flows.
+
+---
+
+## What was wrong
+
+`docs/spec.md` still described a larger MCP contract than Quaid actually ships:
+
+- removed/non-landed batch-ingest, outbound-link, unlink, split-timeline, split-tag, and gap-approval tool names
+- missing shipped tool `memory_collections`
+- wrong parameter shapes for shipped tools (`memory_query`, `memory_search`, `memory_list`, `memory_link`, `memory_tags`, `memory_gap`, `memory_gaps`, `memory_raw`)
+- claims that MCP resources/prompts and gap-approval flows were live when `src/mcp/server.rs` exposes tools only
+- no note that `quaid call` currently omits `memory_collections` even though `quaid serve` exposes it
+
+## Decision
+
+Repair `docs/spec.md` to match the code that ships today:
+
+1. Treat `src/mcp/server.rs` as the authoritative MCP tool inventory and parameter surface.
+2. Treat `src/commands/call.rs` as the authoritative `quaid call` surface, even when it is narrower than the MCP server.
+3. Keep schema truth for `knowledge_gaps` columns, but explicitly mark approval/audit fields as schema-resident, not publicly exposed via MCP today.
+4. Remove or rewrite prose that assumes a public approval/escalation or resolve workflow for gaps.
+
+## Validation target
+
+- Tool inventory in `docs/spec.md` must match the 17 `memory_*` handlers in `src/mcp/server.rs`.
+- `docs/spec.md` must not claim public support for non-landed ingest/link/timeline/tag/gap-approval MCP surfaces.
+- `docs/spec.md` must note that `memory_collections` is MCP-shipped but not wired through `quaid call`.
+
+# Nibbler Absolute Final Approval
+
+- Requested by: macro88
+- Scope: hard rename final adversarial review
+- Verdict: APPROVE
+
+## Why
+
+The two previously blocking seams are now closed without widening risk elsewhere.
+
+1. `quaid call` now truthfully exposes the full shipped MCP surface, including `memory_collections`, and the dispatcher is backed by an explicit regression test in `src\commands\call.rs`.
+2. `.github\workflows\publish-npm.yml` no longer auto-publishes on release tags; it is manual-only and now matches the docs/release copy that treat npm as staged but not live.
+
+I did not find a remaining mismatch in the reviewed artifacts that would make the hard rename unsafe to ship.
+
+## 2026-04-26: Quaid hard rename final adversarial review
+
+**By:** Nibbler  
+**Verdict:** REJECT
+
+**Why:** The rename codepath itself looks coherent, but the ship-facing migration story is still not safe. The new release is a hard break with no shims; users need exact old→new mappings and a prominent stop-and-migrate warning on primary entry surfaces.
+
+**Blocking artifacts:**
+1. `MIGRATION.md`
+2. `website/src/content/docs/how-to/upgrade.mdx`
+3. `README.md` (and mirror onboarding surface `docs/getting-started.md`)
+
+**Blocking findings:**
+- `MIGRATION.md` and `website/src/content/docs/how-to/upgrade.mdx` still use placeholders like `<old-binary>`, `<old-prefix>`, `<LEGACY>_DB`, and `<old-package-name>` instead of the real legacy surface (`gbrain`, `brain_*`, `GBRAIN_*`, `brain.db`, `packages/gbrain-npm`). That makes the migration guide non-executable at exactly the point where this release intentionally removes compatibility.
+- `README.md` / `docs/getting-started.md` do not carry a prominent hard-break / manual-migration warning or link to `MIGRATION.md`, so an upgrader can treat the rename like a routine patch and silently lose MCP tools / env wiring / DB continuity.
+
+**Required revision:**
+- A docs/release agent must replace placeholders with the concrete legacy names everywhere in migration/upgrade docs.
+- A docs/release agent must add a top-level breaking-change warning on README/getting-started that links directly to `MIGRATION.md` and states the manual steps are mandatory before upgrade.
+
+# Nibbler final release review — REJECT
+
+Date: 2026-04-26
+Requested by: macro88
+Scope: final ship-readiness check for `quaid-hard-rename`
+
+## Verdict
+
+REJECT
+
+## Why
+
+The hard-rename messaging itself is much safer now, but the public docs surface is still not truthful enough to ship:
+
+1. **`README.md` and `docs/getting-started.md` still advertise npm as a current install option.**
+   - Both files list ``npm install -g quaid`` in the install-options table as `🚧 Staged — online channel by default once published`.
+   - The release checklist now says npm is **not yet live** and must be labeled as planned-only / unavailable. Presenting it in the install matrix is still success-shaped guidance for a path that does not exist today.
+
+2. **`README.md` and `docs/getting-started.md` still claim quarantine restore is shipped/live.**
+   - `README.md` says the `v0.9.6` vault-sync slice includes quarantine ``discard|restore`` and later says users can “inspect, export, discard, or narrowly restore on Unix”.
+   - `docs/getting-started.md` still says `quaid collection quarantine restore` is implemented and available on Unix.
+   - That contradicts the current squad truth (`.squad/identity/now.md`), which says restore was backed back out of the live CLI surface and remains deferred. Shipping a hard rename on top of success-shaped feature drift is not safe.
+
+## Required revision
+
+Assign a docs/release lane to revise **`README.md`** and **`docs/getting-started.md`** so they:
+
+- label npm as **planned follow-on / not yet live**, not as a present install option, and
+- remove all restore-live wording unless/until the restore surface is actually back in the product.
+
+Re-review after those two docs match the real release contract and current shipped scope.
+
+# Nibbler Final Tree Approval
+
+**Date:** 2026-04-26  
+**Requested by:** macro88  
+**Verdict:** **REJECT**
+
+## Blocking ship-safety mismatch
+
+The tree still carries a release-path contradiction on npm distribution.
+
+- `.github/workflows/publish-npm.yml` is live on tag pushes and will run `npm publish --access public` from `packages/quaid-npm` whenever `NPM_TOKEN` is present.
+- But the ship-facing surfaces say the opposite for this release:
+  - `README.md` says `npm install -g quaid` is “❌ Not yet published”.
+  - `docs/getting-started.md` says npm is “❌ Not yet published”.
+  - `MIGRATION.md` says `quaid` is “not yet in the public registry”.
+  - `.github/RELEASE_CHECKLIST.md` says npm is a planned follow-on and “not supported in this release”.
+
+## Why this blocks approval
+
+If the tag is cut with `NPM_TOKEN` configured, this tree will publish `quaid` to npm as part of the same release while the docs, migration guide, release checklist, and release-note contract all tell users npm is not live. That is a real ship-facing truth break on install/migration behavior, so the hard rename is not safe to ship yet.
+
+# Nibbler MCP spec sign-off — 2026-04-26
+
+**Verdict:** REJECT
+
+## What I reviewed
+
+- `.squad/agents/nibbler/history.md`
+- `.squad/decisions.md`
+- `.squad/identity/now.md`
+- `openspec/changes/quaid-hard-rename/proposal.md`
+- `openspec/changes/quaid-hard-rename/tasks.md`
+- `docs/spec.md`
+- `src/mcp/server.rs`
+- `src/commands/call.rs`
+- `README.md`
+- `docs/getting-started.md`
+- current working-tree diff
+
+## Decision
+
+Mom fixed the blocker I previously called out: `docs/spec.md` now matches the shipped `src/mcp/server.rs` MCP surface, including the 17-tool table, `memory_put` OCC semantics, `memory_raw` overwrite/object rules, and the real `memory_collections` exposure. Targeted validation also passed: `cargo test --quiet mcp::server`.
+
+I am still **not** signing off the hard rename as safe to ship because one user-facing seam remains false in a way that breaks the renamed collections tool path:
+
+- `docs/getting-started.md` still says **“Call any MCP tool directly from the CLI without starting the server”**
+- `src/commands/call.rs` still hard-dispatches only **16** tools and does **not** route `memory_collections`
+- `docs/spec.md` now truthfully documents that gap
+
+That means a user following getting-started for the renamed collections surface can reasonably try:
+
+```bash
+quaid call memory_collections '{}'
+```
+
+and hit a dispatcher limitation instead of the documented MCP tool. That is still a real contract seam, not wording trivia.
+
+## Rejected artifacts
+
+1. `docs/getting-started.md`
+   - Revise the “Raw MCP tool invocation” section so it no longer claims `quaid call` can invoke **any** MCP tool unless parity is actually implemented.
+
+2. `src/commands/call.rs`
+   - Either wire `memory_collections` through the fixed dispatcher, or explicitly keep it out-of-scope and ensure all user-facing docs say `quaid call` exposes only 16 tools.
+
+## Ship bar
+
+Safe to approve once **either**:
+
+- `memory_collections` is added to `quaid call`, **or**
+- `docs/getting-started.md` is narrowed to the real 16-tool dispatcher contract.
+
+Until then, the MCP server spec itself is corrected, but the hard-rename user story is still not fully honest end-to-end.
+
+## Nibbler re-review — quaid hard rename
+
+- **Requested by:** macro88
+- **Verdict:** REJECT
+- **Date:** 2026-04-26
+
+### Cleared from prior rejection
+
+- `.gitignore` now fail-closes the legacy local DB files and the new npm-downloaded binary artifacts.
+- npm cutover now points the publish workflow at `packages/quaid-npm/`, that package is tracked in git, `packages/gbrain-npm/` is gone, and `npm pack --dry-run` succeeds.
+
+### Blocking seam
+
+The public migration surface is still not trustworthy enough to ship a hard rename:
+
+1. `website/src/content/docs/how-to/upgrade.mdx` tells users to see `MIGRATION.md` at the repo root, but no such file exists.
+2. The same upgrade guide's post-upgrade validation commands point at `~/memory.db` instead of the new documented path `~/.quaid/memory.db`, which makes the manual migration/verification path drift right where this release must be exact.
+
+### Required revision
+
+Assign docs/release ownership (Amy, Scribe, or Zapp lane) to either:
+
+- add the referenced `MIGRATION.md` with the hard-breaking rename steps, or
+- remove that reference and make the existing upgrade/release docs fully self-contained,
+
+and fix the upgrade guide commands so they validate the migrated DB at `~/.quaid/memory.db`.
+
+### Validation seen in re-review
+
+- `cargo test` passed.
+- `tests/install_release_seam.sh` passed.
+- `tests/release_asset_parity.sh` passed.
+- `npm pack --dry-run ./packages/quaid-npm` passed.
+
+---
+author: nibbler
+date: 2026-04-26
+status: proposed
+change: quaid-hard-rename
+---
+
+# Decision: quaid-hard-rename adversarial review
+
+## Verdict
+
+**REJECT**
+
+## Blocking findings
+
+### 1. Hidden legacy leakage still exists in `.gitignore`
+
+Rejected artifact: `.gitignore`
+
+The hard-rename audit explicitly drove non-hidden files to zero legacy hits, but the hidden leakage path is still open. `.gitignore` still ignores `/brain.db*` and `packages/gbrain-npm/bin/gbrain.*`, while the new default database is `~/.quaid/memory.db` and the npm wrapper now downloads `packages/quaid-npm/bin/quaid.bin` / `quaid.download`. That means the new default memory file and the npm-downloaded native binary can leak into `git status` and be accidentally committed, while the old ignored paths are dead names.
+
+Different agent must revise `.gitignore` to track the Quaid-era defaults (`memory.db*`, `packages/quaid-npm/bin/quaid.*`) and remove the dead legacy package-binary entries.
+
+### 2. Release/install guidance is still success-shaped for a breaking rename
+
+Rejected artifacts: `.github/workflows/release.yml`, `README.md`, `website/src/content/docs/how-to/upgrade.mdx`
+
+The OpenSpec says this rename is a breaking schema change with no auto-migration, and explicitly requires the export → `quaid init` → import path plus manual MCP client config updates before the first tag ships. `tasks.md` still shows K.1 open, `proposal.md` calls out this exact mitigation, but the release workflow body still reads like an ordinary patch release ("fixes Issue #81"), and the checked docs do not publish the required rename migration table or the MCP/tool/config cutover steps. That will strand existing users on upgrade with disappearing tools and an unreadable database.
+
+Different agent must revise the public release/install surfaces so the first `quaid` release notes and human docs explicitly cover: binary rename, env-var rename, full `brain_*` → `memory_*` tool mapping, MCP config updates, and the manual export/re-init/import migration path.
+
+### 3. The npm rename cutover is incomplete in the current tree
+
+Rejected artifacts: `packages/quaid-npm/`, `.github/workflows/publish-npm.yml`
+
+The tracked `packages/gbrain-npm/*` files are deleted, but the replacement `packages/quaid-npm/` directory is still untracked in the current working tree while `publish-npm.yml` now `cd`s into `packages/quaid-npm`. Rust build/test green does not protect this lane; if this tree is pushed as-is or partially staged, the npm publish path breaks outright.
+
+Different agent must land the package rename as a complete tracked change set and re-verify the npm publish/dry-run lane against the tracked `packages/quaid-npm/` contents.
+
+# 2026-04-26 — Nibbler README / getting-started re-review
+
+**Requested by:** macro88  
+**Verdict:** REJECT
+
+## Scope reviewed
+
+- `README.md`
+- `docs/getting-started.md`
+- directly coupled truth those artifacts point readers to
+
+## Why rejected
+
+Leela fixed the previously blocked README/getting-started seams themselves: npm is no longer presented as available, quarantine restore is no longer overclaimed, and the narrowed vault-sync surface is described truthfully in those two docs.
+
+The remaining blocker is coupled truth. `README.md` says `docs/spec.md` is the authoritative design document, and `docs/getting-started.md` points readers there for command/tool details. That authoritative spec still contradicts the hard-rename surface in user-breaking ways:
+
+- `docs/spec.md` still documents `QUAID_DB` / `--db` defaulting to `./memory.db` instead of `~/.quaid/memory.db`
+- upgrade / rollback snippets still resolve `${QUAID_DB:-./memory.db}`
+- release download examples still use unsuffixed `quaid-${PLATFORM}` assets even though the release contract is `quaid-<platform>-<channel>`
+
+## Required revision
+
+A different docs agent must repair `docs/spec.md` (and any linked upgrade/install snippets it owns) to match the renamed release contract and default DB path, or else remove the README/getting-started language that delegates authority to that stale spec surface.
+
+## Review note
+
+This is a truthfulness rejection, not a wording nit. As long as the linked authoritative spec tells users the wrong DB default and wrong release asset contract, the hard rename is not safe to approve.
+
+# Nibbler release-surface review — REJECT
+
+Date: 2026-04-26
+Requested by: macro88
+Scope: release/migration ship surfaces for `quaid-hard-rename`
+
+## Verdict
+
+REJECT
+
+## Why
+
+The hard-break visibility is now prominent enough, but three ship-facing seams still fail truthfulness:
+
+1. **`.github/workflows/release.yml` — broken online installer example in release notes**
+   - The release body shows:
+     ```bash
+     QUAID_CHANNEL=online \
+       curl -fsSL ... | sh
+     ```
+   - That assigns `QUAID_CHANNEL` to `curl`, not to `sh`, so users following the published release notes will still run the installer in the default channel instead of `online`.
+   - Required fix: rewrite the command so `sh` receives `QUAID_CHANNEL=online` (matching the working README/docs pattern).
+
+2. **`MIGRATION.md` — unsupported npm path still presented as an install command**
+   - The npm section still tells users to run:
+     ```bash
+     npm install -g quaid
+     ```
+   - The same section then states the package is not yet in the public registry. That is success-shaped guidance for a path that is explicitly unavailable.
+   - Required fix: remove the install command or label the whole path as planned-only / unavailable until the package is actually published.
+
+3. **`.github/RELEASE_CHECKLIST.md` — installer truth drift**
+   - The checklist still says `curl | sh` is **not available**.
+   - But `release.yml`, `README.md`, `docs/getting-started.md`, and the shell-test lane (`tests/install_release_seam.sh`, `tests/release_asset_parity.sh`) all treat `scripts/install.sh` as a real supported release surface.
+   - Required fix: make the checklist truthful about the supported installer path, or remove the installer from every other public ship surface. Current state is internally contradictory.
+
+## Re-review bar
+
+Approve after:
+
+- release notes use a working `online` installer command,
+- migration docs stop telling users to run an unavailable npm install,
+- and the release checklist matches the actual supported install surface.
+
+# Nibbler — final rename ship review
+
+- Requested by: macro88
+- Change: `openspec/changes/quaid-hard-rename`
+- Verdict: **REJECT**
+
+## Rejected artifact
+
+- `docs/spec.md`
+
+## Why this is still a ship blocker
+
+`README.md` and `docs/getting-started.md` now correctly describe a shipped **17-tool** `memory_*` MCP surface and explicitly send readers to `docs/spec.md` for the signatures. But `docs/spec.md` still documents a materially different contract:
+
+- it advertises non-shipped MCP tools such as `memory_ingest`, `memory_links`, `memory_unlink`, `memory_timeline_add`, `memory_tag`, and `memory_gap_approve`
+- it describes concurrency rules and research flows built around those non-shipped tools
+- it therefore contradicts the live server surface in `src/mcp/server.rs`, which exports only the 17 shipped tools
+
+This is still user-breaking for the hard rename release because the primary spec remains the delegated source of truth for integration work. An agent or operator following `docs/spec.md` will implement against tools that do not exist.
+
+## Required revision
+
+A docs owner must revise `docs/spec.md` so its MCP/CLI contract matches the shipped Quaid surface exactly:
+
+1. keep the renamed `quaid` / `memory_*` / `~/.quaid/memory.db` / `quaid-*` release-asset contract
+2. replace the obsolete MCP matrix and surrounding prose with the real 17-tool surface from `src/mcp/server.rs`
+3. remove or clearly defer any flows that depend on non-shipped tools
+
+Until that happens, the hard rename is **not** safe to ship.
+
+# Nibbler final hard-rename review
+
+- **Verdict:** REJECT
+- **Change:** `openspec/changes/quaid-hard-rename`
+- **Reviewer:** Nibbler
+- **Requested by:** macro88
+
+## Blocking artifact
+
+### `.github/workflows/release.yml`
+
+The generated GitHub Release body is still success-shaped for a routine patch release instead of a hard-breaking rename:
+
+1. It opens with install snippets and a watcher hotfix summary, not an explicit breaking-rename warning.
+2. It does not point users at `MIGRATION.md` even though the rename makes old binaries, env vars, MCP tool names, and databases incompatible.
+3. It still says `npm installs the online channel`, which conflicts with the current migration/docs story and can mislead operators into a nonexistent or not-yet-live upgrade path.
+
+## Required revision
+
+A different agent must rewrite the release-note body in `.github/workflows/release.yml` so the published release opens with a clear **BREAKING RENAME** callout, links to `MIGRATION.md`, states there is no in-place upgrade path, and removes or truthfully narrows the npm claim.
+
+# Professor — Absolute Final Approval
+
+**Date:** 2026-04-26
+**Requested by:** macro88
+**Change:** `openspec/changes/quaid-hard-rename`
+**Verdict:** **APPROVE**
+
+I re-checked the final revision against the last two concrete blockers and the ship-truth surfaces.
+
+- `src/commands/call.rs` now routes `memory_collections` and includes a direct dispatcher test.
+- `.github/workflows/publish-npm.yml` no longer auto-publishes on release tags; it is manual-only and now matches the docs/checklist/release notes that say npm is staged, not live.
+- `README.md`, `docs/getting-started.md`, `docs/spec.md`, `MIGRATION.md`, `.github/RELEASE_CHECKLIST.md`, and `.github/workflows/release.yml` now tell one coherent rename/migration story: `quaid` binary, `memory_*` MCP tools, `QUAID_*` env vars, manual migration for existing databases, and no promise of live npm distribution in this release.
+- `src/mcp/server.rs` and the CLI/docs surfaces are aligned on the shipped MCP set, including `memory_collections`.
+
+I did not find a remaining design-integrity, maintainability, or release-truth blocker in the reviewed artifacts. This rename is finally approvable.
+
+# Professor final review — quaid hard rename
+
+Requested by: macro88
+Date: 2026-04-26
+Verdict: REJECT
+
+## Why
+
+The rename is not yet approvable.
+
+1. Migration/cutover guidance is still non-operational in user-facing docs. `MIGRATION.md` and `website/src/content/docs/how-to/upgrade.mdx` still use placeholders like `<old-binary>`, `<LEGACY>_DB`, `<old-prefix>_get`, and `<old-package-name>` instead of the real pre-rename values, so users cannot perform the required manual cutover from the published legacy surfaces.
+2. Schema-version truth is still wrong in modified website docs. `website/src/content/docs/reference/configuration.mdx` and `website/src/content/docs/explanation/embedding-models.mdx` still say schema version `5` even though the code and schema are at `6`.
+
+## Required revision
+
+A different agent must revise:
+- `MIGRATION.md`
+- `website/src/content/docs/how-to/upgrade.mdx`
+- `website/src/content/docs/reference/configuration.mdx`
+- `website/src/content/docs/explanation/embedding-models.mdx`
+
+The revision must make the migration steps concrete and mechanically actionable, and it must bring every schema-version statement back into alignment with the actual shipped schema.
+
+## 2026-04-26 — Quaid hard-rename final release approval
+
+**By:** Professor  
+**Verdict:** REJECT
+
+The rename is not approvable yet because public operator surfaces are still internally inconsistent on two material truths. `docs/getting-started.md` still says `quaid init` creates the “full v5 schema” even though `src\schema.sql` and `src\core\db.rs` are on schema version 6, and both `README.md` and `docs/getting-started.md` still advertise restore surfaces (`quaid collection restore`, quarantine restore, `discard|restore`) that conflict with the current team gate in `.squad/identity/now.md`, which says restore has been backed out of the live CLI surface again.
+
+**Artifacts that must be revised before approval:**
+
+1. `docs/getting-started.md` — fix schema-version truth (`v5` → current v6 truth) and remove/retell restore claims to match the currently approved live surface.
+2. `README.md` — remove/retell restore claims (`collection restore`, quarantine restore, `discard|restore`, “narrow Unix restore”) so the release-facing docs match the active gate.
+
+Release workflow, checklist, migration guide, configuration reference, schema DDL, and `db.rs` no longer show the earlier rename blockers I was asked to watch; the remaining block is public-surface truthfulness.
+
+# Professor Final Tree Approval
+
+**Date:** 2026-04-27  
+**Requested by:** macro88  
+**Verdict:** **REJECT**
+
+## Blocking MCP surface mismatch
+
+The rename is not approvable as-is because one shipped surface still contradicts the documented “all 17 MCP tools are now `memory_*`” contract.
+
+- `src\mcp\server.rs` exposes `memory_collections` as part of the live MCP surface.
+- `README.md`, `docs\spec.md`, and `MIGRATION.md` all describe a 17-tool `memory_*` surface that includes `memory_collections`.
+- But `src\commands\call.rs` never dispatches `memory_collections`; the match only covers the first 16 renamed tools, so `quaid call memory_collections ...` still falls through to `unknown tool`.
+
+## Why this blocks approval
+
+This is not a cosmetic omission. `quaid call` is the repo’s local MCP harness, and the hard-rename contract says the new `memory_*` surface is complete and truthful everywhere. Shipping with one renamed tool missing from the harness means the tree still does not fully deserve the “hard rename complete” claim.
+
+# Professor MCP Spec Signoff
+
+Requested by: macro88  
+Date: 2026-04-26
+
+Decision: APPROVE
+
+The previous blocker is cleared. `docs/spec.md` now describes the shipped MCP surface truthfully: 17 `memory_*` tools on `quaid serve`, explicit Unix gating for MCP hosting, and the real `quaid call` limitation that still excludes `memory_collections`.
+
+Review basis:
+- `docs/spec.md` MCP table and behavior notes match `src/mcp/server.rs`
+- `README.md` and `docs/getting-started.md` now hand off to the spec without overstating the shipped contract
+- `src/commands/call.rs` still routes 16 tools, and the spec now says so explicitly
+- Validation rerun: `cargo test --quiet mcp::server` passed
+
+No remaining blocker found in the requested artifacts for the hard rename signoff.
+
+## 2026-04-26 — Professor rereview: quaid-hard-rename remains blocked
+
+**Verdict:** REJECT
+
+### What cleared
+- `src\core\db.rs` now truthfully runs at `SCHEMA_VERSION = 6` and reads/writes `quaid_config`.
+- `website\src\content\docs\how-to\upgrade.mdx` now at least points readers to a dedicated migration guide.
+
+### Blocking issues still open
+1. **Migration guidance is still not trustworthy.**
+   - `website\src\content\docs\how-to\upgrade.mdx` tells users to run `<old-binary> export > backup/`.
+   - `MIGRATION.md` tells users to run `gbrain export --out backup/`.
+   - The real CLI surface is `export <PATH>` (positional path; no stdout export and no `--out` flag). Publishing commands that do not exist is a ship blocker.
+
+2. **Published schema version labeling is still inconsistent.**
+   - `src\schema.sql` is labeled “Quaid v6” but still seeds `config.version = '5'`.
+   - Published docs still describe the live schema as v5 (`docs\getting-started.md`, `docs\contributing.md`, `docs\roadmap.md`, `docs\openclaw-harness.md`).
+   - Until the repo presents one truthful schema version, the earlier schema-labeling rejection is not cleared.
+
+### Required revision lane
+- A docs-focused agent must fix the migration commands in `website\src\content\docs\how-to\upgrade.mdx` and `MIGRATION.md`.
+- The same pass must make `src\schema.sql` and all published docs speak with one truthful voice about schema v6 and the real `export` syntax.
+
+# Professor review — quaid hard rename
+
+Decision: REJECT
+Requested by: macro88
+Change: quaid-hard-rename
+
+Rejected artifacts:
+- website/src/content/docs/how-to/upgrade.mdx
+- src/schema.sql
+
+Why:
+1. `website/src/content/docs/how-to/upgrade.mdx` points users to a root `MIGRATION.md` that does not exist. For a hard-breaking rename with no aliases or auto-migration, sending operators to a missing migration reference is a release-blocking documentation gap.
+2. The same upgrade guide states that `quaid_config.schema_version` is currently `5`, but the shipped code bumped `SCHEMA_VERSION` to `6`. That makes the migration instructions factually wrong at the exact seam users need to trust.
+3. `src/schema.sql` still advertises `Quaid v5` in its header while the runtime schema version is `6`. That is secondary to the broken upgrade guide, but it reinforces the version-truth mismatch around a breaking schema change.
+
+Required revision by a different agent:
+- Fix the upgrade/migration documentation so every referenced artifact exists and the documented schema version matches the shipped runtime.
+- Align schema-file version labeling with `src/core/db.rs` before this rename lands.
+
+## 2026-04-26 — Professor approval: README/getting-started hard-rename docs
+
+Approved the rename updates in `README.md` and `docs/getting-started.md`.
+
+Why this clears:
+- README/getting-started now match the coupled source truths for the hard rename: `SCHEMA_VERSION` is `6` in `src/core/db.rs`, the default DB path is `~/.quaid/memory.db`, and the persisted model metadata table is `quaid_config`.
+- The previously overstated public surface has been corrected: npm install is explicitly not published yet, quarantine restore is no longer claimed as part of the current release surface, and the quarantine docs now name only `list`, `export`, and `discard` as landed.
+- The reviewed docs no longer carry the residual legacy product/binary literals that previously blocked approval.
+
+Review boundary:
+- `README.md`
+- `docs/getting-started.md`
+- `src/core/db.rs`
+- `src/schema.sql`
+- current working tree diff for the touched docs
+
+Result: APPROVE the rename on this docs lane.
+
+# 2026-04-26 — Professor rename/spec final approval
+
+**Verdict:** REJECT
+
+**Why:** `docs/spec.md` still does not match the shipped MCP contract, so `README.md` and `docs/getting-started.md` cannot safely point to it as authoritative yet.
+
+## Blocking artifact
+- `docs/spec.md`
+
+## Required revision
+Update the MCP tools section to the real landed surface from `src/mcp/server.rs`:
+`memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`, `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`, `memory_gap`, `memory_gaps`, `memory_stats`, `memory_collections`, `memory_raw`.
+
+Remove or rewrite stale entries that are not shipped as MCP tools (`memory_ingest`, `memory_links`, `memory_unlink`, `memory_timeline_add`, `memory_tag`, `memory_gap_approve`). If spec remains the authority target, its tool signatures must match `src/mcp/server.rs` exactly.
+
+## Professor review — quaid-hard-rename
+
+- Date: 2026-04-26
+- Requested by: macro88
+- Verdict: REJECT
+
+### Blocking issue
+
+The rename is not yet zero-trace complete. `.github/RELEASE_CHECKLIST.md` still contains the legacy package path `packages/gbrain-npm/` in the npm release gate, which reintroduces the retired product name into a team-facing artifact and leaves Phase J.1 materially open.
+
+### Required revision
+
+A different agent should revise `.github/RELEASE_CHECKLIST.md` so the npm release gate verifies the new package surface without naming the retired package directly, then rerun the zero-trace audit.
+
+# Scruffy — Batch 1 watcher reliability coverage memo
+
+Batch 1 is **not** ready to claim as shipped from a coverage perspective. In the current worktree, the `.quaidignore` watcher lane now has real code and direct tests, but the production seams for `6.7a`, `6.9`, `6.10`, and `6.11` / proofs `17.5w`, `17.5x`, `17.5aaa2`, `17.5aaa3`, `17.5aaa4` are still missing. The honest move is to keep the remaining Batch 1 tasks open and aim coverage directly at those branches.
+
+## What I safely landed now
+
+- `src/commands/collection.rs`
+  - `describe_collection_status_reports_plain_restoring_without_finalize_hint`
+  - `describe_collection_status_points_active_reconcile_needed_to_plain_sync`
+- `src/core/vault_sync.rs`
+  - `list_memory_collections_only_marks_restore_in_progress_after_release_ack`
+
+These are low-conflict branch guards around the already-landed status surface:
+- restoring vs pending-attach vs active-needs-reconcile CLI gating
+- `memory_collections.restore_in_progress` requiring a real restore ack, not just stray timestamps or command IDs
+
+## Coverage state by requested focus
+
+### 1. Overflow recovery timing / active-vs-restoring gating
+
+Current state:
+- Overflow **marks** `needs_full_sync=1` today (`start_collection_watcher` TrySendError::Full branch).
+- There is **no** recovery worker yet in `start_serve_runtime()`.
+- `run_watcher_reconcile()` already fail-closes to `state='active'`, which is the right gating model for the future recovery worker.
+
+Tests still needed once Fry lands the worker:
+- `17.5w`: seed `needs_full_sync=1`, `state='active'`, start serve, assert the flag clears within ~1s and `last_sync_at` advances.
+- `17.5x`: same seed with `state='restoring'`, assert the flag stays set, no reconcile runs, and write gating remains closed.
+- Add one explicit branch test for repeated poll ticks before 500ms doing nothing, then the 500ms+ branch firing exactly once.
+
+### 2. `.quaidignore` live reload success / parse-error / delete-with-prior-mirror
+
+Current state:
+- Parser/mirror semantics are already well-covered in `src/core/ignore_patterns.rs`:
+  - valid reload updates mirror
+  - invalid reload preserves prior mirror and records parse errors
+  - deleted file with prior mirror preserves mirror and records stable-absence error
+- The watcher delivery seam is now covered in `src/core/vault_sync.rs`:
+  - ignore-file events emit `WatchEvent::IgnoreFileChanged`
+  - valid reload updates the mirror and still triggers reconcile
+  - invalid reload preserves the mirror, records errors, and skips reconcile
+  - deleted file with a prior mirror preserves the mirror and skips reconcile
+
+Residual test value:
+- keep one branch test for “no prior mirror + file absent” staying quiet/default-only if Fry threads that through the watcher path rather than relying only on helper coverage
+- once tasks are updated, `17.5y`, `17.5z`, and `17.5aa` look credibly covered by the direct watcher tests now in `src/core/vault_sync.rs`
+
+### 3. Native watcher init fallback to poll
+
+Current state:
+- `start_collection_watcher()` hard-requires `notify::recommended_watcher(...)`; no fallback mode exists.
+
+Tests still needed once mode plumbing lands:
+- inject native watcher init failure and assert watcher state records `poll`
+- assert warn log mentions `falling_back_to_poll`
+- assert the poll-backed watcher still feeds the same channel and processes a real edit
+- add one health-surface assertion that `memory_collections.watcher_mode == "poll"` and CLI info reports the same
+
+### 4. Watcher crash / restart backoff behavior
+
+Current state:
+- Channel disconnect currently returns `InvariantViolation`; there is a unit test for that raw error.
+- No crash state, no restart tracking, no exponential backoff, no restart proof.
+
+Tests still needed once crash supervision lands:
+- simulate disconnect, assert watcher enters `crashed` mode and records failure timestamp
+- assert `sync_collection_watchers()` refuses to restart before `backoff_until`
+- assert first restart waits ~1s, second consecutive failure backs off longer, cap respected at 60s
+- assert a successful restart resets the consecutive-failure backoff chain
+
+### 5. Watcher health surfacing / fragile channel-depth + timestamp + inactive branches
+
+Current state:
+- `memory_collections` and `quaid collection info` do **not** yet expose watcher mode, last-event timestamp, or channel depth.
+- I added branch guards for adjacent status truth only:
+  - plain restoring vs pending attach vs active reconcile needed
+  - restore-in-progress requiring real ack state
+
+Tests still needed once health fields land:
+- inactive/detached collection reports `watcher_mode="inactive"` (or null on non-Unix), `last_event_at=null`, `channel_depth=0`
+- active collection with no events yet reports live mode + null timestamp
+- queued events update `channel_depth` without consuming them just to report health
+- processed event updates `watcher_last_event_at` monotonically
+- crashed watcher reports `watcher_mode="crashed"` while retaining last known timestamp/depth semantics
+
+## Practical approval bar from the test lane
+
+I would not sign off on “Batch 1 shipped / v0.10.0 ready” until overflow recovery, native→poll fallback, crash backoff/restart, and watcher-health surfacing all exist with the tests above. Right now the honest statement is: watcher-core debounce is covered, `.quaidignore` live reload is materially covered, and the remaining Batch 1 reliability surface is still missing its implementation-coupled proof set.
+
+# Decision: Remove legacy package-path leak from RELEASE_CHECKLIST.md
+
+**Author:** Zapp
+**Date:** 2026-04-25
+**Artifact:** `.github/RELEASE_CHECKLIST.md` line 97 (pre-fix)
+
+## Context
+
+Professor rejected the quaid-hard-rename review because `.github/RELEASE_CHECKLIST.md:97`
+explicitly named `packages/gbrain-npm/` — a retired path that violates the zero-trace
+rule for `gigabrain`, `gbrain`, and `brain_` across all non-hidden surfaces.
+The original item read:
+
+> `packages/quaid-npm/` is committed and tracked; `packages/gbrain-npm/` is fully removed
+> from the tree.
+
+## Decision
+
+Rewrote the checklist item to remove the named legacy path while preserving the intent:
+
+> `packages/quaid-npm/` is committed and tracked; no retired npm package directory exists
+> in the tree. The publish workflow will fail if `packages/quaid-npm/` is absent.
+
+The new wording is truthful (it still gates on the presence of the current package dir
+and absence of any legacy dir) without naming the legacy path explicitly.
+
+## Rationale
+
+- The zero-trace rule exists to prevent any surface from teaching users or bots the old
+  package name. A release checklist is a non-hidden surface reviewed during every release.
+- The fix is purely phrasing — no behavioural or workflow change is implied.
+- Previous author of this line is locked out; Zapp holds the release-copy sign-off lane
+  and is authorized to revise this entry.
+
+## Follow-on
+
+None required. The checklist is now clear of all legacy identifiers. Phase F.4 task in
+`openspec/changes/quaid-hard-rename/tasks.md` remains checked; this is a correction to
+work already landed, not a new implementation.
+
+# Decision: Hard-break migration docs rewrite
+
+**Date:** 2026-04-28
+**Author:** Zapp
+**Triggered by:** macro88 directive + Professor/Nibbler rejection of placeholder-based migration story
+
+---
+
+## Context
+
+`MIGRATION.md` and `website/src/content/docs/how-to/upgrade.mdx` were previously rejected
+by Professor and Nibbler because the placeholder approach (`<old-binary>`, `<LEGACY>_`,
+`<old-prefix>_`) was not actionable. Leela's prior fix (masking literal names with
+placeholders) was itself a partial answer — it avoided the zero-trace violation but still
+presented a step-by-step in-place migration story that no longer has a basis: the governing
+directive is that no supported in-place upgrade path exists, and no backward compatibility
+is warranted.
+
+Leela and Bender are locked out of revising these artifacts for this cycle.
+
+---
+
+## Decisions taken
+
+### 1. `MIGRATION.md` — full rewrite, hard-break stance
+
+Dropped all "Before → After" table rows that required naming the pre-rename binary.
+Replaced with:
+- Prominent hard-break callout at the top (no in-place upgrade path exists).
+- A single "What Quaid looks like now" table (new surface only; no before column).
+- Fresh install and shell profile sections (quaid-only).
+- MCP client config section (clean rebuild; no reference to old config shape).
+- Data recovery section that accurately states: this repo does not carry a migration tool;
+  users must locate their own pre-rename binary and consult that release's docs, then
+  re-init with quaid. No placeholder binary commands.
+- npm section: actionable (`npm list -g --depth 0` to identify; uninstall; install quaid).
+
+### 2. `website/src/content/docs/how-to/upgrade.mdx` — Aside rewrite
+
+Dropped the "Before → After" surface table (it required legacy placeholder names) and
+the step-by-step that referenced `<old-binary>` and `<old-package-name>`. Replaced the
+entire Aside with a clean hard-break statement:
+- States clearly: cannot upgrade in place, must start fresh.
+- Four numbered actions (install, rebuild MCP config, update shell profile, recover data).
+- Data recovery: points users to their own historical binary and GitHub Release history
+  for that project; this repo does not carry a migration tool.
+- Links to MIGRATION.md for full reference.
+
+### 3. `README.md` — hard-break warning added
+
+Added a prominent `> ⚠️` callout immediately after the status line, before the body of
+the README. Visible at the top of the page on GitHub. Links to MIGRATION.md.
+
+### 4. `docs/getting-started.md` — hard-break warning added
+
+Added the same callout immediately after the tagline at the top, before the What it does
+section.
+
+---
+
+## Rationale
+
+The previous approach (placeholders) was rejected because it still implied an actionable
+in-place migration the repo can't actually document without either (a) naming the old binary
+or (b) being useless. The correct stance — per the governing directive — is that there is
+no in-place upgrade path and that legacy data recovery is the user's responsibility using
+historical tooling outside this repo. Stating this plainly is more honest and more useful
+than a broken-placeholder step-by-step.
+
+---
+
+## Zero-trace check
+
+Scanned all four touched files for `gigabrain`, `gbrain`, and `brain_` — zero matches.
+
+# Decision: quaid-hard-rename cutover fix — Zapp
+
+**Date:** 2026-04-25
+**Author:** Zapp
+**Triggered by:** Nibbler reviewer rejection of three blocked rename artifacts
+
+---
+
+## Context
+
+Nibbler rejected the rename artifacts with three specific findings:
+
+1. `.gitignore` still referenced `packages/gbrain-npm/bin/gbrain.bin` and
+   `packages/gbrain-npm/bin/gbrain.download` (legacy paths). The `memory.db` default was
+   also missing from the ignore list.
+2. `.github/RELEASE_CHECKLIST.md` and `website/src/content/docs/how-to/upgrade.mdx`
+   described upgrade steps as if this were a routine patch, with no explicit callout that
+   the rename is hard-breaking and requires manual user-side migration.
+3. `packages/quaid-npm/` existed on disk but was untracked (`??` in git status) while
+   `.github/workflows/publish-npm.yml` already declared
+   `working-directory: packages/quaid-npm` — a missing-path failure waiting to occur.
+
+Fry, Amy, and Hermes are locked out of revising these artifacts. Zapp owns this revision.
+
+---
+
+## Decisions made
+
+### D.1 — `.gitignore` legacy path removal
+**Decision:** Remove the two `gbrain-npm` ignore entries; add the two corresponding
+`quaid-npm` entries (`quaid.bin` and `quaid.download`). Also add `memory.db` and its
+WAL/journal/SHM siblings alongside the existing `brain.db` entries (both defaults get
+ignored; comment clarifies both are present).
+
+**Rationale:** The `gbrain-npm` paths point to files that no longer exist on disk or in the
+tree. Leaving them in `.gitignore` is inert noise that signals incomplete rename work to any
+reviewer doing a grep for legacy names. The `memory.db` omission was a genuine gap: the new
+default DB path would have been committable by accident.
+
+### D.2 — RELEASE_CHECKLIST.md rename migration gate
+**Decision:** Insert a dedicated "Hard-breaking rename migration gate" section into the
+checklist before the "Release notes" section. The new section carries seven explicit
+line-item checkboxes covering binary, MCP tool, env var, DB migration, npm package, and
+package tree consistency. Zapp is the named sign-off owner on this gate. The existing
+sign-off table gains a "Hard-breaking rename migration gate / Zapp" row.
+
+**Rationale:** A checklist that described asset names and checksums but had no line item
+for the most disruptive user-visible change this project has ever shipped would have let a
+release go out without explicit confirmation that migration docs exist. The gate is Zapp's
+because migration messaging is DevRel/growth surface work.
+
+### D.3 — upgrade.mdx hard-breaking rename callout
+**Decision:** Prepend a `<Aside type="danger">` component to the upgrade guide with a
+before/after table of every renamed surface, five numbered manual steps the user must take,
+and a pointer to `MIGRATION.md`. The existing routine upgrade steps follow unchanged below.
+
+**Rationale:** A docs page titled "Upgrade your binary" that silently omits a breaking
+rename is a support incident factory. The callout is typed `danger` (not `caution`) because
+clients will silently stop working if MCP configs are not updated — that is a data-access
+outage, not a warning-level concern.
+
+### D.4 — install.sh rename notice block
+**Decision:** Insert a multi-line rename notice block into `scripts/install.sh` immediately
+after the "Installed quaid to <path>" success message. The block lists the three required
+manual steps (MCP config, shell profile, DB migration) and links to the GitHub repo for the
+full migration guide.
+
+**Rationale:** `install.sh` is the primary upgrade path for existing binary users. A user
+who runs `install.sh` to upgrade from a pre-rename binary will complete the install
+successfully — and then have a broken MCP setup with no indication of why. The notice makes
+the post-install action required, not discoverable only by reading release notes.
+
+### D.5 — packages/quaid-npm/ git tracking
+**Decision:** `git add packages/quaid-npm/` to track the directory, and
+`git rm --cached packages/gbrain-npm/*` to deindex the already-deleted gbrain-npm files
+(they showed as `D` in git status). Git detects the four files as renames from
+`gbrain-npm/` to `quaid-npm/`, which is correct history.
+
+**Rationale:** The publish workflow's `working-directory: packages/quaid-npm` step would
+have failed on any clean CI checkout because the directory was untracked. This was the
+most directly breaking of the three Nibbler findings.
+
+---
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| `.gitignore` | Remove gbrain-npm entries; add quaid-npm entries; add memory.db entries |
+| `.github/RELEASE_CHECKLIST.md` | Add rename migration gate section + sign-off row |
+| `website/src/content/docs/how-to/upgrade.mdx` | Add `<Aside type="danger">` rename callout |
+| `scripts/install.sh` | Add rename notice block after successful install |
+| `packages/quaid-npm/` (git index) | Staged for tracking |
+| `packages/gbrain-npm/` (git index) | Removed from index (files already deleted) |
+
+---
+
+## What was NOT changed
+
+- `README.md` — not part of the blocked artifacts; existing rename prose is sufficient
+  for this fix pass.
+- `docs/` content — migration guide authorship (Phase K of tasks.md) is deferred; Amy/Scribe
+  own K.1 and are not locked out of that task.
+- `publish-npm.yml` — already correct; no changes needed.
+- `packages/quaid-npm/` file content — all four files (package.json, README.md,
+  bin/quaid, scripts/postinstall.js) were already correct; only the git tracking was missing.
