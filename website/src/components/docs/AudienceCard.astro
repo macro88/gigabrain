@@ -37,23 +37,29 @@ const { title, icon, eyebrow, href, linkText } = Astro.props;
 		gap: 1rem;
 		padding: 1.6rem;
 		border-radius: 1.1rem;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
-		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
-		box-shadow: 0 18px 32px -28px rgba(30, 20, 15, 0.38);
+		border: 1px solid rgba(165, 154, 122, 0.18);
+		background: var(--q-stone, #2A2A2A);
+		box-shadow: 0 18px 32px -28px rgba(0, 0, 0, 0.38);
 		text-decoration: none;
 		color: inherit;
 		transition: transform 120ms ease, box-shadow 200ms ease, border-color 200ms ease;
 	}
 
+	:global(:root[data-theme="light"]) .gb-audience-card {
+		background: var(--gb-surface-low, #EDEAE4);
+		border-color: rgba(165, 154, 122, 0.25);
+		box-shadow: 0 18px 32px -28px rgba(0, 0, 0, 0.08);
+	}
+
 	.gb-audience-card:hover {
 		transform: translateY(-2px);
-		border-color: color-mix(in srgb, var(--sl-color-orange-high) 40%, transparent);
-		box-shadow: 0 24px 36px -28px rgba(218, 119, 86, 0.32);
+		border-color: rgba(165, 154, 122, 0.40);
+		box-shadow: 0 24px 36px -28px rgba(0, 0, 0, 0.32);
 	}
 
 	.gb-audience-card__eyebrow {
 		margin: 0;
-		color: var(--sl-color-orange-high);
+		color: var(--q-bronze, #A59A7A);
 		font-size: 0.74rem;
 		font-weight: 800;
 		letter-spacing: 0.14em;
@@ -73,8 +79,8 @@ const { title, icon, eyebrow, href, linkText } = Astro.props;
 		width: 2.5rem;
 		height: 2.5rem;
 		border-radius: 0.8rem;
-		background: color-mix(in srgb, var(--sl-color-orange-low) 82%, transparent);
-		color: var(--sl-color-orange-high);
+		background: rgba(165, 154, 122, 0.15);
+		color: var(--q-bronze, #A59A7A);
 	}
 
 	.gb-audience-card h3 {
@@ -99,7 +105,7 @@ const { title, icon, eyebrow, href, linkText } = Astro.props;
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
-		color: var(--sl-color-orange-high);
+		color: var(--q-bronze, #A59A7A);
 		font-size: 0.92rem;
 		font-weight: 700;
 	}

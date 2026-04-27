@@ -34,9 +34,9 @@ const { title, primaryHref, primaryText, secondaryHref, secondaryText } = Astro.
 		gap: 1.25rem 2rem;
 		padding: clamp(1.35rem, 3vw, 2.25rem);
 		border-radius: 1.25rem;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
-		background: linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(240, 143, 110, 0.085));
-		box-shadow: 0 20px 34px -30px rgba(30, 20, 15, 0.45);
+		border: 1px solid rgba(165, 154, 122, 0.18);
+		background: linear-gradient(145deg, rgba(255, 255, 255, 0.03), rgba(165, 154, 122, 0.08));
+		box-shadow: 0 20px 34px -30px rgba(0, 0, 0, 0.45);
 	}
 
 	.gb-guide-action__copy {
@@ -84,9 +84,9 @@ const { title, primaryHref, primaryText, secondaryHref, secondaryText } = Astro.
 	}
 
 	.gb-guide-action__link.is-primary {
-		border-color: rgba(240, 143, 110, 0.38);
-		background: linear-gradient(135deg, rgba(240, 143, 110, 0.92), rgba(184, 82, 46, 0.92));
-		color: white;
+		border-color: rgba(165, 154, 122, 0.38);
+		background: linear-gradient(135deg, var(--q-linen, #D6D0C4), var(--q-bronze, #A59A7A));
+		color: var(--q-ink, #0D0D0D);
 	}
 
 	@media (max-width: 50rem) {

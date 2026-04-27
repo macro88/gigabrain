@@ -12,9 +12,9 @@ export default defineConfig({
   trailingSlash: "always",
   integrations: [
     starlight({
-      title: "Quaid",
+      title: "quaid",
       description:
-        "The personal knowledge memory. SQLite + FTS5 + vector embeddings in one file.",
+        "Persistent memory for agents. SQLite + FTS5 + vector embeddings in one static binary.",
       customCss: ["./src/styles/custom.css"],
       components: {
         Header: "./src/components/Header.astro",

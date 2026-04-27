@@ -33,3 +33,5 @@ benchmarks/datasets/
 # npm postinstall downloaded binary (quaid-npm)
 packages/quaid-npm/bin/quaid.bin
 packages/quaid-npm/bin/quaid.download
+
+.pnpm-store/
