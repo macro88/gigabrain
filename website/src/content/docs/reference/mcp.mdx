@@ -10,6 +10,8 @@ guide:
 
 The transport is stdio. Any MCP-compatible client (Claude Code, Cursor, custom rmcp clients) can connect by spawning `quaid serve` and exchanging JSON-RPC over stdin/stdout. See [Connect Claude Code](/tutorials/connect-claude-code/) for a worked example.
 
+> **Platform note.** `quaid serve` and all MCP tools are cross-platform. Live vault-sync watcher threads (automatic reconcile on file edits) start only on Unix (macOS / Linux) and are simply not started on Windows — MCP tool calls continue to work normally on all platforms.
+
 ## Conventions
 
 - Slugs may be **collection-qualified** (`<collection>::<slug>`). Bare slugs resolve to the default collection or fail with `Ambiguity` if multiple collections expose the same slug.

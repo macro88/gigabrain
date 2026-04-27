@@ -169,7 +169,7 @@ Then start the server:
 quaid serve
 ```
 
-> **Unix only in `v0.9.6`.** `quaid serve` now owns the vault-sync runtime, so macOS/Linux are the supported hosts for MCP on this release line. On Windows it returns `UnsupportedPlatformError`; use the portable CLI commands (`search`, `query`, `get`, `list`, etc.) there until a safe non-Unix serve contract lands.
+> **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, etc.) work on all platforms.
 
 The MCP server exposes tools over stdio JSON-RPC 2.0.
 
@@ -410,7 +410,7 @@ quaid collection info work
 
 Once attached, `quaid serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-> **Unix only.** `quaid serve` and all live-watcher functionality require a Unix platform (macOS or Linux). On Windows, `quaid serve` returns `UnsupportedPlatformError` because the full serve/runtime surface is intentionally gated in this release line; portable CLI reads/searches still work there, but MCP hosting and vault-byte write-through remain deferred.
+> **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, `memory_query`, etc.) work on all platforms.
 
 ### Ignore patterns
 
