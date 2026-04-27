@@ -66,11 +66,11 @@ const { variant = 'diagram', label, note } = Astro.props;
 <style>
 	.gb-guide-visual {
 		margin: 0;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
+		border: 1px solid rgba(165, 154, 122, 0.18);
 		border-radius: 1.25rem;
 		overflow: hidden;
-		background: color-mix(in srgb, var(--sl-color-white) 90%, var(--sl-color-gray-6));
-		box-shadow: 0 22px 38px -30px rgba(30, 20, 15, 0.45);
+		background: var(--q-stone, #2A2A2A);
+		box-shadow: 0 22px 38px -30px rgba(0, 0, 0, 0.45);
 	}
 
 	.gb-guide-visual__canvas {
@@ -83,23 +83,23 @@ const { variant = 'diagram', label, note } = Astro.props;
 		min-height: 18rem;
 		padding: 1.5rem;
 		background:
-			radial-gradient(circle at top left, rgba(240, 143, 110, 0.18), transparent 40%),
-			radial-gradient(circle at bottom right, rgba(255, 214, 190, 0.12), transparent 35%),
+			radial-gradient(circle at top left, rgba(165, 154, 122, 0.18), transparent 40%),
+			radial-gradient(circle at bottom right, rgba(214, 208, 196, 0.08), transparent 35%),
 			linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 65%);
 	}
 
 	.is-circuit .gb-guide-visual__canvas {
 		background:
-			radial-gradient(circle at 25% 20%, rgba(240, 143, 110, 0.28), transparent 22%),
+			radial-gradient(circle at 25% 20%, rgba(165, 154, 122, 0.28), transparent 22%),
 			repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 42px),
 			repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0, rgba(255, 255, 255, 0.04) 1px, transparent 1px, transparent 42px),
-			linear-gradient(145deg, #231713 0%, #120d0c 100%);
+			linear-gradient(145deg, #0D0D0D 0%, #161616 100%);
 	}
 
 	.is-studio .gb-guide-visual__canvas {
 		background:
-			linear-gradient(180deg, rgba(255, 214, 190, 0.08), transparent 45%),
-			linear-gradient(135deg, #120d0c 0%, #2e1c17 42%, #8f523f 100%);
+			linear-gradient(180deg, rgba(214, 208, 196, 0.06), transparent 45%),
+			linear-gradient(135deg, #0D0D0D 0%, #1E1E1C 42%, #2A2A2A 100%);
 	}
 
 	.gb-guide-visual__node,
@@ -115,9 +115,9 @@ const { variant = 'diagram', label, note } = Astro.props;
 		width: min(100%, 16rem);
 		padding: 0.95rem 1rem;
 		border-radius: 0.95rem;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 70%, transparent);
-		background: rgba(255, 255, 255, 0.82);
-		color: #241916;
+		border: 1px solid rgba(165, 154, 122, 0.22);
+		background: rgba(42, 42, 42, 0.82);
+		color: var(--q-bone, #F7F7F5);
 		font-size: 0.95rem;
 		font-weight: 700;
 		text-align: center;
@@ -125,15 +125,15 @@ const { variant = 'diagram', label, note } = Astro.props;
 	}
 
 	.gb-guide-visual__node.is-highlight {
-		background: linear-gradient(135deg, rgba(240, 143, 110, 0.9), rgba(195, 92, 61, 0.92));
-		border-color: rgba(255, 210, 192, 0.4);
-		color: white;
+		background: linear-gradient(135deg, rgba(165, 154, 122, 0.9), rgba(138, 131, 118, 0.92));
+		border-color: rgba(214, 208, 196, 0.4);
+		color: var(--q-ink, #0D0D0D);
 	}
 
 	.gb-guide-visual__rail {
 		width: 2px;
 		height: 1.2rem;
-		background: linear-gradient(180deg, rgba(240, 143, 110, 0.2), rgba(240, 143, 110, 0.8));
+		background: linear-gradient(180deg, rgba(165, 154, 122, 0.2), rgba(165, 154, 122, 0.8));
 	}
 
 	.gb-guide-visual__orb {
@@ -142,7 +142,7 @@ const { variant = 'diagram', label, note } = Astro.props;
 		width: 7rem;
 		height: 7rem;
 		border-radius: 999px;
-		background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.8), rgba(240, 143, 110, 0.95) 35%, rgba(111, 46, 27, 0.5) 70%, transparent 72%);
+		background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.8), rgba(165, 154, 122, 0.95) 35%, rgba(42, 42, 42, 0.5) 70%, transparent 72%);
 		filter: blur(0.1px);
 	}
 
@@ -203,7 +203,7 @@ const { variant = 'diagram', label, note } = Astro.props;
 		width: min(70%, 18rem);
 		aspect-ratio: 3 / 4;
 		border-radius: 1rem;
-		background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(244, 239, 235, 0.88));
+		background: linear-gradient(180deg, rgba(42, 42, 42, 0.94), rgba(30, 30, 28, 0.88));
 		border: 1px solid rgba(255, 255, 255, 0.5);
 		box-shadow: 0 28px 38px -34px rgba(24, 16, 14, 0.55);
 	}
@@ -228,7 +228,7 @@ const { variant = 'diagram', label, note } = Astro.props;
 	.gb-guide-visual__line {
 		height: 0.68rem;
 		border-radius: 999px;
-		background: rgba(140, 93, 71, 0.18);
+		background: rgba(165, 154, 122, 0.18);
 	}
 
 	.gb-guide-visual__line.is-short {
@@ -240,8 +240,8 @@ const { variant = 'diagram', label, note } = Astro.props;
 		width: fit-content;
 		padding: 0.42rem 0.72rem;
 		border-radius: 999px;
-		background: rgba(240, 143, 110, 0.14);
-		color: #84432a;
+		background: rgba(165, 154, 122, 0.14);
+		color: var(--q-bronze, #A59A7A);
 		font-size: 0.78rem;
 		font-weight: 800;
 		letter-spacing: 0.08em;

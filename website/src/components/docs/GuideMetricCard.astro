@@ -20,12 +20,17 @@ const { value, label, note } = Astro.props;
 		gap: 0.35rem;
 		padding: 1.2rem;
 		border-radius: 1rem;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
-		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
+		border: 1px solid rgba(165, 154, 122, 0.18);
+		background: var(--q-stone, #2A2A2A);
+	}
+
+	:global(:root[data-theme="light"]) .gb-guide-metric {
+		background: var(--gb-surface-low, #EDEAE4);
+		border-color: rgba(165, 154, 122, 0.25);
 	}
 
 	.gb-guide-metric__value {
-		color: var(--sl-color-orange-high);
+		color: var(--q-bronze, #A59A7A);
 		font-size: clamp(1.5rem, 2vw, 2rem);
 		font-weight: 800;
 		letter-spacing: -0.04em;

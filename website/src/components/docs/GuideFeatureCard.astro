@@ -46,12 +46,20 @@ const {
 <style>
 	.gb-guide-feature {
 		display: grid;
-		gap: 0.95rem;
+		grid-template-rows: auto 1fr auto;
+		gap: 0.75rem;
 		padding: 1.35rem;
 		border-radius: 1rem;
-		border: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 72%, transparent);
-		background: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-gray-6));
-		box-shadow: 0 18px 32px -28px rgba(30, 20, 15, 0.38);
+		border: 1px solid rgba(165, 154, 122, 0.18);
+		background: var(--q-stone, #2A2A2A);
+		box-shadow: 0 18px 32px -28px rgba(0, 0, 0, 0.38);
+		height: 100%;
+	}
+
+	:global(:root[data-theme="light"]) .gb-guide-feature {
+		background: var(--gb-surface-low, #EDEAE4);
+		border-color: rgba(165, 154, 122, 0.25);
+		box-shadow: 0 18px 32px -28px rgba(0, 0, 0, 0.08);
 	}
 
 	.gb-guide-feature.is-line {
@@ -64,13 +72,17 @@ const {
 	}
 
 	.gb-guide-feature.is-accent {
-		border-color: color-mix(in srgb, var(--sl-color-orange-high) 30%, transparent);
-		background: linear-gradient(160deg, color-mix(in srgb, var(--sl-color-orange-high) 82%, #b45637) 0%, #5a2819 100%);
+		border-color: rgba(165, 154, 122, 0.30);
+		background: linear-gradient(160deg, rgba(165, 154, 122, 0.25) 0%, rgba(42, 42, 42, 0.95) 100%);
+	}
+
+	:global(:root[data-theme="light"]) .gb-guide-feature.is-accent {
+		background: linear-gradient(160deg, rgba(165, 154, 122, 0.18) 0%, rgba(237, 234, 228, 0.95) 100%);
 	}
 
 	.gb-guide-feature__eyebrow {
 		margin: 0;
-		color: var(--sl-color-orange-high);
+		color: var(--q-bronze, #A59A7A);
 		font-size: 0.74rem;
 		font-weight: 800;
 		letter-spacing: 0.14em;
@@ -90,8 +102,8 @@ const {
 		width: 2.35rem;
 		height: 2.35rem;
 		border-radius: 0.75rem;
-		background: color-mix(in srgb, var(--sl-color-orange-low) 82%, transparent);
-		color: var(--sl-color-orange-high);
+		background: rgba(165, 154, 122, 0.15);
+		color: var(--q-bronze, #A59A7A);
 		flex-shrink: 0;
 	}
 
@@ -135,7 +147,7 @@ const {
 		align-items: center;
 		gap: 0.5rem;
 		width: fit-content;
-		color: var(--sl-color-orange-high);
+		color: var(--q-bronze, #A59A7A);
 		font-size: 0.92rem;
 		font-weight: 700;
 		text-decoration: none;
