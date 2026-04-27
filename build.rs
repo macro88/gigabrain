@@ -84,7 +84,7 @@ fn copy_model_files(model_dir: &Path, out_dir: &Path) -> Result<(), String> {
 fn download_model_files(out_dir: &Path) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(300))
-        .user_agent("quaid-build/0.9.2")
+        .user_agent(concat!("quaid-build/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("build download client: {error}"))?;
 
