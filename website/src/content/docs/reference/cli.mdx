@@ -1,12 +1,12 @@
 ---
 title: CLI reference
-description: Every gbrain subcommand, flag, and exit-code, grouped by domain.
+description: Every quaid subcommand, flag, and exit-code, grouped by domain.
 guide:
   eyebrow: Reference
   accentBar: true
 ---
 
-`gbrain` is a single binary that exposes the entire brain over a Unix-style CLI. This page documents every subcommand grouped by domain. For the authoritative flag list on your installed version, run `gbrain --help` or `gbrain <command> --help`.
+`quaid` is a single binary that exposes the entire memory over a Unix-style CLI. This page documents every subcommand grouped by domain. For the authoritative flag list on your installed version, run `quaid --help` or `quaid <command> --help`.
 
 ## Global options
 
@@ -14,8 +14,8 @@ These flags apply to every subcommand and may appear before or after the command
 
 | Flag | Description |
 | ---- | ----------- |
-| `--db <PATH>` | Database path. Env: `GBRAIN_DB`. Default: `./brain.db`. |
-| `--model <ALIAS\|HF_ID>` | Embedding model. Env: `GBRAIN_MODEL`. Default: `small`. Recognized aliases: `small`, `base`, `large`, `m3`. Any other value is treated as a Hugging Face model ID (online build only). |
+| `--db <PATH>` | Database path. Env: `QUAID_DB`. Default: `./memory.db`. |
+| `--model <ALIAS\|HF_ID>` | Embedding model. Env: `QUAID_MODEL`. Default: `small`. Recognized aliases: `small`, `base`, `large`, `m3`. Any other value is treated as a Hugging Face model ID (online build only). |
 | `--json` | Emit JSON instead of human-readable text. Most commands honor this. |
 | `--help`, `-h` | Print help. Works at root or per-command. |
 | `--version`, `-V` | Print version and exit. |
@@ -24,11 +24,11 @@ These flags apply to every subcommand and may appear before or after the command
 
 ### `init [PATH]`
 
-Create a new brain database. Records the active embedding model in `brain_config` so subsequent opens validate against it.
+Create a new memory database. Records the active embedding model in `quaid_config` so subsequent opens validate against it.
 
 ```bash
-gbrain init ~/brain.db
-gbrain init ~/brain-large.db --model large   # online build only
+quaid init ~/memory.db
+quaid init ~/memory-large.db --model large   # online build only
 ```
 
 ### `get <SLUG>`
@@ -36,8 +36,8 @@ gbrain init ~/brain-large.db --model large   # online build only
 Read a page by slug. Slugs may be collection-qualified (`<collection>::<slug>`) when more than one collection is attached.
 
 ```bash
-gbrain get people/alice
-gbrain get research::people/alice
+quaid get people/alice
+quaid get research::people/alice
 ```
 
 ### `put <SLUG>`
@@ -45,7 +45,7 @@ gbrain get research::people/alice
 Write or update a page from stdin. For updates, supply `--expected-version` to enable optimistic concurrency (OCC). On a conflict the call fails and you must re-fetch before retrying.
 
 ```bash
-cat updated.md | gbrain put people/alice --expected-version 7
+cat updated.md | quaid put people/alice --expected-version 7
 ```
 
 | Flag | Type | Default | Notes |
@@ -73,8 +73,8 @@ FTS5 full-text search. By default the input is sanitized so natural-language que
 | `--raw` | flag | false |
 
 ```bash
-gbrain search "river ai"
-gbrain search '"local-first" AND (sqlite OR fts5)' --raw
+quaid search "river ai"
+quaid search '"local-first" AND (sqlite OR fts5)' --raw
 ```
 
 ### `query <QUERY>`
@@ -89,7 +89,7 @@ Hybrid retrieval: FTS5 + vector similarity, fused via set-union. Use `--depth au
 | `--wing <NAME>` | string | none |
 
 ```bash
-gbrain query "who is interested in offline-first knowledge systems?"
+quaid query "who is interested in offline-first knowledge systems?"
 ```
 
 ## Ingest — import, export, embed
@@ -131,9 +131,9 @@ Generate or refresh embeddings.
 | `--stale` | flag | false |
 
 ```bash
-gbrain embed people/alice          # one page
-gbrain embed --stale                # only re-embed pages whose chunks changed
-gbrain embed --all                  # rebuild every embedding
+quaid embed people/alice          # one page
+quaid embed --stale                # only re-embed pages whose chunks changed
+quaid embed --all                  # rebuild every embedding
 ```
 
 ## Graph — links and backlinks
@@ -196,9 +196,9 @@ N-hop neighbourhood graph from a page (BFS over `links`, with temporal filtering
 Manage tags. Both `--add` and `--remove` are repeatable.
 
 ```bash
-gbrain tags people/alice                       # list
-gbrain tags people/alice --add infra --add ops # add two tags
-gbrain tags people/alice --remove ops          # remove one
+quaid tags people/alice                       # list
+quaid tags people/alice --add infra --add ops # add two tags
+quaid tags people/alice --remove ops          # remove one
 ```
 
 ### `timeline <SLUG>`
@@ -244,7 +244,7 @@ List unresolved knowledge gaps. By default only unresolved gaps are returned.
 
 ### `validate`
 
-Brain integrity checks. With no flags, all checks run.
+Memory integrity checks. With no flags, all checks run.
 
 | Flag | Type |
 | ---- | ---- |
@@ -259,11 +259,11 @@ Checkpoint the SQLite WAL into a single file. Safe to run while no writers are a
 
 ### `stats`
 
-Brain statistics: page count, link count, gap count, active embedding model.
+Memory statistics: page count, link count, gap count, active embedding model.
 
 ```bash
-gbrain stats
-gbrain stats --json
+quaid stats
+quaid stats --json
 ```
 
 ## Collections — vault sync (Unix, v0.9.6)
@@ -271,12 +271,12 @@ gbrain stats --json
 `collection` groups all vault-sync subcommands. See [Manage collections](/how-to/collections/) for end-to-end guidance.
 
 ```bash
-gbrain collection add notes ~/Documents/Obsidian --writable
-gbrain collection list
-gbrain collection info notes
-gbrain collection sync notes
-gbrain collection ignore add notes "_attachments/**"
-gbrain collection quarantine list notes
+quaid collection add notes ~/Documents/Obsidian --writable
+quaid collection list
+quaid collection info notes
+quaid collection sync notes
+quaid collection ignore add notes "_attachments/**"
+quaid collection quarantine list notes
 ```
 
 Subcommands: `add` · `list` · `info` · `sync` · `restore` · `restore-reset` · `reconcile-reset` · `ignore add|remove|list|clear` · `quarantine list|export|discard|restore`.
@@ -288,9 +288,9 @@ Subcommands: `add` · `list` · `info` · `sync` · `restore` · `restore-reset`
 Read or write runtime config keys.
 
 ```bash
-gbrain config get default_token_budget
-gbrain config set default_token_budget 6000
-gbrain config reset default_token_budget
+quaid config get default_token_budget
+quaid config set default_token_budget 6000
+quaid config reset default_token_budget
 ```
 
 Subcommands: `get <KEY>` · `set <KEY> <VALUE>` · `reset <KEY>`.
@@ -301,21 +301,21 @@ See [Configuration](/reference/configuration/) for the full key list.
 
 ### `serve`
 
-Start the MCP stdio server. Connects any MCP client to this brain.
+Start the MCP stdio server. Connects any MCP client to this memory.
 
 ```bash
-GBRAIN_DB=~/brain.db gbrain serve
+QUAID_DB=~/memory.db quaid serve
 ```
 
 `serve` ships on macOS and Linux today; Windows parity is on the roadmap.
 
 ### `skills`
 
-Skills are agent-shaped markdown files embedded in the binary, extractable to `~/.gbrain/skills/`, and overridable from the working directory.
+Skills are agent-shaped markdown files embedded in the binary, extractable to `~/.quaid/skills/`, and overridable from the working directory.
 
 ```bash
-gbrain skills list      # show resolution order
-gbrain skills doctor    # verify hashes; report shadowing
+quaid skills list      # show resolution order
+quaid skills doctor    # verify hashes; report shadowing
 ```
 
 Subcommands: `list` · `doctor`.
@@ -325,7 +325,7 @@ Subcommands: `list` · `doctor`.
 Invoke a raw MCP tool from the CLI. Useful for debugging and for shell scripts.
 
 ```bash
-gbrain call brain_search '{"query":"alice","limit":3}'
+quaid call memory_search '{"query":"alice","limit":3}'
 ```
 
 ### `pipe`
@@ -334,7 +334,7 @@ JSONL streaming mode. Reads one JSON request object per line on stdin, writes on
 
 ### `version`
 
-Print the version and the brain's schema-version state.
+Print the version and the memory's schema-version state.
 
 ## Exit codes
 

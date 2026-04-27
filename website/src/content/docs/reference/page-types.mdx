@@ -6,7 +6,7 @@ guide:
   accentBar: true
 ---
 
-Every page in GigaBrain has a `type` declared in its frontmatter. The type drives ingestion classification, default page templates, and search-time hints (e.g. wing assignment). This page lists the recognized types and the frontmatter fields each one uses.
+Every page in Quaid has a `type` declared in its frontmatter. The type drives ingestion classification, default page templates, and search-time hints (e.g. wing assignment). This page lists the recognized types and the frontmatter fields each one uses.
 
 ## Frontmatter shape
 
@@ -70,7 +70,7 @@ The compiled-truth section (above the line) represents the current state of the 
 | `action_item` | Trackable to-dos with an owner | `actions` |
 | `journal` | Daily journal entries | `journal` |
 
-`gbrain import` infers `type` from a PARA-style folder layout (`projects/`, `areas/`, etc.) when no explicit type is set in frontmatter.
+`quaid import` infers `type` from a PARA-style folder layout (`projects/`, `areas/`, etc.) when no explicit type is set in frontmatter.
 
 ## Type-specific conventions
 
@@ -112,7 +112,7 @@ Common fields:
 
 ## Wing and room
 
-`wing` and `room` are derived during ingestion from the slug and content (see `core::palace`). They power filtered search (`gbrain search "river" --wing companies`) and the memory-palace classification used by progressive retrieval. You can override them in frontmatter, but the defaults are usually correct.
+`wing` and `room` are derived during ingestion from the slug and content (see `core::palace`). They power filtered search (`quaid search "river" --wing companies`) and the memory-palace classification used by progressive retrieval. You can override them in frontmatter, but the defaults are usually correct.
 
 ## Slug rules
 
@@ -122,4 +122,4 @@ Common fields:
 
 ## Linking syntax
 
-Pages may include wiki-style links inside the body — `[[people/alice]]` — which the importer parses into `links` rows with `source_kind = 'wiki_link'`. Programmatic links created via `brain_link` or `gbrain link` carry `source_kind = 'programmatic'`. See [Build a knowledge graph](/how-to/build-graph/).
+Pages may include wiki-style links inside the body — `[[people/alice]]` — which the importer parses into `links` rows with `source_kind = 'wiki_link'`. Programmatic links created via `memory_link` or `quaid link` carry `source_kind = 'programmatic'`. See [Build a knowledge graph](/how-to/build-graph/).

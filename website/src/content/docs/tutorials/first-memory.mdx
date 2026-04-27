@@ -1,6 +1,6 @@
 ---
-title: Build your first brain
-description: Initialize a brain, write a page, search it, and ask it a question — about ten minutes from cold start.
+title: Build your first memory
+description: Initialize a memory, write a page, search it, and ask it a question — about ten minutes from cold start.
 guide:
   eyebrow: Tutorial
   accentBar: true
@@ -10,32 +10,32 @@ import CodePanel from "../../../components/docs/CodePanel.astro";
 import GuideStep from "../../../components/docs/GuideStep.astro";
 import GuideActionBanner from "../../../components/docs/GuideActionBanner.astro";
 
-This tutorial walks you through the three things that make GigaBrain useful: writing a page, searching for it, and asking a question that requires more than a keyword match. By the end, you'll understand the page model and have a brain you can keep using.
+This tutorial walks you through the three things that make Quaid useful: writing a page, searching for it, and asking a question that requires more than a keyword match. By the end, you'll understand the page model and have a memory you can keep using.
 
 ## Before you start
 
-- You've installed `gbrain` (see [Install GigaBrain](/tutorials/install/)).
-- `gbrain version` works in your shell.
+- You've installed `quaid` (see [Install Quaid](/tutorials/install/)).
+- `quaid version` works in your shell.
 
-This tutorial uses `~/brain.db` throughout. Substitute another path if you prefer; the `--db` flag and `GBRAIN_DB` env var both work.
+This tutorial uses `~/memory.db` throughout. Substitute another path if you prefer; the `--db` flag and `QUAID_DB` env var both work.
 
 ## Fast path
 
 <div class="gb-guide-stack">
   <GuideStep
     number="01"
-    title="Initialize a brain"
-    code={`gbrain init ~/brain.db`}
+    title="Initialize a memory"
+    code={`quaid init ~/memory.db`}
     codeLabel="CLI"
     codeTone="terminal"
   >
-    <p>Creates a SQLite file at `~/brain.db` with the v5 schema, the FTS5 index, the active embedding model registered, and the embedded skills extracted to `~/.gbrain/skills/` on first run.</p>
+    <p>Creates a SQLite file at `~/memory.db` with the v5 schema, the FTS5 index, the active embedding model registered, and the embedded skills extracted to `~/.quaid/skills/` on first run.</p>
   </GuideStep>
 
   <GuideStep
     number="02"
     title="Write your first page"
-    code={`cat <<'MD' | gbrain put people/alice --db ~/brain.db
+    code={`cat <<'MD' | quaid put people/alice --db ~/memory.db
 ---
 title: Alice Example
 type: person
@@ -62,8 +62,8 @@ MD`}
   <GuideStep
     number="03"
     title="Search what you just wrote"
-    code={`gbrain search "offline-first" --db ~/brain.db
-gbrain query "who is interested in offline knowledge?" --db ~/brain.db`}
+    code={`quaid search "offline-first" --db ~/memory.db
+quaid query "who is interested in offline knowledge?" --db ~/memory.db`}
     codeLabel="Keyword + hybrid"
     codeTone="terminal"
   >
@@ -73,7 +73,7 @@ gbrain query "who is interested in offline knowledge?" --db ~/brain.db`}
   <GuideStep
     number="04"
     title="Ask a question with context"
-    code={`gbrain query "who would I ask about retrieval design?" --depth auto --db ~/brain.db`}
+    code={`quaid query "who would I ask about retrieval design?" --depth auto --db ~/memory.db`}
     codeLabel="Progressive retrieval"
     codeTone="terminal"
   >
@@ -83,10 +83,10 @@ gbrain query "who is interested in offline knowledge?" --db ~/brain.db`}
   <GuideStep
     number="05"
     title="Append a timeline entry"
-    code={`gbrain timeline-add people/alice \\
+    code={`quaid timeline-add people/alice \\
   --date 2026-05-03 \\
   --summary "Co-authored draft on local embeddings; sharp edits." \\
-  --db ~/brain.db`}
+  --db ~/memory.db`}
     codeLabel="Structured timeline"
     codeTone="terminal"
   >
@@ -96,9 +96,9 @@ gbrain query "who is interested in offline knowledge?" --db ~/brain.db`}
   <GuideStep
     number="06"
     title="See what you have"
-    code={`gbrain stats --db ~/brain.db
-gbrain list --type person --db ~/brain.db`}
-    codeLabel="Inspect the brain"
+    code={`quaid stats --db ~/memory.db
+quaid list --type person --db ~/memory.db`}
+    codeLabel="Inspect the memory"
     codeTone="terminal"
   >
     <p>You'll see one page, one timeline entry, and one active embedding model.</p>
@@ -118,17 +118,17 @@ All of this happened on your machine. Nothing went over the network.
 
 ## Where to go next
 
-- **More pages.** Repeat step 02 with whatever you've been meaning to capture. Or use `gbrain import <DIR>` to bulk-load a markdown directory ([Import an Obsidian vault](/how-to/import-obsidian/)).
-- **Connect an agent.** [Connect Claude Code](/tutorials/connect-claude-code/) wires this brain to any MCP-compatible client.
+- **More pages.** Repeat step 02 with whatever you've been meaning to capture. Or use `quaid import <DIR>` to bulk-load a markdown directory ([Import an Obsidian vault](/how-to/import-obsidian/)).
+- **Connect an agent.** [Connect Claude Code](/tutorials/connect-claude-code/) wires this memory to any MCP-compatible client.
 - **Build a graph.** [Build a knowledge graph](/how-to/build-graph/) shows how typed temporal links work.
 - **Understand the design.** [Compiled truth + timeline](/explanation/page-model/) and [hybrid search](/explanation/hybrid-search/) cover the big design choices.
 
 <GuideActionBanner
-  title="Connect this brain to Claude Code"
+  title="Connect this memory to Claude Code"
   primaryHref="/tutorials/connect-claude-code/"
   primaryText="Connect Claude Code"
   secondaryHref="/reference/cli/"
   secondaryText="CLI reference"
 >
-  <p>The brain you just built can be served to any MCP client over stdio. Five lines of config, no keys.</p>
+  <p>The memory you just built can be served to any MCP client over stdio. Five lines of config, no keys.</p>
 </GuideActionBanner>

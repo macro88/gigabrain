@@ -6,7 +6,7 @@ guide:
   accentBar: true
 ---
 
-GigaBrain pages have a peculiar shape: a top half that is always current and a bottom half that is append-only. This isn't just a markdown convention — it's the central design choice that makes a personal brain coherent over years.
+Quaid pages have a peculiar shape: a top half that is always current and a bottom half that is append-only. This isn't just a markdown convention — it's the central design choice that makes a personal memory coherent over years.
 
 ## The split
 
@@ -77,11 +77,11 @@ A typical lifecycle:
 3. **Compile.** Edit the top of the page to summarize: *"Alice founded RiverAI; works on offline-first knowledge."*
 4. **Repeat.** Each new piece of evidence appends to the timeline; the compiled truth gets edited in place when needed.
 
-`gbrain timeline-add` and the `brain_put` MCP tool both make this easy. You never write to the timeline by hand if you don't want to.
+`quaid timeline-add` and the `memory_put` MCP tool both make this easy. You never write to the timeline by hand if you don't want to.
 
 ## What this means for assertions
 
-Contradiction detection (`brain_check`) reads triples out of the body and the frontmatter. When the compiled truth says "Alice is at RiverAI" and a recent timeline entry says "Alice left RiverAI," the assertion machinery flags the mismatch.
+Contradiction detection (`memory_check`) reads triples out of the body and the frontmatter. When the compiled truth says "Alice is at RiverAI" and a recent timeline entry says "Alice left RiverAI," the assertion machinery flags the mismatch.
 
 This is why we keep both halves: the timeline is the corpus the assertion engine compares against, and the compiled truth is what it audits.
 

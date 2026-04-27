@@ -1,14 +1,14 @@
 ---
 title: Schema
-description: User-relevant tables in brain.db — what they store and when they're written.
+description: User-relevant tables in memory.db — what they store and when they're written.
 guide:
   eyebrow: Reference
   accentBar: true
 ---
 
-`brain.db` is a single SQLite file that holds every page, link, embedding, and audit row. The schema lives in [`src/schema.sql`](https://github.com/macro88/gigabrain/blob/main/src/schema.sql) and is embedded into the binary via `include_str!()`. This page documents the user-relevant tables — internal scaffolding (test guards, watcher state, IPC heartbeats) is excluded.
+`memory.db` is a single SQLite file that holds every page, link, embedding, and audit row. The schema lives in [`src/schema.sql`](https://github.com/quaid-app/quaid/blob/main/src/schema.sql) and is embedded into the binary via `include_str!()`. This page documents the user-relevant tables — internal scaffolding (test guards, watcher state, IPC heartbeats) is excluded.
 
-The current schema version is **`5`**, recorded in both `config` and `brain_config`. Both `gbrain validate` and the runtime `open` path verify the version on every load.
+The current schema version is **`6`**, recorded as `config.version` and `quaid_config.schema_version`. Both `quaid validate` and the runtime `open` path verify it on every load.
 
 ## Page model
 
@@ -39,7 +39,7 @@ FTS5 virtual table indexing `(title, slug, compiled_truth, timeline)`. Tokenizer
 
 ### `timeline_entries`
 
-Structured timeline rows used by `gbrain timeline-add`. Unique per `(page_id, date, summary_hash)` to make ingestion idempotent.
+Structured timeline rows used by `quaid timeline-add`. Unique per `(page_id, date, summary_hash)` to make ingestion idempotent.
 
 | Column | Type |
 | ------ | ---- |
@@ -81,7 +81,7 @@ Chunk metadata joining vec rowids back to pages.
 | `chunk_type` | TEXT | `truth_section` or `timeline_entry`. |
 | `chunk_index` | INTEGER | Position within the page. |
 | `chunk_text` | TEXT | The content that was embedded. |
-| `content_hash` | TEXT | SHA-256, used for stale detection by `gbrain embed --stale`. |
+| `content_hash` | TEXT | SHA-256, used for stale detection by `quaid embed --stale`. |
 | `token_count` | INTEGER | Pre-tokenized count. |
 | `heading_path` | TEXT | Breadcrumb of headings preceding the chunk. |
 
@@ -97,13 +97,13 @@ Typed temporal cross-references.
 | `from_page_id` / `to_page_id` | FK → `pages(id)` | |
 | `relationship` | TEXT | E.g. `mentions`, `supersedes`, `manages`. Free-form. |
 | `context` | TEXT | Optional context string. |
-| `source_kind` | TEXT | `wiki_link` (parsed from markdown) or `programmatic` (`brain_link` etc.). |
+| `source_kind` | TEXT | `wiki_link` (parsed from markdown) or `programmatic` (`memory_link` etc.). |
 | `valid_from` / `valid_until` | TEXT (nullable) | Open intervals encode "still active". |
 | `created_at` | TEXT | |
 
 ### `assertions`
 
-Subject-predicate-object triples used by `brain_check` for contradiction detection.
+Subject-predicate-object triples used by `memory_check` for contradiction detection.
 
 | Column | Type |
 | ------ | ---- |
@@ -128,11 +128,11 @@ API responses or raw enrichment payloads attached to a page. One active row per 
 
 ### `raw_imports`
 
-Original byte-exact contents of imported files. Used by `gbrain export --raw` to round-trip through the database without lossy normalization.
+Original byte-exact contents of imported files. Used by `quaid export --raw` to round-trip through the database without lossy normalization.
 
 ### `ingest_log`
 
-Per-file SHA-256 audit trail for `gbrain import` / `gbrain ingest` idempotency. Re-running on the same source content is a no-op unless `--force` is supplied.
+Per-file SHA-256 audit trail for `quaid import` / `quaid ingest` idempotency. Re-running on the same source content is a no-op unless `--force` is supplied.
 
 ### `file_state`
 
@@ -142,7 +142,7 @@ Stat-based change detection for the file watcher. One row per `(collection_id, r
 
 ### `contradictions`
 
-Materialized contradictions detected by `brain_check`. Cleared on resolution.
+Materialized contradictions detected by `memory_check`. Cleared on resolution.
 
 ### `knowledge_gaps`
 
@@ -173,10 +173,10 @@ History of quarantine exports — one row per `(page_id, quarantined_at)` event.
 
 ## Configuration tables
 
-### `brain_config`
+### `quaid_config`
 
 Immutable model and schema metadata, validated on every open. See [Configuration](/reference/configuration/).
 
 ### `config`
 
-Mutable runtime defaults editable via `gbrain config`.
+Mutable runtime defaults editable via `quaid config`.

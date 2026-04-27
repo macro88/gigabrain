@@ -1,19 +1,19 @@
 ---
 title: Detect contradictions and track knowledge gaps
-description: Use brain_check to find inconsistencies and brain_gap to log questions the brain couldn't answer.
+description: Use memory_check to find inconsistencies and memory_gap to log questions the memory couldn't answer.
 guide:
   eyebrow: How-to
   accentBar: true
 ---
 
-Two intelligence-layer surfaces work together: `check` finds places where the brain disagrees with itself, and `gap` records questions it couldn't answer well. This recipe shows how to use both.
+Two intelligence-layer surfaces work together: `check` finds places where the memory disagrees with itself, and `gap` records questions it couldn't answer well. This recipe shows how to use both.
 
 ## Run a contradiction check
 
 ```bash
-gbrain check people/alice --db ~/brain.db    # one page
-gbrain check --all --db ~/brain.db           # every page
-gbrain check --type person --db ~/brain.db   # all pages of one type
+quaid check people/alice --db ~/memory.db    # one page
+quaid check --all --db ~/memory.db           # every page
+quaid check --type person --db ~/memory.db   # all pages of one type
 ```
 
 `check` reads the `assertions` table and flags subject-predicate-object triples that disagree. Common patterns:
@@ -58,7 +58,7 @@ There's no automated resolver — contradictions are surfaced for human (or agen
 When a query returns weak results — or you anticipate one will — log it:
 
 ```bash
-gbrain call brain_gap '{"query":"who covers our European compliance?","context":"weekly briefing"}' --db ~/brain.db
+quaid call memory_gap '{"query":"who covers our European compliance?","context":"weekly briefing"}' --db ~/memory.db
 ```
 
 By default this stores the **hash** of the query, plus the context, plus a default `sensitivity = internal`. The raw text is **not** persisted unless explicitly approved. See the [Sensitivity contract](/agents/sensitivity-contract/).
@@ -66,9 +66,9 @@ By default this stores the **hash** of the query, plus the context, plus a defau
 ## List unresolved gaps
 
 ```bash
-gbrain gaps --db ~/brain.db                    # unresolved (default)
-gbrain gaps --resolved --db ~/brain.db         # include resolved
-gbrain gaps --limit 100 --db ~/brain.db
+quaid gaps --db ~/memory.db                    # unresolved (default)
+quaid gaps --resolved --db ~/memory.db         # include resolved
+quaid gaps --limit 100 --db ~/memory.db
 ```
 
 ## Resolve a gap
@@ -82,12 +82,12 @@ The skill is the recommended path; it keeps the gap → research → ingest → 
 
 ## Common workflow
 
-1. **Daily**: `gbrain stats` shows unresolved gap counts; `gbrain gaps --limit 5` is the work queue.
-2. **Weekly**: `gbrain check --all` to catch contradictions you've introduced.
-3. **Monthly**: `gbrain validate` to catch link integrity issues. See [Manage skills](/how-to/skills/) for an `alerts` skill that wires this into your day automatically.
+1. **Daily**: `quaid stats` shows unresolved gap counts; `quaid gaps --limit 5` is the work queue.
+2. **Weekly**: `quaid check --all` to catch contradictions you've introduced.
+3. **Monthly**: `quaid validate` to catch link integrity issues. See [Manage skills](/how-to/skills/) for an `alerts` skill that wires this into your day automatically.
 
 ## How agents use this
 
-Agents log gaps when their `brain_query` results don't meet a confidence threshold. The hash-only default means the brain accumulates a privacy-safe ledger of "where can't we answer well?" over time, even when individual queries are sensitive.
+Agents log gaps when their `memory_query` results don't meet a confidence threshold. The hash-only default means the memory accumulates a privacy-safe ledger of "where can't we answer well?" over time, even when individual queries are sensitive.
 
 When an agent escalates a gap to external research (e.g. via the `enrich` skill), it must transition the sensitivity tier with explicit approval — see [Sensitivity contract](/agents/sensitivity-contract/).

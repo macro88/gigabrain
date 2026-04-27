@@ -6,7 +6,7 @@ guide:
   accentBar: true
 ---
 
-GigaBrain is a thin harness over a fat library, with one SQLite file as the system of record and one MCP server as the network surface. This page traces a request from a consumer all the way down to a vec0 row.
+Quaid is a thin harness over a fat library, with one SQLite file as the system of record and one MCP server as the network surface. This page traces a request from a consumer all the way down to a vec0 row.
 
 ## The layered diagram
 
@@ -44,7 +44,7 @@ GigaBrain is a thin harness over a fat library, with one SQLite file as the syst
 └─────────────────────────────┬──────────────────────────────────────┘
                               ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│  brain.db (SQLite + WAL + sqlite-vec)                              │
+│  memory.db (SQLite + WAL + sqlite-vec)                              │
 │  pages · page_fts · page_embeddings_vec_<dim> · links · assertions │
 │  knowledge_gaps · timeline_entries · raw_data · ingest_log · …     │
 └────────────────────────────────────────────────────────────────────┘
@@ -54,11 +54,11 @@ Three things to notice:
 
 1. **The MCP server and the CLI share a backend.** Both route into `src/commands/` for execution. There is no parallel implementation; the same code path serves agents and humans.
 2. **Everything below `src/commands/` is library code.** `src/core/` is reusable: an embedder could lift it into a different harness without touching the CLI or the MCP server.
-3. **One file holds it all.** `brain.db` is the only persistent artifact. Backups, migrations, copy-to-USB, send-to-colleague — all single-file operations.
+3. **One file holds it all.** `memory.db` is the only persistent artifact. Backups, migrations, copy-to-USB, send-to-colleague — all single-file operations.
 
 ## The request path
 
-A `brain_query` call, end to end:
+A `memory_query` call, end to end:
 
 1. **Client** issues a JSON-RPC `tools/call` over stdio.
 2. **`src/mcp/server.rs`** parses the request, validates the slug or query, resolves any collection ambiguity, and dispatches to the query handler.
@@ -67,17 +67,17 @@ A `brain_query` call, end to end:
 5. **`core::progressive::progressive_retrieve`** expands the merged result set up to the configured token budget when `depth: "auto"` is requested.
 6. The handler renders results, the server writes the JSON-RPC response, and the client gets back a ranked list.
 
-A `brain_put` follows a different path — same entry layer, but the command writes through `core::db` with optimistic concurrency, fires the FTS5 triggers, enqueues a `core::inference` chunk-and-embed job, and commits the WAL.
+A `memory_put` follows a different path — same entry layer, but the command writes through `core::db` with optimistic concurrency, fires the FTS5 triggers, enqueues a `core::inference` chunk-and-embed job, and commits the WAL.
 
 ## Process model
 
-`gbrain serve` is a single async Tokio process. Per-request concurrency is fine; one writer at a time is enforced by SQLite's WAL semantics. Long-running embedding work happens behind a job queue (`embedding_jobs`) so the request handler can return promptly.
+`quaid serve` is a single async Tokio process. Per-request concurrency is fine; one writer at a time is enforced by SQLite's WAL semantics. Long-running embedding work happens behind a job queue (`embedding_jobs`) so the request handler can return promptly.
 
-When the file watcher is enabled, a small notify-based watcher thread observes attached collection roots, debounces edits (`GBRAIN_WATCH_DEBOUNCE_MS`, default 1500 ms), and forwards reconcile work to the same backend.
+When the file watcher is enabled, a small notify-based watcher thread observes attached collection roots, debounces edits (`QUAID_WATCH_DEBOUNCE_MS`, default 1500 ms), and forwards reconcile work to the same backend.
 
 ## Storage layout
 
-Within `brain.db`:
+Within `memory.db`:
 
 - **`pages` and `page_fts`** form the document store. FTS5 is content-rowid backed; triggers keep it in sync.
 - **`page_embeddings_vec_<dim>`** are sqlite-vec virtual tables — one per embedding width. The active model's table is identified by `embedding_models.vec_table`.
@@ -105,5 +105,5 @@ The design priorities were, in order:
 
 1. **One file you can move.** SQLite is the only persistent format that is both a real relational database and a single portable artifact.
 2. **Same surface for humans and agents.** The CLI exists for ergonomic shell use; the MCP server exists for agents. Sharing the command layer prevents drift.
-3. **Local-first compute.** Bringing the embedding model into the binary (or, on the online channel, into a one-time cache) means the brain never needs the network.
+3. **Local-first compute.** Bringing the embedding model into the binary (or, on the online channel, into a one-time cache) means the memory never needs the network.
 4. **Thin harness, fat skills.** Workflow intelligence lives in markdown skill files (`skills/*/SKILL.md`), not in code. Editing a workflow is a markdown change, not a release.

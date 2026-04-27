@@ -13,13 +13,13 @@ For the design, see [The skills system](/explanation/skills-system/).
 ## See what's active
 
 ```bash
-gbrain skills list
+quaid skills list
 ```
 
 Shows every skill name, its current resolution path, and what's shadowing what.
 
 ```bash
-gbrain skills doctor
+quaid skills doctor
 ```
 
 Prints SHA-256 hashes for each skill at every resolution layer, so you can tell whether a "custom" skill is meaningfully different from the embedded default or just a copy.
@@ -29,17 +29,17 @@ Prints SHA-256 hashes for each skill at every resolution layer, so you can tell 
 The binary looks for `<skill-name>/SKILL.md` in this order:
 
 1. **Working directory** — `./SKILL.md` or `./<skill-name>/SKILL.md`. Project-scoped.
-2. **`~/.gbrain/skills/<skill-name>/SKILL.md`** — user-scoped override.
+2. **`~/.quaid/skills/<skill-name>/SKILL.md`** — user-scoped override.
 3. **Embedded default** — what shipped in the binary.
 
 The first hit wins. The other layers are still listed by `skills doctor`.
 
 ## Override at the user level
 
-The first time you run `gbrain` after install, the embedded skills are extracted to `~/.gbrain/skills/`:
+The first time you run `quaid` after install, the embedded skills are extracted to `~/.quaid/skills/`:
 
 ```
-~/.gbrain/skills/
+~/.quaid/skills/
 ├── ingest/SKILL.md
 ├── query/SKILL.md
 ├── maintain/SKILL.md
@@ -54,7 +54,7 @@ Edit any of these. Next agent run picks up your changes — no rebuild.
 
 ## Override at the project level
 
-Drop a `SKILL.md` in your project root or in a `<skill-name>/SKILL.md` subdirectory. The resolver checks the working directory before `~/.gbrain/`, so a project-scoped skill always wins.
+Drop a `SKILL.md` in your project root or in a `<skill-name>/SKILL.md` subdirectory. The resolver checks the working directory before `~/.quaid/`, so a project-scoped skill always wins.
 
 This is useful when:
 
@@ -67,8 +67,8 @@ This is useful when:
 If you've broken an override, blow it away:
 
 ```bash
-rm -rf ~/.gbrain/skills/<skill-name>
-gbrain skills list   # the next read re-extracts the embedded copy
+rm -rf ~/.quaid/skills/<skill-name>
+quaid skills list   # the next read re-extracts the embedded copy
 ```
 
 Embedded defaults are immutable — they're bytes inside the binary. You can't lose them by editing.
@@ -84,7 +84,7 @@ description: One sentence — when an agent should use this skill.
 when_to_use: |
   - Trigger 1
   - Trigger 2
-calls: [brain_query, brain_search, brain_link]
+calls: [memory_query, memory_search, memory_link]
 ---
 
 # <Skill Name>
@@ -108,22 +108,22 @@ The `calls` list is a hint to readers about which surfaces the skill touches; it
 
 - **Workflow only.** Decision rules, sequencing, when-to-escalate. Real work happens through CLI/MCP calls.
 - **No code.** A skill is a doc, not a script. Agents read it; humans read it; both follow it.
-- **Cite surfaces.** When a skill says "search the brain for X," it should say "via `brain_search`".
+- **Cite surfaces.** When a skill says "search the memory for X," it should say "via `memory_search`".
 
 ## What skills shouldn't do
 
-- **Hardcode brain contents.** Skills don't carry your data; they carry behavior.
+- **Hardcode memory contents.** Skills don't carry your data; they carry behavior.
 - **Bypass the sensitivity contract.** When a skill needs external research, it must transition the gap sensitivity tier explicitly. See [Sensitivity contract](/agents/sensitivity-contract/).
 - **Re-implement the binary.** If a skill needs new surface area, that's an issue against the repo, not a skill change.
 
 ## Validate after editing
 
 ```bash
-gbrain skills doctor
+quaid skills doctor
 ```
 
-Confirms your override resolves above the default. If you see a hash mismatch you didn't expect, an upgrade may have changed the embedded default — re-read it via `gbrain skills doctor` for the diff hint and decide whether to keep your override or restart from the new default.
+Confirms your override resolves above the default. If you see a hash mismatch you didn't expect, an upgrade may have changed the embedded default — re-read it via `quaid skills doctor` for the diff hint and decide whether to keep your override or restart from the new default.
 
 ## Sharing skills across machines
 
-Your `~/.gbrain/skills/` directory is just files. Sync it via your usual dotfiles mechanism (a git repo, `chezmoi`, etc.). The SHA-256 in `skills doctor` lets you spot-check that two machines are running the same set.
+Your `~/.quaid/skills/` directory is just files. Sync it via your usual dotfiles mechanism (a git repo, `chezmoi`, etc.). The SHA-256 in `skills doctor` lets you spot-check that two machines are running the same set.

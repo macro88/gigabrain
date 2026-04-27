@@ -1,36 +1,36 @@
-# Using GigaBrain v0.9.6 as an OpenClaw Harness
+# Using Quaid v0.9.6 as an OpenClaw Harness
 
-GigaBrain `v0.9.6` works well as the memory and knowledge layer for agents running on OpenClaw. OpenClaw talks to GigaBrain over MCP, while GigaBrain keeps a local SQLite brain synchronized with one or more markdown collections.
+Quaid `v0.9.6` works well as the memory and knowledge layer for agents running on OpenClaw. OpenClaw talks to Quaid over MCP, while Quaid keeps a local SQLite memory store synchronized with one or more markdown collections.
 
 This release changes the recommended setup:
 
-- Old one-shot ingest: `gbrain import <path>`
-- New live-sync workflow: `gbrain collection add <name> <path>` then `gbrain serve`
+- Old one-shot ingest: `quaid import <path>`
+- New live-sync workflow: `quaid collection add <name> <path>` then `quaid serve`
 
-When `gbrain serve` starts on macOS/Linux, it starts the MCP server and the live watcher for active collections. There is no separate sync daemon to run.
+When `quaid serve` starts on macOS/Linux, it starts the MCP server and the live watcher for active collections. There is no separate sync daemon to run.
 
 ## Prerequisites
 
-- macOS or Linux host for `gbrain serve`
-- `gbrain` `v0.9.6`
-- An initialized brain database
+- macOS or Linux host for `quaid serve`
+- `quaid` `v0.9.6`
+- An initialized memory database
 - An OpenClaw install that supports MCP server configuration
 
 Initialize the database once:
 
 ```bash
-gbrain init ~/brain.db
+quaid init ~/memory.db
 ```
 
 ## Attach a vault as a collection
 
-For ongoing sync with Obsidian or any markdown vault, attach the directory as a collection instead of using `gbrain import`.
+For ongoing sync with Obsidian or any markdown vault, attach the directory as a collection instead of using `quaid import`.
 
 ```bash
-gbrain collection add notes ~/Documents/Obsidian
+quaid collection add notes ~/Documents/Obsidian
 ```
 
-This creates the collection metadata in the v5 schema and performs the initial reconcile. In `v0.9.6`, the benchmark on a 350-page vault is about 5 seconds for `collection add`.
+This creates the collection metadata in the v6 schema and performs the initial reconcile. In `v0.9.6`, the benchmark on a 350-page vault is about 5 seconds for `collection add`.
 
 Collections are backed by the new schema tables introduced in `v0.9.6`:
 
@@ -40,7 +40,7 @@ Collections are backed by the new schema tables introduced in `v0.9.6`:
 - `raw_imports`
 - `collection_owners`
 
-Use `.gbrainignore` at the vault root to exclude files or patterns from sync:
+Use `.quaidignore` at the vault root to exclude files or patterns from sync:
 
 ```gitignore
 .obsidian/
@@ -51,7 +51,7 @@ archive/**
 
 ## Configure OpenClaw
 
-OpenClaw should launch `gbrain serve` as an MCP server. Put the GigaBrain block in `openclaw.json` under `mcp.servers`.
+OpenClaw should launch `quaid serve` as an MCP server. Put the Quaid block in `openclaw.json` under `mcp.servers`.
 
 Recommended `openclaw.json` snippet:
 
@@ -59,11 +59,11 @@ Recommended `openclaw.json` snippet:
 {
   "mcp": {
     "servers": {
-      "gbrain": {
-        "command": "gbrain",
+      "quaid": {
+        "command": "quaid",
         "args": ["serve"],
         "env": {
-          "GBRAIN_DB": "/Users/alice/brain.db"
+          "QUAID_DB": "/Users/alice/memory.db"
         }
       }
     }
@@ -71,41 +71,41 @@ Recommended `openclaw.json` snippet:
 }
 ```
 
-The important part is `GBRAIN_DB`: it must point at the `brain.db` file that OpenClaw agents should use.
+The important part is `QUAID_DB`: it must point at the `memory.db` file that OpenClaw agents should use.
 
 If you want to test the server outside OpenClaw first:
 
 ```bash
-GBRAIN_DB=~/brain.db gbrain serve
+QUAID_DB=~/memory.db quaid serve
 ```
 
 ## Live sync workflow
 
 The normal OpenClaw workflow is:
 
-1. Initialize the database with `gbrain init`.
-2. Attach one or more vaults with `gbrain collection add`.
-3. Configure OpenClaw to spawn `gbrain serve`.
+1. Initialize the database with `quaid init`.
+2. Attach one or more vaults with `quaid collection add`.
+3. Configure OpenClaw to spawn `quaid serve`.
 4. Start OpenClaw.
-5. Edit markdown files in the vault. The watcher started by `gbrain serve` reconciles changes into `brain.db` automatically.
+5. Edit markdown files in the vault. The watcher started by `quaid serve` reconciles changes into `memory.db` automatically.
 
-On `v0.9.6`, `gbrain serve` owns the watcher lifecycle on Unix/macOS. File edits, creates, and deletes are picked up automatically after the server starts.
+On `v0.9.6`, `quaid serve` owns the watcher lifecycle on Unix/macOS. File edits, creates, and deletes are picked up automatically after the server starts.
 
 Deleted pages are not hard-deleted immediately. `v0.9.6` adds a quarantine lifecycle so pages with preserved DB-side state can be reviewed and restored instead of being dropped blindly.
 
 ## MCP usage patterns
 
-OpenClaw agents should treat the GigaBrain MCP tools as the durable memory interface. `v0.9.6` exposes 17 tools, including the new `brain_collections` status tool.
+OpenClaw agents should treat the Quaid MCP tools as the durable memory interface. `v0.9.6` exposes 17 tools, including the new `memory_collections` status tool.
 
-### `brain_query` vs `brain_search`
+### `memory_query` vs `memory_search`
 
-Use `brain_query` for:
+Use `memory_query` for:
 
 - natural-language questions
 - synthesis across multiple pages
 - semantic retrieval when wording may not match exactly
 
-Use `brain_search` for:
+Use `memory_search` for:
 
 - exact keywords
 - names, titles, tags, or phrases likely to appear verbatim
@@ -118,21 +118,21 @@ Benchmarks from the `v0.9.6` 350-page DAB run:
 - semantic query: 93ms
 - all checks: passed
 
-### When to use `brain_put`
+### When to use `memory_put`
 
-Use `brain_put` when the agent is intentionally creating or updating durable knowledge in the brain, not for temporary scratch work.
+Use `memory_put` when the agent is intentionally creating or updating durable knowledge in memory, not for temporary scratch work.
 
 For updates to an existing page:
 
-1. Call `brain_get` first.
+1. Call `memory_get` first.
 2. Read the current `version`.
-3. Send `brain_put` with `expected_version`.
+3. Send `memory_put` with `expected_version`.
 
 That preserves optimistic concurrency and avoids blind overwrites.
 
-### Use `brain_collections` for health checks
+### Use `memory_collections` for health checks
 
-`brain_collections` is the right first check when OpenClaw can query the MCP server but results look stale or writes are blocked.
+`memory_collections` is the right first check when OpenClaw can query the MCP server but results look stale or writes are blocked.
 
 It returns a JSON array of collection status records. Check these fields first:
 
@@ -174,14 +174,13 @@ Example response:
 ]
 ```
 
-If `ignore_parse_errors` is non-null, fix the `.gbrainignore` file. If `needs_full_sync` is `true` or `state` is not `active`, treat the collection as unhealthy until reconcile or restore finishes.
+If `ignore_parse_errors` is non-null, fix the `.quaidignore` file. If `needs_full_sync` is `true` or `state` is not `active`, treat the collection as unhealthy until reconcile or restore finishes.
 
 ## Recommended operating model
 
-- Use `gbrain collection add` for vault-backed knowledge sources.
-- Keep `gbrain import` for one-shot bulk ingest, not live vault sync.
-- Let OpenClaw spawn `gbrain serve`; that keeps MCP and watcher lifecycle in one process.
-- Run `brain_query` first for agent reasoning, then fall back to `brain_search` for exact recall.
-- Use `brain_put` only for durable page updates.
-- Poll `brain_collections` during startup or incident diagnosis.
-
+- Use `quaid collection add` for vault-backed knowledge sources.
+- Keep `quaid import` for one-shot bulk ingest, not live vault sync.
+- Let OpenClaw spawn `quaid serve`; that keeps MCP and watcher lifecycle in one process.
+- Run `memory_query` first for agent reasoning, then fall back to `memory_search` for exact recall.
+- Use `memory_put` only for durable page updates.
+- Poll `memory_collections` during startup or incident diagnosis.
