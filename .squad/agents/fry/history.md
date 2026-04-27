@@ -7,6 +7,14 @@
 
 ## Learnings
 
+### 2026-04-28 22:36:00 - Batch 1 watcher-reliability rejection and lockout
+
+- **Rejection summary:** Professor gated Batch 1 on 2026-04-28 and rejected the current closure plan due to three interlocking contradictions: (1) overflow recovery tried to bypass `ActiveLease` authorization, (2) `memory_collections` MCP schema tried to widen past the frozen 13.6 contract, (3) `WatcherMode` enum had unreachable `"inactive"` variant given the null rule.
+- **Leela repair:** Scope narrowed same day: overflow-recovery mode moved to `FullHashReconcileMode` (authorization stays `ActiveLease`); watcher health narrowed to CLI-only `quaid collection info` (no MCP widening); `WatcherMode` simplified to `Native | Poll | Crashed` (no `Inactive`).
+- **Implementer lockout:** Fry is locked out of the next revision of Batch 1 artifact. All repaired 6.7a / 6.8 / 6.9 / 6.10 / 6.11 tasks assigned to Mom for implementation.
+- **Reason:** Fry authored the rejected scope. Leela's direct artifact repair demonstrates the narrowing is the correct direction. Mom has a track record on repair work (quarantine restore, MCP spec surface fix, default-path fix) and has not been part of the rejected scope.
+- **v0.10.0 gate update:** All 13 Batch 1 tasks must be marked `[x]` with truthful closure notes; 6.7a closure names `FullHashReconcileAuthorization::ActiveLease` explicitly; 6.11 closure confirms `memory_collections` NOT widened; 13.6 exact-key test passes clean; `cargo test` passes zero failures; coverage ≥ 90%; Nibbler adversarial sign-off on 6.9 and 6.10; Cargo.toml bumped to `0.10.0`; CHANGELOG.md updated.
+
 ### 2026-04-27 18:39:39 - Search skill PR landing
 
 - **User preference:** When preserving squad skill extracts, land them through a branch + draft PR flow instead of keeping them as local-only artifacts.

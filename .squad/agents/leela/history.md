@@ -7,6 +7,7 @@
 
 ## Learnings
 
+- **Batch 1 scope narrowing — direct artifact repair post-professor-rejection (2026-04-28):** When Professor gates a batch due to three intertwined contradictions (authorization bypass + frozen schema widening + unreachable enum variants), the most efficient repair is direct artifact editing rather than iterating back to the design document. Narrowing: move overflow-recovery mode to `FullHashReconcileMode`, keep authorization as `ActiveLease`; CLI-only watcher health on `quaid collection info` (not MCP widening); `WatcherMode` as `Native | Poll | Crashed` only. Update implementation_plan.md + tasks.md + decisions inbox. Enforce implementer lockout (Fry → Mom). Result: Batch 1 scope now honestly closable under narrowed v0.10.0. Orchestration logs for professor gate + leela repair both recorded.
 - **PR review routing — docs-truth-resolution vs. code-gate-removal (2026-04-25):** When a PR reviewer flags a docs-code mismatch, the resolution can go either direction: fix the code to match the docs, OR fix the docs to match the code. The correct direction is the product decision, not the technical analysis. For PR #77 the reviewers argued the Unix gate on `gbrain serve` was over-engineering; Amy's product decision was to keep the gate and make the docs accurate. The correct routing call was: accept Amy's decision, commit the accurate docs, leave the gate in place. A pure technical reading of `start_serve_runtime` being cross-platform missed the product intent. Always check the product owner's final commit message and any in-progress docs before implementing a code fix from review comments.
 
 - **PR review thread deduplication (2026-04-25):** Multiple review threads about the same root cause (e.g. all `brain_collections` schema threads, all `gbrain serve` platform-gate threads) must be grouped before implementation. Count unique root causes, not thread count. For PR #77 there were ~23 threads but only 4 root causes. Treat the fix set as 4 items, not 23.
@@ -950,3 +951,52 @@ DEFER: `17.5aa5` (stable-absence `ignore_parse_errors` expansion — requires `1
 
 **Routing memo:** `.squad/decisions/inbox/leela-dirty-tree-audit.md`
 
+---
+
+### Batch 1 scope analysis — vault-sync-engine watcher reliability (2026-04-28)
+
+**Context:** macro88 requested Batch 1 implementation, v0.10.0 release, and ≥90% coverage.
+
+**Key findings:**
+
+- `now.md` gate clause is active: "No next vault-sync slice is active yet; require a fresh scoped gate before implementation resumes." Fry cannot start until Professor signs off on `ReconcileMode::OverflowRecovery`, `WatcherMode` enum, and timer placement.
+- Batch 1 = 13 open tasks: 6.7a, 6.8, 6.9, 6.10, 6.11 + tests 17.5w/x/y/z/aa/aaa2/aaa3/aaa4.
+- All tests are inline `#[cfg(test)]` modules in the same `.rs` file as the code under test.
+- 6.9 → 6.10 → 6.11 is a strict dependency chain via `WatcherMode` + `CollectionWatcherState` struct fields.
+- Task 13.6 has a "frozen 13-field" closure note; 6.11 adds three fields. Fry must write a 13.6 addendum before Nibbler review to prevent a reviewer friction block.
+- Watcher health fields (`watcher_mode`, etc.) must null-out on Windows in the cross-platform `memory_collections` response — not cfg-excluded.
+
+**Key file paths:**
+- `openspec/changes/vault-sync-engine/implementation_plan.md` — Batch 1 spec (lines 36–100+)
+- `openspec/changes/vault-sync-engine/tasks.md` — source of truth for task state
+- `src/core/vault_sync.rs` — all Batch 1 implementation goes here
+- `src/core/reconciler.rs` — `ReconcileMode::OverflowRecovery` variant goes here
+- `src/commands/collection.rs` — 6.11 CLI surface (watcher health in `collection info`)
+- `.squad/identity/now.md` — active gate clause; read before routing any future batch
+
+**v0.10.0 release gate:** All 13 tasks `[x]`, `cargo test` clean, coverage ≥90%, Nibbler adversarial sign-off on 6.9+6.10, 13.6 addendum written, `Cargo.toml` bumped to 0.10.0, CHANGELOG updated.
+
+**Routing memo:** `.squad/decisions/inbox/leela-batch1-scope.md`
+
+---
+
+### Batch 1 scope repair — Professor rejection enforced (2026-04-28)
+
+**Context:** Professor rejected the `leela-batch1-scope.md` artifact on three grounds. Fry is locked out of the repair. Repaired artifacts and decision record written.
+
+**Three issues repaired:**
+
+1. **6.7a authorization bypass** — The original plan said "add this mode variant to the authorization enum" which would create a new auth bypass. Repaired: `OverflowRecovery` lives in `FullHashReconcileMode` (label only); authorization is `FullHashReconcileAuthorization::ActiveLease { lease_session_id }`. Worker loads `collections.active_lease_session_id`, skips with WARN on null/mismatch. No bypass.
+
+2. **6.11 `memory_collections` widening** — The 13.6 contract is frozen (13 fields, exact-key test). Repaired: 6.11 narrows to `quaid collection info` CLI only. `memory_collections` MCP tool is untouched. MCP widening deferred to a future scoped lane (not Fry under current lockout).
+
+3. **WatcherMode semantics** — `"inactive"` was unreachable given the null rule. Repaired: `WatcherMode` = `Native | Poll | Crashed` only. Non-active collections and Windows → null in CLI output. No `Inactive` variant.
+
+**Key pattern — authorization vs. mode enums (Batch 1 repair):** In `reconciler.rs`, `FullHashReconcileMode` is the operation label (audit trail, test distinguishability). `FullHashReconcileAuthorization` is the proof of who is allowed to run. These are separate. New operation modes are low risk. New authorization variants are high risk and require Professor sign-off. When an implementation plan says "add this variant to the authorization enum," treat it as a red flag requiring explicit review. The safe default is to add the mode to the label enum and reuse an existing authorization token.
+
+**Key pattern — MCP schema freeze (Batch 1 repair):** A "frozen N-field" closure note on an MCP tool means there is an exact-key test asserting that the response object has exactly those N fields. Any addendum that adds fields is a breaking change requiring: (a) update design.md, (b) change the exact-key test, (c) get a fresh reviewer gate. "Documented extension, not a schema violation" is not acceptable framing while the exact-key test asserts otherwise.
+
+**Fry lockout scope:** Fry cannot implement the repaired Batch 1 artifact. Recommended next implementer: Mom.  
+**MCP widening (deferred):** When `memory_collections` widening is revisited (Batch 2 or later), it is a NEW scoped slice that must reopen 13.6 explicitly. Not covered by current lockout — any available implementer can be assigned once Professor gates it.
+
+**Routing memo:** `.squad/decisions/inbox/leela-batch1-repair.md`

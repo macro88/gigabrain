@@ -9757,3 +9757,54 @@ Date: 2026-04-25
 - Minimum repair: stop using raw comma-joined feature strings in the cache key. Sanitize that field (for example, replace `,` with `-`) or add an explicit matrix-safe cache-key token such as `bundled-online-model`.
 - No product-code change is indicated by these failures; this is a workflow-only unblocker.
 
+---
+
+### 2026-04-28: Professor Batch 1 watcher-reliability pre-gate — REJECT current closure
+
+**By:** Professor  
+**What:** Rejected Batch 1 watcher-reliability closure plan as written due to three blocking contradictions.  
+**Why:** Overflow recovery authorization contract must reuse existing `ActiveLease`, not bypass it; `memory_collections` frozen 13-field schema cannot widen without explicit 13.6 reopen; `WatcherMode` semantics contradictory with unreachable `"inactive"` variant.
+
+**Decisions:**
+- **D-B1-1:** Overflow recovery operation mode (`OverflowRecovery`) is acceptable as a `FullHashReconcileMode` label, but authorization must remain `FullHashReconcileAuthorization::ActiveLease { lease_session_id }`. No new authorization variant exists.
+- **D-B1-2:** `memory_collections` 13.6 frozen 13-field schema must not widen under Batch 1. Watcher health can expand CLI `quaid collection info` only. MCP widening deferred pending explicit 13.6 reopen with design + test updates.
+- **D-B1-3:** `WatcherMode` must be truthfully defined: either `Native | Poll | Crashed` only with `null` for non-active/Windows, or `"inactive"` is a real surfaced state with precise definition. No ambiguous mixed contract accepted.
+
+**Verdict:** REJECT Batch 1 closure. Awaiting scope repair. Batch 1 not honestly closable; v0.10.0 not shippable until resolved.
+
+**Result:** Rejection recorded. Leela repair in progress.
+
+---
+
+### 2026-04-28: Leela Batch 1 watcher-reliability scope repair — narrowed to CLI-only
+
+**By:** Leela  
+**What:** Repaired Batch 1 scope post-professor-rejection through direct OpenSpec artifact edits + lockout enforcement.  
+**Why:** Professor's three blockers are all resolvable by narrowing MCP watcher-health widening to CLI-only, moving overflow-recovery mode from authorization to operation enum, and simplifying WatcherMode semantics.
+
+**Scope changes:**
+- **6.7a:** Overflow recovery mode moved to `FullHashReconcileMode`; authorization stays `ActiveLease`; worker loads `active_lease_session_id` and skips on mismatch
+- **6.9:** `WatcherMode` narrowed to `Native | Poll | Crashed` (no `Inactive`); `null` for non-active/Windows
+- **6.11:** Narrowed to CLI-only `quaid collection info` watcher-health fields; `memory_collections` MCP tool unchanged; 13.6 frozen 13-field schema preserved
+
+**Deferred:**
+- `memory_collections` MPC watcher-health widening — requires explicit 13.6 reopen (design + test + gate)
+- Any broader `memory_collections` schema changes — same 13.6 freeze
+
+**Implementation routing:**
+- **Fry is locked out** of the next revision of Batch 1 artifact
+- **Implementer:** Mom (recommended) — track record on repair work; not involved in rejected scope
+- **Task sequence:** 6.7a (overflow recovery) → 6.8 (.quaidignore live reload) → 6.9/6.10/6.11 (watcher chain, CLI health surface)
+
+**v0.10.0 gate requirements:**
+- All 13 Batch 1 tasks marked `[x]` with truthful closure notes
+- 6.7a closure names `FullHashReconcileAuthorization::ActiveLease` explicitly
+- 6.11 closure confirms `memory_collections` NOT widened; 13.6 exact-key test passes clean
+- `cargo test` passes zero failures
+- Coverage ≥ 90% on all new paths
+- Nibbler adversarial sign-off on 6.9 (poll fallback) and 6.10 (backoff timing)
+- Cargo.toml version bumped to `0.10.0`
+- CHANGELOG.md updated with v0.10.0 feature list
+
+**Result:** Batch 1 scope now honestly closable under narrowed v0.10.0. Awaiting Mom to begin 6.7a implementation.
+
