@@ -83,6 +83,7 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 /// - `src/mcp/server.rs` (`memory_search`) always sanitizes.
 /// - `hybrid_search` in `src/core/search.rs` sanitizes before calling
 ///   `search_fts_tiered`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn search_fts(
     query: &str,
     wing_filter: Option<&str>,
