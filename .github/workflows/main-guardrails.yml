@@ -48,13 +48,39 @@ jobs:
               print(exc.read().decode("utf-8", errors="replace"))
               sys.exit(1)
 
-          if prs:
-              summary = ", ".join(f"#{pr['number']}" for pr in prs)
-              print(f"Push to main is associated with pull request(s): {summary}")
+          # A legitimate merge must satisfy ALL of:
+          #   1. PR is closed and merged (state='closed', merged_at set)
+          #   2. PR targets main (base.ref='main')
+          #   3. The commit landing on main IS the merge commit of the PR
+          #      (merge_commit_sha == sha)
+          #
+          # Condition 3 closes the bypass where a commit that appears on an
+          # open or unmerged PR branch is pushed directly to main. In that
+          # scenario /commits/{sha}/pulls returns the open PR, but its
+          # merge_commit_sha points to the future merge commit (or is a
+          # GitHub-synthesised test-merge ref), not to the commit being
+          # pushed — so the filter rejects it and the direct push is caught.
+          merged_via_pr = [
+              pr for pr in prs
+              if pr.get("state") == "closed"
+              and pr.get("merged_at") is not None
+              and pr.get("base", {}).get("ref") == "main"
+              and pr.get("merge_commit_sha") == sha
+          ]
+
+          if merged_via_pr:
+              summary = ", ".join(f"#{pr['number']}" for pr in merged_via_pr)
+              print(f"Push to main arrived via merged pull request(s): {summary}")
               sys.exit(0)
 
           print("::error::Direct push to main detected. main must only receive changes through a pull request.")
           print(f"Actor: {os.environ['ACTOR']}")
           print(f"Run: {os.environ['RUN_URL']}")
+          if prs:
+              flagged = ", ".join(
+                  f"#{pr['number']} (state={pr.get('state','?')}, merged_at={pr.get('merged_at')}, merge_commit_sha={pr.get('merge_commit_sha')})"
+                  for pr in prs
+              )
+              print(f"Associated PRs that did not qualify: {flagged}")
           sys.exit(1)
           PY
