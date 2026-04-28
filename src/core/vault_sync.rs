@@ -133,6 +133,7 @@ pub struct WatcherHealthView {
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 enum WatcherHandle {
     // Fields are held for Drop semantics (keeping the watcher alive), not read directly.
     #[allow(dead_code)]
