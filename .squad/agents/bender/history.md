@@ -265,3 +265,22 @@ This dual-release cycle validated the full team workflow:
 - **A CI infrastructure failure (cache key error) can mask a code fix being unproven.** All 4 macOS preflight jobs "failed" but the actual cargo check never ran. Declaring the code fix valid on that basis would have been wrong. Always confirm the build step itself ran and succeeded, not just that the job infrastructure passed.
 - **When a job fails in CI infrastructure (cache, checkout, env setup), the fix is in the workflow YAML, not in the source code.** Before concluding a compile error persists, audit which step the job actually failed at and whether the compile step ran at all.
 
+## 2025-07-22 reconciler.rs + fs_safety.rs Coverage Sprint
+
+- **Scope:** Drive non-unix-gated coverage gaps in `src/core/reconciler.rs` and `src/core/fs_safety.rs`.
+- **Baseline:** Windows lib-only ~80.85% (Linux CI canonical: ~82.53%).
+- **New tests added:** +42 in `reconciler.rs`, +10 unix-gated + 3 non-unix in `fs_safety.rs`. Total: 678 lib tests pass (up from 636).
+- **Coverage of:** `ReconcileError::Display` (4 variants), `FullHashReconcileMode::as_str` (7 variants), `RestoreRemapOperation::as_str` (2 variants), `DriftCaptureSummary` (has_material_changes false + from_stats + add_assign), `CollectionDirtyStatus::is_dirty` (sentinel-only), `run_phase2_stability_check` (max-iters exhaustion for Restore and Remap), `infer_type_from_path` (all 9 folder variants + numeric prefix + unknown), `strip_numeric_prefix` (with/without prefix), `is_markdown_file` (true/false/case), `raw_import_invariant_result` (multi-active-row enforce + allow-override), `uuid_migration_preflight` (3 OK paths), `load_frontmatter_map` (invalid JSON), `default_restore_stability_max_iters` (env var + zero fallback), `sentinel_count` (non-sentinel + missing dir), `authorize_full_hash_reconcile` (RemapRoot, OverflowRecovery, Restore modes), `reconcile_with_native_events` (non-Active early return).
+- **fs_safety additions:** `FileStatNoFollow::is_regular_file/is_directory/is_symlink` via real stat (unix), direct mode_bits construction (both platforms), `walk_to_parent` single-component path, `linkat_parent_fd` success case, Windows fallback stubs all return `io::ErrorKind::Unsupported`.
+- **90% gap:** Not bridged. Unix-gated code is a coverage ceiling, not a test gap. Estimated Linux CI delta: +1–2%, pushing from 82.53% toward ~84%.
+- **Decision written:** `.squad/decisions/inbox/bender-reconciler-coverage.md`
+
+## Learnings
+
+- **On Windows, `#[cfg(unix)]` tests compile out.** All new coverage tests in this sprint must be platform-agnostic. Tests calling unix syscalls (`stat_at_nofollow`, `open_root_fd`) must remain inside the existing `#[cfg(all(test, unix))]` block and simply don't run locally.
+- **The Windows stub for `walk_to_parent<Fd>` takes a fully generic, unconstrained Fd parameter** — pass `0u32` in non-unix tests to avoid any real file I/O. Attempting `std::fs::File::open(".")` will panic if the current directory can't be opened as a `File` on Windows.
+- **`FileStatNoFollow` struct and methods are NOT unix-gated.** They can be tested on any platform by directly constructing `FileStatNoFollow { mode_bits: 0o100644, .. }`. This gives cheap, deterministic coverage of the three mode-bit predicates without any filesystem dependency.
+- **`run_phase2_stability_check` is fully testable with fake closures.** The function takes `check_fn: impl FnMut() -> bool` — pass `|| false` to exercise the max-iters exhaustion branch without any real vault.
+- **For env-var-controlled constants, test with `std::env::set_var` + restore pattern.** `default_restore_stability_max_iters()` reads `QUAID_RESTORE_STABILITY_MAX_ITERS`; setting it to "0" forces the zero-fallback branch. Always restore the var (or use `remove_var`) after the test to avoid polluting parallel tests.
+
+

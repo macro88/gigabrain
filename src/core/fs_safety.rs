@@ -574,4 +574,159 @@ mod tests {
         assert_eq!(content, b"hello");
         assert!(!dir.path().join("temp.txt").exists());
     }
+
+    #[test]
+    fn test_file_stat_nofollow_is_regular_file_returns_true_for_file() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("file.txt");
+        fs::write(&file, b"hello").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let stat = stat_at_nofollow(root_fd, Path::new("file.txt")).unwrap();
+
+        assert!(stat.is_regular_file(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_directory());
+        assert!(!stat.is_symlink());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_is_directory_returns_true_for_directory() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("subdir");
+        fs::create_dir(&sub).unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let parent_fd = walk_to_parent(root_fd, Path::new("subdir/placeholder")).unwrap();
+        // stat_at_nofollow needs a name relative to parent_fd, so stat "." on parent_fd
+        // by using the subdir path from root
+        let root_fd2 = open_root_fd(dir.path()).unwrap();
+        // stat_at_nofollow on a dir entry — use root_fd to stat "subdir"
+        let stat = stat_at_nofollow(root_fd2, Path::new("subdir")).unwrap();
+
+        assert!(stat.is_directory(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_regular_file());
+        assert!(!stat.is_symlink());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_is_symlink_returns_true_for_symlink() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        fs::write(&target, b"hello").unwrap();
+        let link = dir.path().join("link.txt");
+        symlink(&target, &link).unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let stat = stat_at_nofollow(root_fd, Path::new("link.txt")).unwrap();
+
+        assert!(stat.is_symlink(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_regular_file());
+        assert!(!stat.is_directory());
+    }
+
+    #[test]
+    fn test_walk_to_parent_single_component_returns_root_fd() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("file.txt"), b"test").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        // A single-component path: the parent is the root itself.
+        let parent_fd = walk_to_parent(root_fd, Path::new("file.txt")).unwrap();
+
+        // Verify we can stat "file.txt" from this parent fd.
+        let stat = stat_at_nofollow(parent_fd, Path::new("file.txt"));
+        assert!(stat.is_ok());
+    }
+
+    #[test]
+    fn test_linkat_parent_fd_success() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("source.txt"), b"content").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let result = linkat_parent_fd(&root_fd, Path::new("source.txt"), Path::new("hardlink.txt"));
+
+        assert!(result.is_ok(), "linkat should succeed: {result:?}");
+        assert!(dir.path().join("hardlink.txt").exists());
+        assert_eq!(
+            fs::read(dir.path().join("hardlink.txt")).unwrap(),
+            b"content"
+        );
+        // Both names should exist (hard link, not rename).
+        assert!(dir.path().join("source.txt").exists());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_mode_bits_direct() {
+        // Directly test the FileStatNoFollow methods via known mode_bits values.
+        let regular = FileStatNoFollow {
+            mtime_ns: 0,
+            ctime_ns: 0,
+            size_bytes: 0,
+            inode: 0,
+            mode_bits: 0o100644, // regular file
+        };
+        assert!(regular.is_regular_file());
+        assert!(!regular.is_directory());
+        assert!(!regular.is_symlink());
+
+        let directory = FileStatNoFollow {
+            mode_bits: 0o040755,
+            ..regular.clone()
+        };
+        assert!(directory.is_directory());
+        assert!(!directory.is_regular_file());
+        assert!(!directory.is_symlink());
+
+        let symlink = FileStatNoFollow {
+            mode_bits: 0o120777,
+            ..regular.clone()
+        };
+        assert!(symlink.is_symlink());
+        assert!(!symlink.is_regular_file());
+        assert!(!symlink.is_directory());
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod windows_fallback_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn open_root_fd_returns_unsupported_on_windows() {
+        let result = open_root_fd(Path::new("C:\\some\\path"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn walk_to_parent_returns_unsupported_on_windows() {
+        // The Windows stub ignores the fd parameter (generic, unconstrained), so
+        // we can pass any value — using a plain integer here avoids any file I/O.
+        let result = walk_to_parent(0u32, Path::new("sub/file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn file_stat_nofollow_mode_bits_methods_work_without_unix() {
+        // The FileStatNoFollow struct and its methods are platform-agnostic.
+        let regular = FileStatNoFollow {
+            mtime_ns: 0,
+            ctime_ns: 0,
+            size_bytes: 0,
+            inode: 0,
+            mode_bits: 0o100644,
+        };
+        assert!(regular.is_regular_file());
+        assert!(!regular.is_directory());
+        assert!(!regular.is_symlink());
+
+        let dir = FileStatNoFollow { mode_bits: 0o040755, ..regular.clone() };
+        assert!(dir.is_directory());
+
+        let sym = FileStatNoFollow { mode_bits: 0o120777, ..regular.clone() };
+        assert!(sym.is_symlink());
+    }
 }
