@@ -5,9 +5,53 @@
 - **Stack:** Rust, rusqlite, SQLite FTS5, sqlite-vec, candle + BGE-small-en-v1.5, clap, rmcp
 - **Created:** 2026-04-13T14:22:20Z
 
+## 2026-04-29 PR #110 Baseline Debt Patch — clippy gate
+
+**Role:** Revision owner — baseline debt fix required by new -D warnings gate
+
+**What happened:**
+- Bender diagnosed three exact failures on head `faf2597`: (1) `CollectionInfoOutput` test initializer missing watcher fields in `collection.rs:1654`; (2) three `.map_err(|e| e.to_string())?` calls in `vault_sync.rs` propagating `String` with no `From<String> for VaultSyncError`; (3) unused `parent_fd` binding in `fs_safety.rs:599`.
+- Applied minimal surgical fixes to all three: added `None` watcher fields to test initializer; changed map_err closures to produce `VaultSyncError::InvariantViolation`; prefixed unused binding with `_`.
+- Local gates: `cargo fmt --check` ✅, `cargo clippy --all-targets -- -D warnings` ✅, `cargo check --all-targets` ✅.
+- Committed `f20c503` with full attribution ("baseline debt required by new gate") and pushed to `fix/no-direct-main-guardrails`.
+
+**Outcome:** Check gate should clear on PR #110. Three files changed, 13 insertions, 4 deletions. No guardrail logic touched.
+
 ## Learnings
 
-- The project explicitly wants docs and OSS presence that can go viral.
+- **Clippy gate exposes pre-existing main debt:** When a `-D warnings` gate is introduced via an ops PR, it will surface baseline debt that was silently present on `main`. These failures are NOT regressions introduced by the PR — document the classification explicitly in the commit message.
+- **`From<String>` gap for custom error types:** `.map_err(|e| e.to_string())?` only works if there's a `From<String>` impl for the function's error type. The correct pattern is `.map_err(|e| CustomError::Variant { message: e.to_string() })?` — never `.map_err(|e| e.to_string())?` as a lazy shorthand in typed error contexts.
+- **Unused variable in test under -D warnings:** Prefix with `_` (not remove) when the binding exists to call a function for side effects or to hold a value that proves a code path compiles. Don't delete the binding — that changes test semantics.
+
+## 2026-04-29 PR #110 Narrowing — guardrails-only revision
+
+**Role:** Required revision owner (Professor rejected Mom; Fry locked out)
+
+**What happened:**
+- Inspected the branch `fix/no-direct-main-guardrails` diff vs `main`. Found 10 Rust source files + 8 `.squad/` agent files that had nothing to do with guardrails — carryover from the coverage sprint and clippy-fix attempts by prior revision agents.
+- Ran `git checkout main -- <files>` to revert all 10 Rust files and 4 `.squad/` agent-history files to main state. Removed 4 new `.squad/skills/coverage-*` SKILL.md files that the branch added (unrelated to ops).
+- After reverting, the new CI run failed at `cargo fmt --all -- --check`. Root cause: main itself carries pre-existing rustfmt debt in these Rust files; the prior coverage sprint commits had silently fixed formatting while adding tests. Reverting to main undid the fmt fixes.
+- Applied `cargo fmt --all` (mechanical only — line-length splits, import sorting, trailing commas). Zero semantic changes. This is a necessary CI gate fix, not source churn.
+- Committed in two clean steps: (1) revert all carryover + `.squad/` cleanup; (2) `cargo fmt` mechanical pass.
+- Local Check lane: fmt ✅, clippy ✅, cargo check ✅. Pushed `faf2597` to `fix/no-direct-main-guardrails`.
+- Final diff vs main: 11 guardrails files + 8 files with fmt-only diffs. No semantic Rust additions.
+
+**Key decisions:**
+- Prefer narrowing (revert to main) over accumulating more Rust fixes. Professor's standard is "ops-only."
+- Include mechanical `cargo fmt` pass as its own commit to make the nature transparent — mandatory CI gate fix, not feature churn.
+- Remove `.squad/skills/coverage-*` from the branch — agent-internal skills never belong in product PRs.
+- Pre-existing test failure in `export.rs` (`run_exports_page_to_nested_markdown_file`) is present on `main`, not introduced by this PR. Check job (the gate) passes; the failing Test/Coverage jobs are a pre-existing main debt.
+
+**Outcome:** Branch is merge-clean on Check (fmt/clippy/cargo-check). Remaining CI failures (Test/Coverage `export.rs`) are pre-existing on main. Professor can now evaluate the PR as a true guardrails-only artifact.
+
+## Learnings
+
+- **PR narrowing via revert-to-main**: When an ops PR has accumulated unrelated Rust carryover from prior agent passes, `git checkout main -- <files>` is the cleanest revert tool. It stages the exact main state and makes the narrowing intent explicit in the commit.
+- **Hidden fmt debt on main**: Coverage sprint commits can silently fix pre-existing `cargo fmt` violations as a side effect. Reverting to main restores those violations. A follow-on mechanical `cargo fmt` commit (zero semantic content) is necessary and correct — don't skip it, don't hide it, commit it with a clear message.
+- **Agent-internal files in product PRs**: `.squad/agents/*/history.md`, `.squad/decisions.md`, and `.squad/skills/*/SKILL.md` must never appear in a product PR diff. They are repo-internal bookkeeping. Always audit these as a pre-commit step.
+- **CI Check vs Test/Coverage distinction**: The Check job (fmt/clippy/cargo-check) is the merge gate for guardrails PRs. Failing Test/Coverage jobs that are pre-existing on main are not this PR's responsibility — document the distinction clearly in the review.
+- **Professor's "ops-only" standard**: Zero tolerance for Rust semantic changes in an ops PR. Mechanical `cargo fmt` is acceptable if clearly labeled; test additions, logic fixes, or new Rust functions are not.
+
 - DevRel work needs to stay grounded in shipped behavior and approved proposals.
 - Docs quality and growth strategy are first-class concerns, not nice-to-haves.
 - Release surface clarity is a growth asset: explicitly naming what does NOT ship (npm, Homebrew, one-command installer) builds trust faster than vague "coming soon" copy.
@@ -20,6 +64,15 @@
 - Feature ordering in the README Features list is a positioning signal: the live watcher / collection management (vault-sync-engine) should appear near the top alongside MCP server — these are the headline growth hooks for Obsidian users, not footnotes.
 - Homepage feature grids are the highest-conversion real estate: every landed branch capability with user-facing impact deserves a card with an honest branch qualifier — aspiration plus honesty beats hiding the feature until release.
 - Tool count accuracy across surfaces: use the released count (16) on generic install-path docs; use branch count (17) only when explicitly discussing the branch. README already models this split correctly.
+
+- **Batch 1 Coverage Arc Culmination (2026-04-28/29) — v0.10.0 SHIPPED:**
+  - **Decision Made:** Accept 90.77% Windows line coverage from `target\llvm-cov-final.json` as authoritative gate metric
+  - **Rationale:** User-supplied verified measurement supersedes earlier 82.53% Linux CI audit (pre-Batch1-push); 90% gate explicitly targets line coverage, not region coverage; 90.77% clears threshold
+  - **Platform Note:** Linux CI canonical baseline (pre-Batch1) was 82.53% (~19,588/~23,729 lines); unix-gated infrastructure paths remain architectural ceiling on that platform, not regression
+  - **Batch 1 Feature Scope:** All 13 tasks complete—6.7a (overflow recovery), 6.8 (.quaidignore reload), 6.9 (native-first watcher), 6.10 (per-collection supervisor), 6.11 (watcher health CLI-only), plus 8 supporting proofs (17.5w–17.5aaa4)
+  - **Release Artifacts:** Commit `ea5cabf` (excluded `.squad/` files), annotated tag `v0.10.0` pushed to `origin/main`, OpenSpec 216/313 tasks complete (Batch 1 ready), CI auto-trigger via push.tags
+  - **Profraw Cleanup:** Deleted ~170 transient `default_*.profraw` artifacts; follow-on: add to `.gitignore`
+  - **v0.10.0 Status:** ✅ RELEASED
 
 ## 2026-04-15 Release Contract Audit — Fix 'for this release' ambiguity
 
@@ -114,3 +167,29 @@
 - The `softprops/action-gh-release@v2` + `gh release upload` two-step pattern is correct for adding the install.sh asset after the binary artifacts are attached.
 - npm token guard ("skip if absent, never fail") is the right CI posture for staged channels — zero friction for maintainers who haven't configured npm yet.
 - **Promo docs consistency within multi-branch state (2026-04-25):** When one branch (vault-sync-engine) has 17 MCP tools and the released version has 16, the homepage, feature grids, and tool counts must all coordinate. Released-path binaries must show 16; branch prose may show 17 with explicit '(vault-sync-engine branch)' qualifier. Roadmap version tables need TBD entries for in-progress work to distinguish 'intentionally deferred' (explicit row) from 'not yet planned' (no row). Silence on a feature state is itself a claim.
+
+## 2026-04-28 v0.10.0 Batch 1 ship
+
+**Role:** Release lane execution, task marking, coverage gate sign-off
+
+**What happened:**
+- Deleted ~170 `default_*.profraw` transient coverage artifacts from the repo root (untracked junk left by test runs).
+- Verified Batch 1 task completeness: 6.7a, 6.8, 6.9, 6.10, 6.11, 17.5w, 17.5x were already marked; 17.5y, 17.5z, 17.5aa, and 17.5aaa2 had implementations in `vault_sync.rs` but were not marked — added closures notes and checked them off.
+- Coverage gate: user-supplied authoritative line coverage is 90.77% (from `target\llvm-cov-final.json`). Gate clears. Bender's Linux CI audit (82.53%) pre-dates the coverage push commits.
+- Staged product files only (excluded `.squad/` agent history modifications and `.squad/skills/` untracked dirs).
+- Commit `ea5cabf` with full Batch 1 change log + Copilot co-author trailer.
+- Annotated tag `v0.10.0` created and pushed. GitHub Actions `push.tags` trigger fires the release pipeline; no manual GitHub Release object needed.
+- Decision log written to `.squad/decisions/inbox/zapp-ship-v0100.md`.
+
+**Outcome:** v0.10.0 released. vault-sync-engine OpenSpec at 216/313 tasks complete (globally `ready`). Batch 2 (embedding worker, v0.11) is the next implementation window.
+
+**Key decisions:**
+- Accept Windows 90.77% line coverage as the gate metric (user-verified, line not region).
+- Do NOT create a GitHub Release manually — tag push triggers CI pipeline.
+- `.squad/` modifications correctly excluded from the product release commit.
+
+**Learnings:**
+- Always verify task implementations exist in source before marking `[x]` — search for the test function by name/description in the relevant `.rs` file first.
+- `default_*.profraw` files should be added to `.gitignore` to prevent recurrence. This is a recurring cleanup step on this repo.
+- When coverage measurements conflict (Windows local vs Linux CI), use the user's explicitly stated authoritative figure and document the discrepancy.
+- Release commit should include `openspec/changes/*/implementation_plan.md` if newly created — it is a product planning artifact, not an agent-internal file.
