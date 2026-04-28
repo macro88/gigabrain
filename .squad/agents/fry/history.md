@@ -14,7 +14,20 @@
 - **Validation sequence:** `cargo fmt` → `cargo fmt --check` (must exit 0) → `cargo check` (must compile clean). All three passed before pushing.
 - **Commit type:** Pure formatting commits use `style:` prefix (not `fix:` or `chore:`).
 
-### 2026-04-28 22:36:00 - Batch 1 watcher-reliability rejection and lockout
+### 2026-05-02 - PR #111 test fixture vault-root pattern
+
+- **Root cause:** `quaid init` seeds the default collection with `root_path=''` (`state='detached'`). Any test that calls `put::put_from_string()` via a real on-disk DB will hit `vault_sync::with_write_slug_lock`, which tries to open the empty root path — ENOENT on Linux.
+- **Fix pattern:** Before any write-through operation in integration tests, call a `provision_vault(dir, conn)` helper that creates `vault/` inside the temp dir and patches the collections row (`root_path`, `writable=1`, `is_write_target=1`, `state='active'`, `needs_full_sync=0`). This mirrors the pattern first introduced in `src/commands/export.rs` unit tests (commit `4735713`).
+- **Rule:** Every integration test that opens a real DB and writes pages must call `provision_vault` before the first write. Failing to do so will pass on Windows but break on Linux.
+
+### 2026-05-02 - PR #111 vault_sync poll-watcher fallback bug
+
+- **Bug pattern:** Using `?` inside an `if/else` expression that is assigned to a `let` binding causes errors to escape the *function*, not stay in the binding. In `start_collection_watcher`, three `map_err(...)?` calls on the native watcher init were propagating `VaultSyncError` out of the function, making the `match native_result { Err(_) => poll fallback }` block dead code for real failures.
+- **Detection:** Only caught by code review — the test used a `FORCE_NATIVE_WATCHER_INIT_FAILURE` flag that injected `Err(String)` directly into `native_result`, so it never exercised the buggy `?` path. Tests passing ≠ fallback logic working.
+- **Fix pattern:** Wrap multi-step init sequences in an immediately-invoked closure (`(|| -> Result<_, _> { ... })()`) when failures must be captured into a binding rather than propagated. This keeps `?` convenience inside the closure while ensuring errors land where the match expects them.
+- **Rule:** Whenever you write `let result = if condition { Err(...) } else { ... watcher.init()? ... Ok(...) }`, verify the `?` operators are inside a closure — not bare in the else block — if `result` is meant to carry the failure.
+
+
 
 - **Rejection summary:** Professor gated Batch 1 on 2026-04-28 and rejected the current closure plan due to three interlocking contradictions: (1) overflow recovery tried to bypass `ActiveLease` authorization, (2) `memory_collections` MCP schema tried to widen past the frozen 13.6 contract, (3) `WatcherMode` enum had unreachable `"inactive"` variant given the null rule.
 - **Leela repair:** Scope narrowed same day: overflow-recovery mode moved to `FullHashReconcileMode` (authorization stays `ActiveLease`); watcher health narrowed to CLI-only `quaid collection info` (no MCP widening); `WatcherMode` simplified to `Native | Poll | Crashed` (no `Inactive`).
@@ -905,3 +918,38 @@ is already returned so no `mem::forget` is needed.
 
 4. **cfg(unix) divergence is a cross-platform failure risk.** Run `cargo test` on Linux
    before shipping put/export test helpers.
+
+## 2026-04-28 — PR #111 baseline port (commit 305d186)
+
+**Learning:** When a feature branch is cut before baseline debt fixes land on main,
+the CI gate will fail on the baseline errors — not the feature change itself.
+Always check if a failing CI branch diverged before a known mechanical fix wave,
+and port only those exact approved fixes without pulling in unrelated logic.
+
+**Learning:** cargo clippy -- -D warnings can be used locally in a worktree to
+validate a clean compile before pushing, providing high confidence CI will pass
+on the same clippy gate.
+
+**Learning:** .map_err(|e| e.to_string())? silently compiles on Windows if the
+outer Result error type happens to be compatible, but fails on Linux when the
+clippy -D warnings gate is active and From<String> is not implemented for the
+error enum. Always use the explicit variant (ErrorType::Variant { message: e.to_string() })
+for map_err where the error type is a custom enum.
+
+**Learning:** PathBuf::from(...) in match guards triggers clippy::cmp_owned.
+Use Path::new(...) instead — it borrows without allocating and satisfies
+PartialEq<Path> on PathBuf.
+
+---
+
+## 2025-07-17 — PR #111: Unix clippy dead_code on WatcherHandle
+
+**Task:** Fix Linux CI Check failure on ix/export-nested-markdown-linux (online-model clippy pass).
+
+**Root cause:** #[cfg(unix)] enum WatcherHandle in src/core/vault_sync.rs had two variants (Native(RecommendedWatcher) and Poll(PollWatcher)) held only for Drop semantics. Clippy -D warnings on the online-model channel flagged them as dead_code.
+
+**Fix:** Added #[allow(dead_code)] to both variants and a comment explaining the intent (Drop semantics, not direct reads). Ported exactly from the guardrails branch.
+
+**Commit:** 5152ef7 on branch ix/export-nested-markdown-linux.
+
+**Learning:** When an enum variant holds a type purely for Drop (to keep a resource alive), and that field is never read, always annotate with #[allow(dead_code)]. This is especially common with watcher/handle types from external crates. The online-model feature channel can surface dead_code warnings that the default channel hides, so both clippy passes should be run before merging.
