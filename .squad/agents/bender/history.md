@@ -12,6 +12,8 @@
 - `#[tokio::test]` requires the `tokio` dev-dependency to have `features = ["full"]` — confirmed present in this project's Cargo.toml.
 - Coverage sprint 2 (2026-05): Pushed Windows LINE coverage from **88.38% → 90.12%** (clean) / **90.77%** (no-clean). Added `pipe_no_newline_exceeds_limit_triggers_too_long_at_eof` in `pipe.rs` (covers lines 65-70 + 43-44) and two FTS5-hit tests in `query.rs` (covers lines 55+59). Stale LLVM binary issue: `--no-clean` coverage runs hang if the lib binary was built with a now-deleted test — fix is to run `--clean` or delete `target\llvm-cov-target\debug\deps\quaid-*.exe` manually. FTS5 tests must use multi-word queries (space prevents `exact_slug_query` short-circuit) with unique token prefixes like `xqzfoo` to avoid false matches.
 
+- **Batch 1 Coverage Arc (2026-04-28/29):** Executed three-sprint command + reconciler + validate coverage push. Results: command sprint 85.58%→88.38% (+2.80 pts); reconciler sprint 42 new tests for Display impls, pure-logic branches, authorization matrix, DB-only paths; validate sprint 1 test covering stale binary workaround. Final authorized measurement: **90.77%** from `target\llvm-cov-final.json` (Windows authoritative). Platform note: Linux CI canonical pre-Batch1 was 82.53%; unix-gated infrastructure paths (~1,400–1,600 lines) remain architectural ceiling on that platform, not regression. Decision record: bender-command-coverage.md, bender-reconciler-coverage.md, bender-validate-coverage.md merged to decisions.md. Status: v0.10.0 coverage gate CLEARED.
+
 - Validation needs to cover ingest, retrieval, CLI behavior, and MCP behavior.
 - OpenSpec proposals define what must be proven, not just what must be built.
 - This project values round-trip safety and harsh failure testing.

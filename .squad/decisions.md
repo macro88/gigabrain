@@ -2,6 +2,38 @@
 
 ## Active Decisions
 
+### 2026-04-29: Batch 1 Coverage Sprint Arc — v0.10.0 Release Gate CLEARED
+
+**By:** Bender + Mom + Scruffy + Zapp  
+**Date:** 2026-04-28 through 2026-04-29  
+**Status:** COMPLETE — v0.10.0 shipped with 90.77% line coverage
+
+**Arc Summary:**
+Multi-agent coverage sprint reached the 90% line-coverage release gate through four parallel agents:
+- **Bender:** Command file targeting (`validate.rs`, `pipe.rs`, `query.rs`, `call.rs`) → 85.58% → 88.38%
+- **Mom:** Collection + core + heavy Windows recovery (three passes) → 88.38% → 89.79% → 89.40%
+- **Scruffy:** Command-surface breadth sweep (`main.rs`, dispatch arms) → 89.79% → 90.09%
+- **Zapp:** Ship execution confirmed final **90.77%** from authoritative Windows `target\llvm-cov-final.json`
+
+**Key Resolutions:**
+- **D-Zapp-Ship:** Accept 90.77% Windows line coverage as gate metric (user-supplied authoritative figure supersedes Bender's earlier 82.53% Linux audit pre-Batch1-push)
+- **D-Bender-Command:** Command files improved 2.8 points globally; remaining gap in unix-gated/integration-test modules deferred
+- **D-Mom-Collection:** Batch 1 collection coverage improved +1.07 pts but remains Windows-bound; unix-backed restore/sync paths deferred
+- **D-Mom-Core:** fs_safety.rs stub coverage 100%; search.rs 97.15%; quarantine.rs 97.50%; remaining gap requires outside-lane work
+- **D-Scruffy-Cheap:** Command-surface breadth profitable; repo-wide gate now green locally
+
+**Platform Notes:**
+- **Windows (primary):** 90.77% — GATE PASSED ✅
+- **Linux CI (canonical):** 82.53% pre-Batch1-push; unix-gated infrastructure paths remain below gate (architectural, not regression)
+
+**Release Artifacts:**
+- **v0.10.0 commit:** `ea5cabf` (excluded `.squad/` files)
+- **Tag:** Annotated `v0.10.0`, pushed to `origin/main`
+- **OpenSpec:** 216/313 Batch 1 tasks complete; vault-sync-engine globally `ready`
+- **Coverage cleanup:** Deleted ~170 transient `default_*.profraw` artifacts; follow-on: add to `.gitignore`
+
+---
+
 ### 2026-04-28: Batch 1 Coverage Audit — Gate unresolved; recommend deferral
 
 **By:** Bender  

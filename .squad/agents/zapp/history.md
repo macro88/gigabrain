@@ -21,6 +21,15 @@
 - Homepage feature grids are the highest-conversion real estate: every landed branch capability with user-facing impact deserves a card with an honest branch qualifier — aspiration plus honesty beats hiding the feature until release.
 - Tool count accuracy across surfaces: use the released count (16) on generic install-path docs; use branch count (17) only when explicitly discussing the branch. README already models this split correctly.
 
+- **Batch 1 Coverage Arc Culmination (2026-04-28/29) — v0.10.0 SHIPPED:**
+  - **Decision Made:** Accept 90.77% Windows line coverage from `target\llvm-cov-final.json` as authoritative gate metric
+  - **Rationale:** User-supplied verified measurement supersedes earlier 82.53% Linux CI audit (pre-Batch1-push); 90% gate explicitly targets line coverage, not region coverage; 90.77% clears threshold
+  - **Platform Note:** Linux CI canonical baseline (pre-Batch1) was 82.53% (~19,588/~23,729 lines); unix-gated infrastructure paths remain architectural ceiling on that platform, not regression
+  - **Batch 1 Feature Scope:** All 13 tasks complete—6.7a (overflow recovery), 6.8 (.quaidignore reload), 6.9 (native-first watcher), 6.10 (per-collection supervisor), 6.11 (watcher health CLI-only), plus 8 supporting proofs (17.5w–17.5aaa4)
+  - **Release Artifacts:** Commit `ea5cabf` (excluded `.squad/` files), annotated tag `v0.10.0` pushed to `origin/main`, OpenSpec 216/313 tasks complete (Batch 1 ready), CI auto-trigger via push.tags
+  - **Profraw Cleanup:** Deleted ~170 transient `default_*.profraw` artifacts; follow-on: add to `.gitignore`
+  - **v0.10.0 Status:** ✅ RELEASED
+
 ## 2026-04-15 Release Contract Audit — Fix 'for this release' ambiguity
 
 **Role:** Release-facing copy, release contract clarity
@@ -114,3 +123,29 @@
 - The `softprops/action-gh-release@v2` + `gh release upload` two-step pattern is correct for adding the install.sh asset after the binary artifacts are attached.
 - npm token guard ("skip if absent, never fail") is the right CI posture for staged channels — zero friction for maintainers who haven't configured npm yet.
 - **Promo docs consistency within multi-branch state (2026-04-25):** When one branch (vault-sync-engine) has 17 MCP tools and the released version has 16, the homepage, feature grids, and tool counts must all coordinate. Released-path binaries must show 16; branch prose may show 17 with explicit '(vault-sync-engine branch)' qualifier. Roadmap version tables need TBD entries for in-progress work to distinguish 'intentionally deferred' (explicit row) from 'not yet planned' (no row). Silence on a feature state is itself a claim.
+
+## 2026-04-28 v0.10.0 Batch 1 ship
+
+**Role:** Release lane execution, task marking, coverage gate sign-off
+
+**What happened:**
+- Deleted ~170 `default_*.profraw` transient coverage artifacts from the repo root (untracked junk left by test runs).
+- Verified Batch 1 task completeness: 6.7a, 6.8, 6.9, 6.10, 6.11, 17.5w, 17.5x were already marked; 17.5y, 17.5z, 17.5aa, and 17.5aaa2 had implementations in `vault_sync.rs` but were not marked — added closures notes and checked them off.
+- Coverage gate: user-supplied authoritative line coverage is 90.77% (from `target\llvm-cov-final.json`). Gate clears. Bender's Linux CI audit (82.53%) pre-dates the coverage push commits.
+- Staged product files only (excluded `.squad/` agent history modifications and `.squad/skills/` untracked dirs).
+- Commit `ea5cabf` with full Batch 1 change log + Copilot co-author trailer.
+- Annotated tag `v0.10.0` created and pushed. GitHub Actions `push.tags` trigger fires the release pipeline; no manual GitHub Release object needed.
+- Decision log written to `.squad/decisions/inbox/zapp-ship-v0100.md`.
+
+**Outcome:** v0.10.0 released. vault-sync-engine OpenSpec at 216/313 tasks complete (globally `ready`). Batch 2 (embedding worker, v0.11) is the next implementation window.
+
+**Key decisions:**
+- Accept Windows 90.77% line coverage as the gate metric (user-verified, line not region).
+- Do NOT create a GitHub Release manually — tag push triggers CI pipeline.
+- `.squad/` modifications correctly excluded from the product release commit.
+
+**Learnings:**
+- Always verify task implementations exist in source before marking `[x]` — search for the test function by name/description in the relevant `.rs` file first.
+- `default_*.profraw` files should be added to `.gitignore` to prevent recurrence. This is a recurring cleanup step on this repo.
+- When coverage measurements conflict (Windows local vs Linux CI), use the user's explicitly stated authoritative figure and document the discrepancy.
+- Release commit should include `openspec/changes/*/implementation_plan.md` if newly created — it is a product planning artifact, not an agent-internal file.
