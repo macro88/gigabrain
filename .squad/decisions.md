@@ -2,6 +2,28 @@
 
 ## Active Decisions
 
+### 2026-04-29: Batch 1 Closeout — Vault-sync Watcher Tasks & Release Completion
+
+**By:** Fry + Scruffy + Zapp  
+**Date:** 2026-04-29  
+**Status:** COMPLETE — v0.10.0 released; OpenSpec Batch 1 at 219/313 tasks
+
+**Arc Summary:**
+
+Final release batch 1 closeout. Three agents completed outcome tasks:
+
+**D-Fry-Vault-Watcher (Fry):** Close watcher tasks 6.5, 6.6, and 6.7 in OpenSpec vault-sync-engine via the already-landed shared reconcile path, not by demanding redundant per-file watcher handlers. The merged code routes dirty paths and native rename events from `src/core/vault_sync.rs` into `run_watcher_reconcile()` and then `src/core/reconciler.rs::reconcile_with_native_events()`. That apply pipeline already covers re-ingest, delete-vs-quarantine, and rename-with-page-id-preservation.
+
+**D-Scruffy-Coverage-Gate (Scruffy):** Verified v0.10.0 release meets coverage gate: 90.79% line coverage (23,767/26,179 lines), satisfying >90% ship threshold. Measured authoritative Windows state via `cargo llvm-cov --lib --tests --summary-only -j 1`. High-coverage modules above 95%; remaining gaps in `src/core/reconciler.rs` (71.22%) and `src/core/vault_sync.rs` (82.05%).
+
+**D-Zapp-Release-Tag-Recovery (Zapp):** Diagnosed and resolved v0.10.0 release failure. Original tag pushed against commit `ea5cabf` (pre-PR#110 fix); build jobs failed due to `.map_err(|e| e.to_string())?` error in `vault_sync.rs`. Fix already merged to main as part of PR #110 (`aa9cacf`). Deleted broken tag; re-tagged v0.10.0 on `aa9cacf` (current origin/main). Release workflow run #25053888690: all 10 jobs passed ✅. GitHub Release published with 17 manifest assets verified.
+
+**Release Rule:** When a tag-triggered release fails and the fix is already merged to main: (1) delete the broken tag, (2) re-tag on fixed HEAD, (3) push new tag. Do not create manual GitHub Release or patch original commit.
+
+**Batch 1 Status:** 219/313 OpenSpec tasks complete (94 remain). Change not ready for archival pending completion of remaining lanes.
+
+---
+
 ### 2026-04-28: PR #110 Guardrails Bypass Fix & PR #111 Export Test Fix — Scope-Clean Split
 
 **By:** Fry + Bender + Leela + Professor + Zapp  

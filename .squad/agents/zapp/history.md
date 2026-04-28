@@ -19,6 +19,8 @@
 
 ## Learnings
 
+- **Batch 1 Closeout (2026-04-29):** Completed release execution for v0.10.0. Original tag on `ea5cabf` failed due to `.map_err(|e| e.to_string())?` error; fix already merged in PR #110 at `aa9cacf`. Re-tagged v0.10.0 on fixed commit; all 10 CI jobs passed. GitHub Release published with 17 assets verified. Rule: when tag-triggered release fails with already-merged fix, delete broken tag, re-tag on fixed HEAD, push. Do not manually create release or patch original.
+
 - **Clippy gate exposes pre-existing main debt:** When a `-D warnings` gate is introduced via an ops PR, it will surface baseline debt that was silently present on `main`. These failures are NOT regressions introduced by the PR — document the classification explicitly in the commit message.
 - **`From<String>` gap for custom error types:** `.map_err(|e| e.to_string())?` only works if there's a `From<String>` impl for the function's error type. The correct pattern is `.map_err(|e| CustomError::Variant { message: e.to_string() })?` — never `.map_err(|e| e.to_string())?` as a lazy shorthand in typed error contexts.
 - **Unused variable in test under -D warnings:** Prefix with `_` (not remove) when the binding exists to call a function for side effects or to hold a value that proves a code path compiles. Don't delete the binding — that changes test semantics.
@@ -193,3 +195,25 @@
 - `default_*.profraw` files should be added to `.gitignore` to prevent recurrence. This is a recurring cleanup step on this repo.
 - When coverage measurements conflict (Windows local vs Linux CI), use the user's explicitly stated authoritative figure and document the discrepancy.
 - Release commit should include `openspec/changes/*/implementation_plan.md` if newly created — it is a product planning artifact, not an agent-internal file.
+
+## 2026-04-28 v0.10.0 Release Recovery
+
+**Role:** Release lane execution, failure diagnosis, tag recovery
+
+**What happened:**
+- Original `v0.10.0` tag pointed to `ea5cabf`. The release workflow fired but all 8 build jobs failed: `vault_sync.rs` had three `.map_err(|e| e.to_string())?` calls directly in `start_collection_watcher` (returning `VaultSyncError`), which requires `From<String>` — not implemented.
+- The fix was already merged to `main` via PR #110 (`aa9cacf`): those calls were wrapped in an inner closure returning `Result<WatcherHandle, String>`, so `?` propagates `String` to the closure, not to the outer function.
+- Deleted local and remote `v0.10.0` tag. Re-created annotated tag on `aa9cacf`. Pushed.
+- Release workflow run #25053888690: verify-version ✅, all 8 builds ✅, Create Release ✅.
+- GitHub Release v0.10.0 published with all 17 assets matching the manifest.
+
+**Key decisions:**
+- Re-tag on the already-merged fix commit; do not patch the original. Preserves main history.
+- Do NOT create a GitHub Release manually; let the workflow do it.
+- Decision log written to `.squad/decisions/inbox/zapp-release-v0100.md`.
+
+**Learnings:**
+- **Tag recovery pattern:** If a tag push triggers a failed release and the fix is already on main, the correct move is: delete tag → re-tag on fixed HEAD → push. No manual release creation, no force-push to main.
+- **Root cause class:** `map_err(|e| e.to_string())?` in a function returning a custom error type is a compile error if `From<String>` is not implemented. If the calls are inside an inner closure returning `Result<_, String>`, they compile fine — the `?` propagates to the closure.
+- **Release failure vs CI failure:** A failed release workflow does NOT create a GitHub Release object. The gh release list will simply not show the version. Check `gh run list` filtered to `release.yml` for the real failure signal.
+- **Tag on main post-guardrails:** Now that main is branch-protected, re-tagging on main (not a feature branch) is the correct approach for a release recovery — the tag itself is not subject to branch protection.

@@ -7,6 +7,13 @@
 
 ## Learnings
 
+### 2026-04-29 - Batch 1 Closeout: Watcher Tasks 6.5/6.6/6.7
+
+- **Outcome:** Closed watcher tasks 6.5, 6.6, and 6.7 in OpenSpec via the already-landed shared reconcile path
+- **Decision:** Use existing `run_watcher_reconcile()` → `reconcile_with_native_events()` pipeline; don't demand redundant per-file watcher handlers
+- **Evidence:** Merged code already covers re-ingest, delete-vs-quarantine, and rename-with-page-id-preservation
+- **OpenSpec status:** Updated `openspec/changes/vault-sync-engine/tasks.md` with truthful closure notes
+
 ### 2026-05-01 - PR #111 rustfmt drift cleanup
 
 - **Pattern:** When CI's `Check` job fails on a branch due to rustfmt drift accumulated on `origin/main`, the correct fix is `cargo fmt` (project-wide), not file-targeted `rustfmt` calls. File-targeted `rustfmt` without Cargo.toml edition context errors on `async fn` with "not permitted in Rust 2015".
@@ -937,6 +944,14 @@ error enum. Always use the explicit variant (ErrorType::Variant { message: e.to_
 for map_err where the error type is a custom enum.
 
 **Learning:** PathBuf::from(...) in match guards triggers clippy::cmp_owned.
+Use Path::new(...) instead — it borrows without allocating, satisfies
+`PartialEq<Path>` on `PathBuf`, and avoids the lint without changing semantics.
+
+## Learnings
+
+- 2026-04-28: For vault-sync watcher bookkeeping, close task truth against the shared reconcile call graph, not against hypothetical per-event handlers. `src/core/vault_sync.rs::poll_collection_watcher()` → `run_watcher_reconcile()` → `src/core/reconciler.rs::reconcile_with_native_events()` is the load-bearing path for create/modify, delete/quarantine, and native rename application.
+- 2026-04-28: Batch 1 watcher-health truth lives in `src/core/vault_sync.rs` and `src/commands/collection.rs`; `quaid collection info` is the only surfaced watcher-health contract for v0.10, while MCP `memory_collections` remains intentionally frozen.
+- 2026-04-28: User preference reinforced — OpenSpec bookkeeping must be conservative and evidence-based: mark only tasks and ship gates proven by the merged tree, and leave explicit notes wherever scope is still deferred. Key working files for this lane: `openspec/changes/vault-sync-engine/tasks.md`, `openspec/changes/vault-sync-engine/implementation_plan.md`, `.squad/decisions.md`.
 Use Path::new(...) instead — it borrows without allocating and satisfies
 PartialEq<Path> on PathBuf.
 
