@@ -40,4 +40,4 @@ Layer the safeguards so bypassing one control is not enough:
 - `cargo check`
 - `cargo test`
 - targeted hook validation showing `.githooks/pre-push` rejects `main`
-- `gh api` branch-protection attempt with exact result recorded
+- `gh api` branch-protection attempt (pending — outcome not yet recorded; task 3.2 remains open)

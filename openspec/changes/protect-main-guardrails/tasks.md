@@ -18,7 +18,7 @@ change: protect-main-guardrails
 ## 3. Add GitHub-side detection and protection
 
 - [x] 3.1 Add a workflow that fails when GitHub receives a push to `main` with no associated pull request
-- [x] 3.2 Attempt to enable GitHub branch protection on `main` requiring pull requests and record the exact outcome
+- [ ] 3.2 Attempt to enable GitHub branch protection on `main` requiring pull requests and record the exact outcome
 - [x] 3.3 Add `.github/CODEOWNERS` so required code-owner review on `main` is enforceable
 
 ## 4. Validate
