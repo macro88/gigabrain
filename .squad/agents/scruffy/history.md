@@ -7,6 +7,10 @@
 
 ## Learnings
 
+- **Batch 1 Closeout (2026-04-29):** Finalized coverage gate verification—v0.10.0 release confirmed at **90.79% line coverage** (`23,767 / 26,179`), satisfying >90% threshold. Windows authoritative measurement via `cargo llvm-cov --lib --tests --summary-only -j 1`. Remaining gaps in `src/core/reconciler.rs` (71.22%) and `src/core/vault_sync.rs` (82.05%) deferred to follow-on lanes. Coverage gate CLEARED; Batch 1 release shipped.
+
+- Coverage gate verification (2026-04-28):the repository’s existing Windows ship-gate flow still measures cleanly with `cargo llvm-cov --lib --tests --summary-only -j 1`, and the truthful merged-state follow-up export remains `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`. Current measured line coverage is **90.79%** (`23,767 / 26,179`), so the >90% ship gate is satisfied on this state; the largest remaining uncovered concentrations are still `src/core/reconciler.rs` (71.22%, 858 missed lines) and `src/core/vault_sync.rs` (82.05%, 602 missed lines).
+
 - Batch 1 cheap CLI coverage sweep (2026-04-28): one subprocess-heavy `tests/command_surface_coverage.rs` batch covering `stats`, `compact`, `validate`, `gaps`, `import`, `ingest`, `tags`, `timeline-add`, `link-close`, `embed --all`, and `pipe`, plus direct unit proofs in `src/commands/{stats,skills}.rs`, moved the local Windows `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` line rate to **90.09%** (`23,298 / 25,862`). Biggest file gains were `src/main.rs` **89.21% → 99.59%** (`+29` covered lines), `src/commands/stats.rs` **83.19% → 97.95%** (`+49`), and `src/commands/skills.rs` **95.93% → 96.86%** (`+19`); `config.rs`, `export.rs`, and `serve.rs` were already effectively saturated.
 
 - **Batch 1 Coverage Arc (2026-04-28/29) — Watcher-Runtime Branch Depth + Command-Surface Breadth:**
