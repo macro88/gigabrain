@@ -23,9 +23,9 @@ mod tests {
         let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         // Provision a real vault root so the Unix persist path can open
-        // the collection root directory.  The default collection is seeded
-        // with root_path='' (state='detached') which is only valid for
-        // in-memory usage; on-disk writes require a real directory.
+        // the collection root directory. The default collection is seeded
+        // with root_path='' (state='detached'); Unix on-disk writes require
+        // configuring a real vault root directory.
         let vault_root = dir.path().join("vault");
         fs::create_dir_all(&vault_root).unwrap();
         conn.execute(
