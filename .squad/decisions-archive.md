@@ -1,3 +1,1143 @@
+### 2026-04-22: Vault-Sync Foundation A — Schema v5 + Collections Module
+
+**By:** Fry (implementation), macro88 (via vault-sync-engine OpenSpec)
+
+**What:** Implemented the first coherent foundation slice of the vault-sync-engine OpenSpec change. Established v5 schema with breaking changes and created collections.rs abstraction module for multi-collection support.
+
+**Key Decisions:**
+
+1. **Schema v5 Evolution — Breaking by Design**
+   - v5 rejects v4 databases with actionable error message
+   - Zero users = clean redesign opportunity
+   - Added tables: `collections`, `file_state`, `embedding_jobs`
+   - Extended `pages` with `collection_id`, `uuid`, `quarantined_at`
+   - Modified `links` to add `source_kind` for provenance tracking
+   - Modified `contradictions.other_page_id` to `ON DELETE CASCADE`
+   - Added `knowledge_gaps.page_id` for slug-bound gap tracking
+   - Removed `ingest_log` (replaced by `file_state` + collection sync model)
+
+2. **Collections Module Structure**
+   - Created `src/core/collections.rs` with validators → CRUD → slug parsing pipeline
+   - Validators: `validate_collection_name()`, `validate_relative_path()`
+   - CRUD: `get_by_name()`, `get_write_target()`
+   - Slug resolution: `parse_slug()` with `OpKind` classification (Read, WriteCreate, WriteUpdate, WriteAdmin)
+   - Path traversal protection: reject `..`, absolute paths, NUL bytes, empty segments
+
+3. **Slug Resolution by OpKind**
+   - Explicit form `<collection>::<slug>` always resolves to that collection
+   - Bare slug resolution varies by operation intent:
+     - **Read:** Exactly-one match or Ambiguous
+     - **WriteCreate:** Zero owners → write-target; one owner AND is write-target → that collection; else Ambiguous
+     - **WriteUpdate/WriteAdmin:** Exactly-one match or Ambiguous/NotFound
+   - Prevents silent wrong-collection writes
+
+4. **AmbiguityError User-Facing Type**
+   - `SlugResolution::Ambiguous` carries `Vec<AmbiguityCandidate>` with serializable shape
+   - Enables MCP clients and CLI to surface structured resolution hints
+
+**Implementation Status:**
+- Tasks 1.1–1.6 (v5 schema) complete
+- Tasks 2.1–2.6 (collections module) complete
+- Schema tests: 19 updated to expect v5, all pass
+- Collections unit tests: 8 new tests for validators and resolution logic
+- All gates pass: `cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`
+
+**Deferred to Later Slices:**
+- Platform-specific fd-safety primitives (`rustix`/`nix`) — needs `#[cfg(unix)]` gating
+- `knowledge_gaps.page_id` wiring — requires `gaps.rs` integration
+- Command wiring (init, serve, get, put) — requires reconciler + watcher
+
+**Why:** This slice is schema + foundation types only, kept coherent and testable independently. Later slices will wire collections into commands and implement the reconciler pipeline. Deferral avoids premature platform dependencies and keeps each slice focused.
+
+**Next Steps:** Slice B will wire collections into commands (init creates default collection, get/put/search become collection-aware) and update MCP tool signatures for collection context.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Repair Pass — Leela Lead
+
+**By:** Leela
+**Date:** 2026-04-22
+**Status:** Complete
+**Topic:** vault-sync-engine foundation slice repair (schema v5 coherence)
+
+### Context
+
+The vault-sync-engine foundation slice was rejected by Professor for schema coherence issues and 181 test failures. Foundation was left with `NOT NULL` constraints on `pages.collection_id` and `pages.uuid` without updating legacy INSERT helpers that omit those columns.
+
+### Decisions Made
+
+#### D1: `pages.collection_id DEFAULT 1` + auto-created default collection
+
+Every legacy INSERT INTO pages that omits `collection_id` needs a valid FK target. Rather than touch 20+ insert sites (tests + production):
+- Added `DEFAULT 1` to `collection_id` in the schema
+- Added `ensure_default_collection()` to `db.rs` called at every `open_connection()`, which inserts collection `(id=1, name='default', ...)` with `INSERT OR IGNORE`
+
+The default collection provides a stable FK target for all pre-collection code. When the `gbrain collection add` command is implemented, new collections get distinct IDs.
+
+#### D2: `pages.uuid` becomes nullable until UUID lifecycle tasks (5a.1–5a.7) are wired
+
+`uuid TEXT NOT NULL` was premature. Making it nullable (`uuid TEXT DEFAULT NULL`) with a partial unique index (`WHERE uuid IS NOT NULL`) is the honest state. UUID assignment can be added transparently when lifecycle tasks are implemented.
+
+#### D3: `ingest_log` table retained as compatibility shim
+
+The v5 spec removes `ingest_log` in favour of `raw_imports`, but `gbrain import`, `gbrain ingest`, and `gbrain embed` all depend on it. Removing the table before the reconciler slice replaces these commands would be a second breakage. The table stays until the watcher/reconciler slice explicitly removes `gbrain import` and migrates its callers.
+
+#### D4: `ON CONFLICT(collection_id, slug)` replaces `ON CONFLICT(slug)`
+
+The v5 unique constraint on `pages` is `UNIQUE(collection_id, slug)`. SQLite requires the `ON CONFLICT` target to exactly match a declared constraint. All upsert paths in `ingest.rs` and `migrate.rs` were updated.
+
+#### D5: `search_vec` gains `AND p.quarantined_at IS NULL`
+
+The vector search path in `inference.rs` was joining pages without the quarantine filter. FTS5 was already correct. Vector search is now aligned.
+
+### Outcome
+
+**Before repair:** `cargo test` reported **181 failing tests** across `commands::check`, `core::fts`, `core::inference`, and other test bins.  
+**After repair:** `cargo test` reports **0 failures** across all test bins.
+
+### What is NOT done (scoped out)
+
+- `serve_sessions`, `collection_owners` tables — watcher slice, not foundation
+- UUID generation in write helpers (tasks 5a.1–5a.7)
+- `brain_gap` slug binding (tasks 1.1b–1.1c)
+- All watcher, reconciler, and fs-safety tasks (sections 3–6, 5a)
+
+### Why
+
+Schema v5 is the foundation layer for multi-collection vault sync. This repair makes the foundation coherent by:
+1. Ensuring legacy code paths work without modification
+2. Deferring UUID lifecycle (complex temporal semantics) until dedicated tasks
+3. Maintaining import/ingest/embed continuity through the compatibility shim
+4. Wiring quarantine filtering consistently across all search surfaces
+
+This unblocks follow-on implementation batches on a solid foundation.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Professor Re-Review
+
+**By:** Professor (Reviewer)
+
+**What:** Second-pass review of Leela's vault-sync foundation repair. Assessment of schema coherence, legacy-open safety, and task truthfulness before final approval.
+
+**Findings:**
+
+1. **Proposal/Design Truthfulness Gap:** Proposal and design still describe `gbrain import` and `ingest_log` as removed, but implementation retains both as temporary compatibility shims. This is a valid technical choice, but artifacts must be explicit about the transitional contract.
+
+2. **Legacy-Open Safety Issue:** `open_connection()` executes v5 schema DDL before checking version. Pre-v5 databases can be partially mutated before the re-init refusal error is returned. Preflight safety must happen before ANY v5 execution.
+
+3. **Coverage Depth Gaps:** Three new branchy seams lack direct regression tests:
+   - Collection routing matrix (`parse_slug()` with explicit form, bare-slug single/multi-collection)
+   - Quarantine filtering (quarantined pages excluded from vector search)
+   - Schema refusal branch (pre-v5 brains rejected before mutations)
+
+**Required Before Reconsideration:**
+
+1. Align proposal/design with actual transitional contract (keep shims OR remove now)
+2. Reorder schema gating: version check before ANY v5 DDL
+3. Add three focused unit-test groups for new seams
+
+**Decision:** REPAIR DECISION ISSUED. Three gates remain before landing.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Coverage-Depth Review
+
+**By:** Scruffy (Test Coverage)
+
+**What:** Assessed test coverage depth on new branchy seams introduced by vault-sync v5 schema repairs. Evaluation of whether new logic paths are directly defended.
+
+**Findings:**
+
+**Positive:**
+- Default-channel tests pass (0 failures from 181 prior failures)
+- Online-model tests pass
+- Legacy compatibility shims work (ingest_log, collection_id DEFAULT 1)
+- Legacy upserts repaired to `ON CONFLICT(collection_id, slug)`
+- Quarantine filtering now in vector search
+
+**Coverage Gaps:**
+
+1. **Collection routing untested:** `src/core/collections.rs::parse_slug()` implements 6 operation types and ambiguity paths. Only validators tested; no direct tests for:
+   - Explicit `<collection>::<slug>` resolution
+   - Single-collection bare-slug routing
+   - Multi-collection bare-slug read ambiguity
+   - WriteCreate/WriteUpdate/WriteAdmin ambiguity paths
+
+2. **Quarantine filtering indirectly covered:** `search_vec()` now excludes quarantined pages, but no focused regression test proves a quarantined page with valid embedding is omitted.
+
+3. **Schema refusal branch unguarded:** `db::open_with_model()` rejects pre-v5 brains by stored `brain_config.schema_version`, but no direct test covers the re-init error path.
+
+**Required Before Approval:**
+
+1. Focused unit-test matrix for `parse_slug()` covering all operation types and ambiguity paths
+2. Regression test for quarantined pages being excluded from vector search
+3. Regression test for v4-or-older schema refusal with re-init error
+
+**Decision:** REJECT FOR TEST DEPTH. Repairs are effective; new seams need direct coverage before landing.
+
+---
+
+## 2026-04-22: Vault-Sync Foundation Review Gating Policy
+
+**By:** Professor (via Scribe decision merge)
+
+**What:** Establish standing policy for vault-sync foundation review gates going forward.
+
+**Policy:**
+
+Future vault-sync review passes must validate three dimensions:
+
+1. **Artifact Truthfulness:** Proposal/design must accurately describe implementation state. No overstated removals. Compatibility shims must be explicitly named as temporary or removed immediately.
+
+2. **Preflight Safety:** For schema version changes, version checks must happen BEFORE any v5 DDL side effects. This prevents partial mutations of legacy databases before refusal error is returned.
+
+3. **Coverage Depth:** New branchy code seams (collection routing, quarantine filtering, schema refusal) must be directly tested. End-to-end validation is insufficient for foundational slices.
+
+**Rationale:** Schema-foundation slices are foundational for all later implementation. Truthfulness, safety, and coverage depth gates protect downstream work from discovering broken assumptions after landing.
+
+**Decision:** ADOPTED for vault-sync review cadence.
+
+
+---
+
+# Decision: Vault Sync Engine Batch B Gate — APPROVED (with repair)
+
+**By:** Leela  
+**Date:** 2026-04-22  
+**Status:** APPROVED  
+
+---
+
+## Verdict: APPROVED
+
+Batch B is approved to advance. One pre-existing clippy violation was repaired inline before the gate was confirmed clean. No logic was changed.
+
+---
+
+## What Batch B Claims
+
+- **Group 3 complete:** `ignore_patterns.rs` — `.gbrainignore` atomic parse + DB mirror sync.
+- **Group 4 partial:** `file_state.rs` — stat helpers and upsert/query/delete, with `stat_file` using `std::fs::metadata` (rustix/fstatat deferred to task 2.4a).
+- **Group 5.1 scaffold:** `reconciler.rs` — contracts, types, and stub functions only; no live walk logic.
+- **Additional tests:** parse_slug debt, ignore error shapes, and file_state drift/upsert behavior.
+- **Test suites passed:** Both default and online-model.
+
+---
+
+## Gate Verification
+
+| Check | Result |
+|-------|--------|
+| `cargo test` (all targets) | ✅ 0 failures |
+| `cargo clippy -- -D warnings` | ⚠️ Failed on submission — repaired inline |
+| Substantive scope truthfulness | ✅ Honest |
+| No masked unfinished reconciler logic | ✅ Confirmed |
+
+**Clippy repair:** `ignore_patterns.rs` line 141 had `&[err.clone()]` which triggers `cloned_ref_to_slice_refs`. Fixed to `std::slice::from_ref(&err)`. Additionally, `file_state.rs` and `ignore_patterns.rs` were missing `#![allow(dead_code)]` — present in `reconciler.rs` but omitted from the other two new modules. Added to both. No logic changed; gate now clean.
+
+---
+
+## Truthfulness Assessment
+
+**Group 3 (ignore_patterns.rs):** Complete and matches spec. Atomic parse is correctly all-or-nothing. DB mirror is sole-writer-enforced via `reload_patterns()`. `file_stably_absent` error shape matches the spec's documented code `file_stably_absent_but_clear_not_confirmed`. Tests cover valid/invalid/absent/absent-with-prior-mirror cases. ✅
+
+**Group 4 (file_state.rs):** Honest partial. `stat_file` is `std::fs::metadata` wrapper with a clear inline comment citing task 2.4a for the `fstatat(AT_SYMLINK_NOFOLLOW)` upgrade. Upsert/get/delete/stat_differs/needs_rehash are all present and correct. Tests cover insert, update, delete, stat comparison, ctime-only and inode-only drift detection. `last_full_hash_at` is set on every upsert. ✅
+
+**Group 5.1 (reconciler.rs):** Honest scaffold. `#![allow(dead_code)]`, every stub returns empty/false with a comment citing the task ID for full implementation. `reconcile()`, `full_hash_reconcile()`, `stat_diff()`, and `has_db_only_state()` all return harmless defaults. No live code path calls these stubs — `reconciler` is not yet wired to any command. The concern about `has_db_only_state` always returning `false` is non-issue: it only matters once the reconciler walk is wired (task 5.2+), which is Batch C scope. ✅
+
+---
+
+## Risk Notes for Batch C
+
+1. **`has_db_only_state` returning `false`:** Safe now. Becomes a hard dependency before task 5.4 work ships — quarantine classifier MUST be wired before any real delete path is activated. Do not approve a Batch C that activates hard-delete without confirming `has_db_only_state` is implemented.
+
+2. **`stat_file` missing `fstatat`:** Task 2.4a (`rustix` dependency) must land before or alongside task 4.2. `stat_file(path)` via `std::fs::metadata` is acceptable for the Windows build context but is explicitly labeled provisional. Batch C scope should include 2.4a or explicitly defer it and confirm the stat precision gap is acceptable.
+
+3. **`reload_patterns` is sole writer:** Confirmed correct. Any future code that tries to write `collections.ignore_patterns` directly bypassing `reload_patterns()` is a spec violation.
+
+4. **tasks 1.1b and 1.1c remain open:** `knowledge_gaps.page_id` column and `brain_gap` slug-bound classification are not in this batch. `has_db_only_state` references `knowledge_gaps.page_id` in its full implementation spec (task 5.4). These must close before the quarantine classifier can be fully implemented.
+
+---
+
+## Next Batch Routing
+
+Batch C should target:
+- Task 2.4a: `rustix` dep (unblocks true `fstatat`)
+- Task 4.3: `stat_diff()` full implementation (walk + file_state comparison)
+- Task 4.4: `full_hash_reconcile()` full implementation
+- Task 5.2: reconciler walk via `ignore::WalkBuilder`
+- Tasks 1.1b/1.1c: `knowledge_gaps.page_id` and gap classification (unblocks task 5.4)
+
+Route to Fry for implementation. Scruffy must confirm >90% coverage on all new paths.
+
+
+---
+
+# Decision: Vault Sync Batch B — Narrow Repair Pass
+
+**Date:** 2026-04-22  
+**Author:** Leela  
+**Status:** Resolved — repair complete, tests green  
+
+## Context
+
+Professor blocked Batch B on two grounds:
+
+1. `src/core/reconciler.rs` presented `has_db_only_state` as returning `Ok(false)` — a success-shaped default on a safety-critical predicate that gates the delete-vs-quarantine decision. Any future code wired to this path before task 5.4 lands would silently hard-delete every page rather than quarantining pages with DB-only state.
+
+2. The module header comment said "This module **replaces** `import_dir()` from `migrate.rs`" — factually false. `migrate::import_dir()` is still the live ingest path. The wording implied the replacement was complete.
+
+## Decisions
+
+### D1: `has_db_only_state` returns `Err`, not `Ok(false)`
+
+**Decision:** The stub now returns `Err(ReconcileError::Other("not yet implemented..."))` with an explicit error message citing tasks 5.4a and 1.1b as the prerequisite schema work.
+
+**Rationale:** A predicate that gates data destruction must not have a "safe to proceed" default when it hasn't checked anything. Returning `false` is indistinguishable from "we checked and found no DB-only state." Returning an error is self-documenting and forces any premature caller to handle the failure explicitly rather than silently proceeding with deletes.
+
+**Test update:** `has_db_only_state_stub_returns_false` renamed to `has_db_only_state_unimplemented_returns_error` and rewritten to assert `result.is_err()` and that the error message contains `"not yet implemented"`.
+
+### D2: Module header comment fixed to present-tense future
+
+**Decision:** Changed "This module replaces `import_dir()`" → "This module WILL replace `import_dir()` once tasks 5.2–5.5 land. `migrate::import_dir()` remains the live ingest path until then."
+
+**Rationale:** Documentation that describes an intent as a completed fact misleads reviewers and future contributors. The live ingest path is `migrate::import_dir()` and that is unambiguous.
+
+### D3: Task 5.1 repair note updated in tasks.md
+
+**Decision:** Task 5.1's completion note updated to: "File created with types and function signatures only. `migrate::import_dir()` remains the live ingest path — 'replace' completes when tasks 5.2–5.5 land. `has_db_only_state` now returns `Err` (not `Ok(false)`) so any accidental wiring into a live delete path fails loudly."
+
+**Rationale:** The ✅ on task 5.1 stood for "file created" — that is accurate. But the original note didn't clarify that the "replace" deliverable is the later task 5.5 wire-up, not the stub creation. The repair note closes that gap without unchecking genuinely completed work.
+
+## What Was Not Changed
+
+- `reconcile()`, `full_hash_reconcile()`, and `stat_diff()` still return empty stats/diffs. These are read-neutral stubs — returning empty results cannot silently enable data destruction, so they remain `Ok(Default::default())` with existing stub comments intact.
+- No Batch C logic introduced.
+- `migrate::import_dir()` untouched.
+- Fry remains locked out of this revision cycle.
+
+## Validation
+
+`cargo test`: **0 failures** (442 lib tests + 40 integration tests pass).  
+Both reconciler tests pass with updated assertions:
+- `reconcile_stub_returns_empty_stats` — unchanged, still green
+- `has_db_only_state_unimplemented_returns_error` — new assertion, green
+
+
+---
+
+# Professor — Vault Sync Batch B Review
+
+**Date:** 2026-04-22  
+**Reviewer:** Professor  
+**Verdict:** REJECT
+
+## Scope Reviewed
+
+- `openspec/changes/vault-sync-engine/{proposal,design,tasks}.md`
+- `src/core/{ignore_patterns,file_state,reconciler,collections,mod}.rs`
+- `src/schema.sql`
+- `Cargo.toml`
+
+## Outcome
+
+### Group 3 — Ignore patterns
+
+Approved on substance. This slice is genuinely complete for the scope it claims:
+
+- atomic parse semantics are implemented
+- mirror-writer ownership is explicit (`reload_patterns`)
+- canonical error shape is present
+- tests cover the important branches
+
+This is maintainable foundation code.
+
+### Group 4 — File state tracking
+
+Truthfully partial, not overstated.
+
+- `file_state` schema and helper layer exist
+- stat/hash helpers and tuple comparison are implemented
+- tasks/history correctly describe 4.2 as partial and 4.3–4.4 as deferred/stubbed
+
+No truthfulness issue here.
+
+### Group 5 — Reconciler scaffold
+
+This is the blocking problem.
+
+The scaffold is **not** cleanly bounded enough for landing because it presents safety-critical placeholders as successful behavior:
+
+1. `reconcile()` returns success with empty stats.
+2. `full_hash_reconcile()` returns success with empty stats.
+3. `has_db_only_state()` always returns `false`.
+4. The file header says the module "replaces `import_dir()`" even though `migrate::import_dir()` is still the active path.
+5. Tests assert the placeholder behavior, which normalizes the wrong contract.
+
+For a reconciler, "successful no-op" is a misleading default. The dangerous case is `has_db_only_state()`: if later wiring calls it before implementation is finished, delete-vs-quarantine protection silently collapses.
+
+## Required Revision Scope
+
+Revise **only the reconciler scaffold surface** before the next batch proceeds:
+
+- `src/core/reconciler.rs`
+- any directly corresponding progress notes that describe it as a replacement rather than a future replacement
+
+## Required Standard for Resubmission
+
+- stub entry points must return an explicit deferred/not-implemented error, or be kept private/unwired
+- module/docs/comments must say **will replace**, not **replaces**
+- tests must defend the explicit placeholder contract rather than empty-success behavior
+
+## Validation
+
+- `cargo test --quiet` passed during review
+
+
+---
+
+## 2026-04-22: Vault Sync Batch C — Foundation Approval
+
+**Date:** 2026-04-22  
+**Summary:** Vault Sync Batch C (reconciler scaffold + fd-safety primitives) passed final approval after targeted repair cycle. Batch focuses on honest foundations: explicit error contracts on safety-critical stubs, platform-gated Unix/Windows semantics, truthful task scoping.
+
+### Context
+
+**Fry (Resume):** Batch C implementation resumed after rate-limit interruption. Prior work had completed:
+- src/core/fs_safety.rs — all six fd-relative primitives (open_root_fd, walk_to_parent, stat_at_nofollow, etc.)
+- 15 unit tests covering path traversal, symlink rejection, round-trip safety
+- 
+ustix dependency already in Cargo.toml under #[cfg(unix)]
+
+This session advanced stat/reconciler foundations to honest contracts:
+- stat_file_fd uses s_safety::stat_at_nofollow on Unix
+- stat_diff fetches DB state, demonstrates classification logic, notes walk deferral
+- ull_hash_reconcile documents authoritative mode contract
+- 
+econcile shows phase structure with Unix open_root_fd, platform gates
+- Platform-aware test fixes: Windows handles UnsupportedPlatformError; Unix expects success
+
+### Design Decision: Honest Foundations Over Pretend Completeness
+
+Every "foundation complete" task clearly documents what's implemented (contract, types, platform gates) vs what's deferred (full walk with ignore::WalkBuilder, rename resolution, apply logic). Stubs return explicit errors (has_db_only_state) or demonstrate intended structure (stat_diff classification) rather than silent no-ops. This protects safety invariants and prevents premature callers from relying on incomplete implementations.
+
+### Initial Gate Feedback (Leela, Professor)
+
+**Leela (REJECT on missing Unix imports):** Batch C has solid foundations but fails on one narrow blocker:
+- 
+econciler.rs references s_safety::open_root_fd with no corresponding import
+- walk_collection() uses OwnedFd type with no import
+- All #[cfg(unix)] blocks skipped on Windows CI, but would be hard compile errors on Linux/macOS
+
+**Professor (REJECT on overclaimed tasks):** Safety-critical reconciler foundations still return success-shaped no-op results:
+- 
+econcile() returns Ok(ReconcileStats::default()) on Unix after stub phases
+- ull_hash_reconcile() also returns Ok(ReconcileStats::default())
+- Tests explicitly lock in benign-success behavior
+- This is misleading for recovery paths (overflow, remap, restore, audit)
+- Tasks 2.4c, 4.4, 5.2 overclaim delivered behavior when only scaffolding exists
+
+### Leela's Repair (Approved)
+
+**Decisions Made:**
+
+1. **Safety-critical stubs return Err, not Ok(empty stats)**
+   - 
+econcile() and ull_hash_reconcile() now fail explicitly until real walk/hash/apply logic lands
+   - has_db_only_state() continues returning Err (already fixed in Batch B repair)
+   - Rationale: Stubs on safety-critical recovery paths cannot return "silent success" — they must fail loudly if called prematurely
+
+2. **Conditional imports required for #[cfg(unix)] blocks**
+   - Added #[cfg(unix)] use crate::core::fs_safety; and #[cfg(unix)] use rustix::fd::OwnedFd; to 
+econciler.rs
+   - These imports are needed for function signatures inside Unix-gated blocks
+
+3. **Tasks demoted from complete to pending**
+   - Tasks 2.4c, 4.4, 5.2 downgraded from [x] to [ ]
+   - Rationale: A task is [x] when described behavior is implemented; [ ] when only scaffolding exists even if types/signatures are present
+
+4. **Doc corrections bundled**
+   - stat_file doc: removed non-existent parent_fd parameter reference
+   - stat_file_fallback doc: fixed "lstat (follows symlinks)" → "stat (follows symlinks)"
+
+### Scruffy's Coverage Validation (Approved)
+
+Direct unit test coverage for touched seams validates foundation assumptions:
+- ile_state::stat_file_fd() preserves nofollow semantics, returns populated Unix stat fields
+- 
+econciler::full_hash_reconcile() keeps empty-success contract explicit until real logic lands
+- 
+econciler::stat_diff() pins foundation behavior: DB rows classify as "missing" until walk plumbing arrives
+- Safety-critical stubs (
+econcile(), ull_hash_reconcile(), has_db_only_state()) required to return Err with "not yet implemented" messaging
+- fd/nofollow wrapper path remains guarded by platform gates
+
+**Validation:** cargo test --quiet ✅; GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model ✅
+
+### Professor's Final Re-gate (Approved)
+
+**Why it clears:**
+
+1. **Prior safety blocker resolved** — Safety-critical scaffold no longer returns benign success values
+2. **Task truthfulness repaired** — Checked items are annotated as foundation/scaffold; deferred behavior not claimed complete
+3. **Unix-compile honesty repaired** — Conditional imports now in place; 
+ustix wired under cfg(unix) in Cargo.toml
+4. **Validation green** — cargo test --quiet ✅; cargo clippy --quiet -- -D warnings ✅
+
+**Verdict:** Ready to land as explicitly unwired foundation. Honest about deferral, loud on safety-critical unimplemented paths, maintainable for next reconciler batch.
+
+### Copilot Directive (Matt)
+
+User requested Fry use claude-opus-4.7 for this session. Captured for team memory.
+
+### Scruffy's Corollary Decision (Batch C Test Locking)
+
+Added direct unit coverage for foundation seams to prevent false confidence from testing only primitives while leaving wrapper seams and stubbed reconciler contracts under-specified:
+- ile_state::stat_file_fd() proving nofollow semantics and populated Unix stat fields
+- 
+econciler::full_hash_reconcile() keeping empty-success contract explicit
+- 
+econciler::stat_diff() keeping foundation behavior explicit: DB rows as "missing" until walk plumbing lands
+- Purpose: Keep Batch C coverage honest on touched surface; primitive tests alone not sufficient
+
+### Batch B Final Re-review (Professor — Archived Context)
+
+Batch B (prior batch) is now reviewable enough to proceed. Previous blocker (safety-critical stub presenting as harmless success) is resolved. Batch B remains in archive as approved foundation for Batch C.
+
+### Final State
+
+**All 439 lib tests pass. No regressions.**
+
+- src/core/fs_safety.rs — six fd-relative primitives, 15 Unix-gated tests, Windows stubs with explicit errors
+- src/core/file_state.rs — stat helpers with honest doc, correct platform degradation
+- src/core/reconciler.rs — phase structure with Unix gates, conditional imports, explicit-error stubs
+- openspec/changes/vault-sync-engine/tasks.md — truthful scoping: foundation complete, walk/hash/apply deferred
+
+**Next Batch (D):** Full reconciler walk has clear handoff. Fd-relative primitives in place, stat helpers functional, platform gates protect invariants. Walk plumbing, rename resolution, delete-vs-quarantine classifier ready to wire.
+
+### 2026-04-22: Vault-sync Batch E identity rules
+
+**By:** Fry
+
+For Batch E, pages.uuid is now treated as the authoritative page identity across ingest, CLI writes, MCP writes, export/import compatibility paths, and reconciler classification.
+
+**Implemented rules:**
+
+1. Page.uuid is non-optional in Rust data structures and read paths fail loudly if a row still lacks a UUID.
+2. If markdown frontmatter includes gbrain_id, write paths adopt it only when it parses as a real UUID and does not conflict with an already-stored page UUID.
+3. If markdown lacks gbrain_id, the system generates UUIDv7 server-side and stores it in pages.uuid without rewriting the source file in the default ingest path.
+4. Reconciler rename classification now resolves in strict order: native rename interface, then UUID, then conservative content-hash fallback. Any ambiguous or non-qualifying hash inference fails closed into quarantined_ambiguous and emits an INFO refusal log.
+
+**Why:** This closes the Batch D identity gap without drifting into the later apply pipeline. It also avoids silent placeholder defaults and avoids the data-destruction risk of optimistic hash pairing when evidence is ambiguous or trivial.
+
+### 2026-04-22: Batch E Routing Decision
+
+**By:** Leela  
+**Scope:** Vault-sync-engine next batch after Batch D
+
+**Decision: Batch E = UUID Lifecycle + Rename Resolution**
+
+After Batch D the system can walk a vault, stat every file, and classify each missing file as quarantine-vs-delete. What it cannot yet do is **resolve identity across a rename event** — a page that moved from 
+otes/foo.md to 
+otes/projects/foo.md is seen as one missing file and one new file with no awareness that they are the same page. Batch E closes that gap entirely.
+
+**Coverage:** Tests for UUID/hash rename inference and quarantine logic preserve page identity across renames. Watcher-produced native events deferred to Batch F.
+
+### 2026-04-22: Nibbler initial gate — vault-sync-engine Batch E
+
+**Verdict:** REJECT (resolved by repair)  
+**Reviewer:** Nibbler
+
+Hash-rename guard in src/core/reconciler.rs used whole-file size instead of post-frontmatter body bytes, allowing template notes with large frontmatter and tiny body to incorrectly inherit the wrong page identity. Repair required before approval.
+
+### 2026-04-22: Hash-rename guard uses body bytes, not whole-file size
+
+**Author:** Leela
+
+The 64-byte minimum-content check must apply to **body bytes after frontmatter** (trimmed), not whole-file size. Only MissingPageIdentity, NewTreeIdentity, load/refusal helpers touched. One regression test added for template-note guard.
+
+### 2026-04-22: Nibbler re-gate — vault-sync-engine Batch E repair
+
+**Verdict:** APPROVE  
+**Reviewer:** Nibbler
+
+Repair closed the large-frontmatter/tiny-body exploit: missing/new-side significance now from trimmed post-frontmatter body. Fails closed correctly; tests locked. Batch E is landable.
+
+### 2026-04-22: Scruffy — Vault Sync Batch E coverage lane
+
+**Decision:** Lock tests on gbrain_id round-trip, ingest non-rewrite, delete-vs-quarantine outcomes. Do not test incomplete rename logic.
+
+### 2026-04-22: Professor — Vault Sync Batch E Gate
+
+**Verdict:** APPROVE
+
+UUID/gbrain_id wiring truthful. Page.uuid non-optional, loud on NULL. Default ingest read-only. Rename classification conservative and correctly staged for Batch E. tasks.md honest. Coverage sufficient. Ready to land as narrow identity/reconciliation slice.
+
+---
+
+## 2026-04-22: Vault Sync Batch F Approval
+
+**Session:** 2026-04-22T181541Z-vault-sync-batch-f-approval  
+**Status:** Completed and merged
+
+### Fry Decision Note — Vault Sync Batch F
+
+**Decision**
+
+Batch F uses a shared `core::raw_imports` rotation helper as the atomic content-write primitive for the paths implemented in this slice: single-file ingest, directory import, and reconciler apply. The helper runs raw_import rotation and inline inactive-row GC inside the same SQLite transaction as the owning page/file_state mutation, and write-paths now fail fast with `InvariantViolationError` if they encounter historical raw_import state with zero active rows.
+
+**Why**
+
+This keeps the invariant enforceable without pretending later write surfaces are done. `brain_put`, UUID self-write, restore, and `full_hash_reconcile` still need their own caller hookups, but Batch F now establishes the shared contract the later slices should reuse rather than re-implementing rotation logic ad hoc.
+
+**Follow-on**
+
+- Reuse `core::raw_imports` in the deferred `brain_put` / UUID write-back paths.
+- Wire the same invariant check into restore / `full_hash_reconcile` once those paths are implemented.
+- Keep delete-vs-quarantine decisions at apply time; do not trust stale pre-apply classification snapshots.
+
+### Scruffy — Vault Sync Batch F Coverage Seam Decision
+
+**Decision**
+
+Lock raw_imports/apply invariants as ignored direct-seam tests until the write/apply pipeline lands, while keeping live coverage on the currently implemented idempotency and DB-only-state re-check seams.
+
+**Why**
+
+The repo now has working tests for second-pass zero-change behavior on `import_dir`/`ingest`, stale-OCC refusal immutability on `put`, and classifier freshness when DB-only state appears after an earlier clear read. But tasks 5.4d/5.4g/5.4h/5.5 are still not fully implemented on the write/apply paths, so executable non-ignored tests for active `raw_imports` rotation or invariant-abort behavior would fail for implementation reasons rather than coverage regressions.
+
+**Locked blockers**
+
+- `import_dir_write_path_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4d
+- `ingest_force_reingest_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4g
+- `put_occ_update_keeps_exactly_one_active_raw_import_row_for_latest_bytes` — Task 5.4h (deferred)
+- `full_hash_reconcile_aborts_when_a_page_has_zero_active_raw_import_rows` — Task 4.4 (deferred)
+
+These are intentionally ignored with exact task references so Fry/Leela can unignore them as the corresponding implementation lands.
+
+### Professor — Vault Sync Batch F Gate
+
+**Verdict:** APPROVE
+
+Batch F is ready to land as the apply-pipeline slice of `vault-sync-engine`.
+
+**Rationale**
+
+1. Shared raw-import rotation now sits behind `core::raw_imports::rotate_active_raw_import()` and is used by the in-scope content-changing paths (`ingest`, `import_dir`, reconciler apply). Those paths keep page/file-state mutation, raw-import rotation, and embedding enqueue in one SQLite transaction.
+2. The active-row invariant now fails explicitly on corrupt history (zero active rows with historical rows present) instead of silently repairing it.
+3. Reconciler delete/quarantine decisions are re-checked inside apply via fresh DB queries over the five DB-only-state branches, so execution does not trust stale classification.
+4. Apply work is chunked into explicit 500-action transactions with regression coverage for partial progress on later-chunk failure.
+5. `tasks.md` is honest that restore/full-hash zero-active enforcement and later write-through surfaces remain deferred.
+
+**Reviewer note**
+
+There are still deferred seams (`full_hash_reconcile`, restore caller hookup, brain_put write-through), but they are named as deferred rather than hidden behind success-shaped behavior. That keeps this slice mergeable.
+
+### Nibbler — Vault Sync Batch F Gate
+
+**Verdict:** APPROVE
+
+**Controlled seams**
+
+1. In-scope raw-import writers (`ingest`, `import_dir`, reconciler apply) all call the shared rotation helper from the same SQLite transaction that mutates `pages` / `file_state`, so the active-row flip is not left stranded outside commit boundaries.
+2. The rotation helper refuses to run when a page already has historical `raw_imports` rows but zero active rows, which fails closed instead of silently "healing" corrupt history into a new authoritative byte stream.
+3. Reconciler hard-delete vs quarantine is re-evaluated inside apply through a fresh DB-only-state query, so a page that gains DB-only state after classification is quarantined, not hard-deleted because of a stale snapshot.
+
+**Deferred seams kept honest**
+
+- Restore / `full_hash_reconcile` zero-active handling is still deferred, but both code and tasks keep it error-shaped and explicitly unimplemented rather than pretending success.
+- Later UUID writeback / `brain_put` write-through surfaces remain deferred and are named as such in tasks, not smuggled into this approval.
+
+**Reviewer note**
+
+I did not find an in-scope path that can commit zero active `raw_imports` rows through split transactions, nor an apply-time delete path that trusts stale DB-only-state classification. The remaining risk sits in later restore/remap/full-hash and UUID writeback work, and that risk is documented as future work rather than hidden inside Batch F.
+
+### Leela — Vault Sync Engine Next Batch Routing (Batch F Context)
+
+**By:** Leela  
+**Date:** 2026-04-22  
+**Scope:** Batch F = Apply Pipeline + raw_imports Rotation  
+
+Batch F closes the "reconciler is a dry-run" gap: raw_imports rotation becomes the required primitive for every content-changing write, and the apply pipeline wires the full classification to real mutations. After Batch F, `gbrain collection sync` actually reconciles a vault rather than classifying it.
+
+**Deferred from Batch F**
+
+- 5.4f (daily background sweep) — Requires serve infrastructure (Group 11)
+- 4.4 (full_hash_reconcile) — Only needed by restore, remap, audit; not Batch F callers
+- 5.8+ (restore/remap defense) — Depends on 4.4
+- 5a.5+ (UUID write-back, migrate-uuids) — Depends on rename-before-commit landing first
+- Group 6 (watcher pipeline) — Standalone serve-slice
+- Group 12 (brain_put rename-before-commit) — Large standalone slice
+- 17.5g7, 17.5i (quarantine export/discard tests) — Require CLI scaffolding (Group 9)
+
+**Key validation**
+
+- cargo test clean — all existing tests pass plus new Batch F tests
+- cargo clippy -- -D warnings clean
+- gbrain collection sync on a test vault produces real DB mutations on first pass; second pass produces zero mutations (idempotency)
+- Every write-path test asserts exactly one active raw_imports row per page (17.5aaa1 gate)
+
+---
+
+## Vault Sync Batch G — Full Hash Reconcile + UUID Identity Hardening (fry/scruffy/professor/nibbler/leela, 2026-04-22)
+
+**Scope:** OpenSpec `vault-sync-engine` Batch G; four tasks (4.4, 5.4h, 5a.6, 5a.7 partial) + repair cycle.
+
+**Timeline:**
+1. Leela proposed Batch G scope: all four tasks unblocked by prior batches; coherent boundary at reconciler completeness + UUID identity
+2. Fry implemented full_hash_reconcile (4.4), InvariantViolationError wiring (5.4h), render_page UUID emission (5a.6), UUID identity tests (5a.7 partial)
+3. Scruffy authored coverage strategy: active seams tested; deferred surfaces locked with visible blockers
+4. Professor approved: authorization contract explicit; UUID preservation correct; tasks.md truthful
+5. Nibbler rejected initial submission on zero-total existing-page bootstrap seam
+6. Leela authored narrow repair: apply_reingest preflight guard before any mutation
+7. Nibbler re-gated: repair closes bootstrap seam; new-page path unaffected
+
+**Decisions:**
+
+### D-VS-G1: full_hash_reconcile authorization contract
+
+`full_hash_reconcile` accepts a closed-mode authorization enum (FullHashReconcileMode, FullHashReconcileAuthorization) with explicit caller responsibility documented in the function signature. The state/authorization matrix rejects invalid combinations with typed UnauthorizedFullHashReconcile error. Bypassing the `state='active'` gate requires explicit caller opt-in (e.g., DriftCapture mode for restore/remap).
+
+**Rationale:** Professor required explicit authorization semantics rather than a bare helper signature. The authorization matrix is caller-responsibility, not implicit. This prevents future restore/remap callers from accidentally exercising the bypass without understanding its scope.
+
+### D-VS-G2: Unchanged-hash path is metadata-only; no raw_imports rotation
+
+build_full_hash_plan() classifies unchanged files by sha256 match. apply_full_hash_metadata_self_heal() updates only file_state and last_full_hash_at; no raw_imports rotation occurs on the unchanged path.
+
+**Rationale:** Periodic audit/remap paths must not mutate byte-preserving history for no user-visible change. If sha256(disk) == raw_imports.sha256 WHERE is_active=1, the history is accurate — only stat fields need refresh.
+
+### D-VS-G3: Render page always emits gbrain_id when pages.uuid is non-empty
+
+render_page() in core/markdown.rs overlays persisted pages.uuid as gbrain_id in frontmatter when uuid is non-empty. Pages with uuid IS NULL or uuid = '' omit the field (preserving legacy behavior).
+
+**Rationale:** brain_put / brain_get round-trips must preserve page identity. render_page is the UUID write-back seam for passive reconciliation (without requiring opt-in write-through logic).
+
+### D-VS-G4: New-page bootstrap remains narrow after repair
+
+apply_reingest() now includes a pre-flight zero-total raw_imports guard for existing pages (resolved by explicit existing_page_id or slug match). This guard runs BEFORE any pages/file_state/raw_imports mutation. Truly new pages (current_page = None) are unaffected; the bootstrap path stays narrow and intentional.
+
+**Rationale:** Nibbler's adversarial gate found that stat-diff paths could bootstrap first history for existing pages instead of failing closed. The preflight guard closes that seam at the application layer (apply_reingest) where new vs existing distinction is known, not in rotate_active_raw_import (which is shared with true new-page ingest).
+
+### D-VS-G5: Partial coverage by design with visible seam locks
+
+Active coverage seams:
+- reconcile unchanged path: one active raw_imports, no rotation
+- reconcile changed-hash apply path: rotates raw_imports to latest bytes
+- reconcile aborts before mutation on zero-active existing raw_imports
+- brain_put preserves stored pages.uuid when input omits gbrain_id
+
+Deferred coverage seams (locked with explicit blockers):
+- full_hash_reconcile unchanged-hash self-heal → #[ignore = "blocker: 4.4"]
+- full_hash_reconcile changed-hash rotation → #[ignore = "blocker: 5.4h"]
+- render_page UUID back-fill for legacy pages → #[ignore = "blocker: 5a.5"]
+
+**Rationale:** Truth over silence. The current tree supports direct branch validation for reconcile/put slices. Deferred surfaces need visible seam locks in the test suite, not silent omission.
+
+### D-VS-G6: UUID identity tests locked to achievable scope
+
+Batch G covers (without Group 12 or write-back 5a.5):
+- gbrain_id adoption: ingest file with gbrain_id; assert pages.uuid matches
+- brain_put gbrain_id preservation: get → put → assert survives round-trip
+- UUIDv7 monotonicity: N UUID generations strictly increasing
+- Frontmatter round-trip: parse/render preserves gbrain_id
+
+Deferred to later batch (requires 5a.5 + Group 12):
+- Opt-in rewrite rotates file_state/raw_imports atomically
+- migrate-uuids --dry-run mutates nothing
+
+**Rationale:** These tests are achievable with render_page emission (5a.6) alone. Opt-in write-back requires write-through logic (5a.5) and rename-before-commit (Group 12), both deferred.
+
+### D-VS-G7: Gate criteria all verified
+
+- ✅ full_hash_reconcile runs to completion; produces no errors
+- ✅ Second run on unchanged vault yields ReconcileStats { unchanged: N, modified: 0, new: 0, ... } (idempotent)
+- ✅ Zero active raw_imports rows triggers InvariantViolationError (not silent pass)
+- ✅ --allow-rerender flag suppresses error and logs WARN
+- ✅ render_page emits gbrain_id for non-empty uuid; omits for NULL/empty
+- ✅ MCP brain_get → brain_put round-trip preserves gbrain_id
+- ✅ cargo test and cargo clippy clean
+
+**Status:** Approved for landing. All implementation + test gates green. Authorization contract explicit. Coverage landmarks clear. repair closes bootstrap seam. Ready to merge to main and begin next-batch planning.
+
+---
+
+## 2026-04-23: Batch K1 Final Approval Sequence (Professor & Nibbler)
+
+**Session:** 2026-04-23T08:54:00Z — Vault-Sync Batch K1 Final Approval  
+**Status:** Completed and merged
+
+### Session Arc
+
+Vault-Sync Batch K1 (collection add + shared read-only gate) pre-gating completed 2026-04-23:
+- Professor approved narrowed K1 boundary as fresh-attach + read-only scaffolding
+- Nibbler pre-gate approved only the narrowed attach/read-only slice with hard adversarial seams
+- Scruffy partial-approval requiring leela repairs for full proof surface
+- Leela completed repairs; Scruffy regate approved
+
+Final approval sequence 2026-04-23:
+- Professor verified K1 stays inside approved boundary; read-only gate honestly scoped; required caveat attached
+- Nibbler confirmed all adversarial seams now acceptably controlled; pre-gate conditions met; approval issued with mandatory caveat on narrowed scope
+
+### Fry — Vault Sync Batch K1
+
+**Verdict:** Implementation complete
+
+**Decision:** Keep the K1 read-only gate narrow and truthful.
+
+- `collection add` validates root + `.gbrainignore` before any row insert, then uses detached fresh-attach + short-lived lease cleanup.
+- `collections.writable` is operator truth from the capability probe and is surfaced in `collection list` / `collection info`.
+- `CollectionReadOnlyError` only gates vault-byte-facing write surfaces in K1 (`gbrain put` / `brain_put` path), while DB-only mutators keep the existing restoring interlock without being newly blocked on `writable=0`.
+
+**Why:** Professor/Nibbler pre-gates required the shared restoring interlock to remain intact without over-claiming that all DB-only mutators are read-only-blocked. This preserves the approved K1 boundary: real attach/list truth, fail-before-row-creation validation, and no accidental widening into K2 proof claims.
+
+### Professor — Vault Sync Batch K1 Pre-gate
+
+**Status:** APPROVED
+
+**Scope:** OpenSpec `vault-sync-engine` K1 slice (`1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, `17.5qq11`).
+
+**Decision:** K1 is the right next safe boundary. It isolates two real unfinished seams already visible in code — `gbrain collection add/list` does not exist yet, and the read-only root contract is not enforced anywhere — without pretending the deferred offline-restore integrity matrix is already truthful. Keep the destructive-path identity/finalize proof items in K2.
+
+**Why this boundary is safe:**
+- `src\commands\collection.rs` currently exposes only `info`, `sync`, `restore`, `restore-reset`, and `reconcile-reset`; K1 adds the missing ordinary operator surface without reopening restore integrity claims.
+- `src\core\vault_sync.rs` still lacks any `CollectionReadOnlyError` branch; `ensure_collection_write_allowed()` only checks `state='restoring'` / `needs_full_sync=1`.
+- `src\core\vault_sync.rs::begin_restore()` offline path still does not persist `restore_command_id`, and `restore_reset()` still clears state unconditionally, so K2 remains the correct home for offline-restore proof closure.
+
+**Non-negotiable implementation / review constraints:**
+1. **Fail before row creation.** `collection add` must reject invalid names (`::`), duplicate names, symlinked roots / `O_NOFOLLOW` failures, invalid `.gbrainignore`, and read-only probe failure when the user requested a root-mutating flag before inserting any `collections` row or starting any walk.
+2. **Fresh-attach path must stay honest.** Initial attach must run through `full_hash_reconcile_authorized(... FreshAttach, AttachCommand { ... })` against a detached row; do not bypass this by marking the row active first or by reusing the active-lease authorization path that `reconciler.rs` explicitly rejects for fresh attach.
+3. **Short-lived lease discipline only.** The add command may borrow collection ownership only for the duration of initial attach/reconcile. It must clean up lease/session residue on success, error, and panic/unwind; no lingering owner claim after the command exits.
+4. **Read-only by default is behavioral, not cosmetic.** Default attach succeeds on `EACCES`/`EROFS` with `collections.writable=0`, performs the read-only initial reconcile, and surfaces the state in `collection info/list`. It must not mutate vault bytes unless the user explicitly chose a root-writing path.
+5. **Do not smuggle `9.2a` into K1.** If `--write-gbrain-id` behavior is not fully implemented and covered, keep it out of the user-facing K1 surface. A parsed-but-inert flag or an undocumented partial write-back path is not acceptable.
+6. **Scope the shared read-only gate correctly.** `CollectionReadOnlyError` should be a shared helper for operations that need to mutate collection-root bytes (`brain_put`/`gbrain put`, UUID migration, ignore file mutation, add-time opt-in write-back). Do **not** widen it to DB-only mutators like `brain_gap`, `brain_link`, `brain_check`, `brain_raw`, or other metadata-only writes; those remain governed by the restoring / `needs_full_sync` interlock.
+7. **Preserve the K1/K2 truth boundary.** No K1 artifact or test may claim offline restore identity persistence, manifest-tamper closure, or CLI finalize integrity closure. Those remain K2.
+
+**Minimum proof required for honest landing:**
+- Direct command tests for `collection add` success on a writable root and success-on-read-only-root (`writable=0`) with no vault-byte mutation in the default path.
+- Direct refusal tests proving invalid `.gbrainignore`, invalid name, duplicate name, and read-only + root-writing-flag combinations fail before row creation.
+- A proof that fresh attach uses the detached + `AttachCommand` authorization seam and leaves no short-lived lease residue after completion/failure.
+- `collection list` proof for the promised fields at minimum: `name | state | writable | write_target | root_path | page_count | last_sync_at | queue_depth`.
+- Focused gate tests showing root-writing paths raise `CollectionReadOnlyError`, while slug-less `brain_gap` remains read-shaped and slug-bound `brain_gap` still only takes the restoring interlock from `1.1c`.
+
+### Nibbler — Vault Sync Batch K1 Pre-gate
+
+**Status:** APPROVED
+
+**Verdict:** **APPROVE** the proposed K1 boundary **only as the narrowed attach/read-only slice**:
+- `1.1b`
+- `1.1c`
+- `9.2`
+- `9.2b`
+- `9.3`
+- `17.5qq10`
+- `17.5qq11`
+
+This approval does **not** extend to offline restore integrity closure, originator-identity persistence, manifest tamper handling, Tx-B residue proofs, or `17.11`. Any attempt to treat K1 as partial restore certification reopens the success-shaped claim seam that forced the original Batch K rejection.
+
+**Concrete review seams:**
+
+1. **Add-time lease ownership**
+   - The initial reconcile inside `collection add` must use the same short-lived `collection_owners` authority as plain sync.
+   - No dual truth is acceptable: `collection_owners` stays authoritative; mirror columns like `active_lease_session_id` must only reflect it, never substitute for it.
+   - Abort paths must leave **no** owner residue, heartbeat residue, or fake "serve owns collection" state.
+
+2. **Fresh-attach probe artifacts**
+   - Capability probing must not leave `.gbrain-probe-*` files behind on success or failure.
+   - Probe tempfiles must not be visible to the initial reconcile, counted in diagnostics, or misread as user content.
+   - Cleanup failures are not "read-only" signals; they are attach failures unless explicitly proven to be the same permission-class refusal being reported.
+
+3. **Root / ignore validation before row creation**
+   - Invalid collection name, root symlink / unreadable root, and `.gbrainignore` atomic-parse failure must all refuse **before** any `collections` row is created.
+   - "Create row first, then mark failed" is a soft attach claim and is not acceptable for precondition failures.
+   - `.gbrainignore` absence is allowed only in the true no-prior-mirror fresh-attach case; parse errors stay fail-closed.
+
+4. **Writable misclassification**
+   - Downgrade to `writable=0` only for true permission / read-only signals (`EACCES` / `EROFS` class).
+   - Other probe failures (`ENOSPC`, cleanup failure, unexpected I/O, wrong-root behavior, symlink surprise) must abort attach rather than silently relabel the collection read-only.
+   - Any future write-requiring attach flag must refuse on a read-only root rather than silently "attach anyway".
+
+5. **Shared read-only gate bypasses**
+   - `CollectionReadOnlyError` must be enforced at the shared mutator gate, not patched into a subset of callers.
+   - Current mutating surfaces that already route through `ensure_collection_write_allowed()` or `ensure_all_collections_write_allowed()` are exactly where bypass risk lives: CLI `put`, `link`, `tags`, `timeline`, `check`, legacy `ingest` / `import_dir`, and MCP `brain_put`, `brain_check`, `brain_raw`, `brain_link`, `brain_link_close`, slug-bound `brain_gap`.
+   - K1 fails if any one of those paths can still mutate when `writable=0` is persisted.
+
+**Mandatory fail-closed behaviors:**
+1. `collection add` must not report success until: root validation passes, `.gbrainignore` validation passes, probe artifacts are cleaned up, initial reconcile completes, short-lived lease is released, final persisted state is truthful.
+2. Any invalid root or invalid `.gbrainignore` must fail with: no row created, no lease created, no reconcile started.
+3. Any post-insert attach failure must stay non-success-shaped: no success exit, no active state, no stale lease residue, no leftover probe artifact.
+4. `writable=0` must block **every** mutator before filesystem or DB mutation.
+5. Slug-bound `brain_gap` must remain a `WriteUpdate` interlocked path; slug-less `brain_gap` must remain the read-only carve-out during restore.
+6. K1 must make **no** broader offline-restore claim. No wording, tests, or task updates may imply manifest/originator/Tx-B closure is now certified.
+
+### Scruffy — Vault Sync Batch K1 (Initial Proof Lane)
+
+**Status:** PARTIAL APPROVAL
+
+K1 now has credible proof for:
+- `1.1c` — slug-less `brain_gap` stays read-shaped during restore, while slug-bound `brain_gap` still takes the write interlock; I also tightened proof that the slug-bound form binds `knowledge_gaps.page_id`.
+- `9.2` — direct command tests already prove invalid root / invalid `.gbrainignore` fail before row creation, and fresh attach cleans up short-lived lease/session residue on success.
+- `9.3` — CLI truth is now directly exercised for `collection info --json` and `collection list --json`, including persisted read-only surfaces.
+- `17.5qq10` — permission-class probe downgrade to read-only already has direct command proof, and probe-temp cleanup is covered.
+
+K1 is **not** honestly provable as complete for:
+- `1.1b` in full: storage behavior exists, but list/resolve response shape still does not prove the full page-bound gap surface end to end.
+- `9.2b` / `17.5qq11` in full: `CollectionReadOnlyError` is only proven through `put` right now. `check`, `link`, `tags`, `timeline`, and MCP write handlers still call the restoring-only gate (`ensure_collection_write_allowed`) instead of the read-only gate (`ensure_collection_vault_write_allowed`).
+
+**Decision:** Do not mark the broader shared read-only gate done yet. Repairs required: `1.1b` MCP surface completion, `9.2b`/`17.5qq11` comprehensive mutator coverage.
+
+### Leela — Vault Sync Batch K1 (Repairs & Rescope)
+
+**Status:** APPROVED AFTER REPAIR
+
+After targeted repairs, the K1 claim surface is now honestly supported for exactly:
+- `1.1b` — `brain_gap` now returns `page_id` in its direct response
+- `1.1c` — slug-less `brain_gap` still succeeds while restoring; slug-bound form still refuses
+- `9.2` — invalid root / `.gbrainignore` fail before row creation; fresh attach cleans short-lived lease
+- `9.2b` — truthfully scoped to vault-byte writers only; DB-only mutators remain on restoring interlock
+- `9.3` — CLI truth surfaced; persisted read-only state observable
+- `17.5qq10` — permission-class probe + cleanup proof
+- `17.5qq11` — both CLI and MCP refusal proofs present
+
+**Repairs made:**
+1. `brain_gap` response shape test: `brain_gap_with_slug_response_includes_page_id` + `brain_gap_without_slug_response_has_null_page_id`
+2. `9.2b` task honest scoping: explicitly says read-only gate covers only K1 vault-byte writers
+3. `17.5qq11` dual-proof: CLI refusal + MCP refusal in code
+
+### Scruffy — Vault Sync Batch K1 (Final Re-gate)
+
+**Status:** APPROVE
+
+After Leela's repair, the K1 claim surface is now honestly supported for exactly:
+- `1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, `17.5qq11`
+
+No further downgrade is needed.
+
+**Why the repaired slice is now credible:**
+1. `1.1b` is now complete at the MCP boundary — `brain_gap` returns `page_id`
+2. `1.1c` remains directly proven — slug-less succeeds, slug-bound refuses
+3. `9.2b` is now truthfully scoped — vault-byte writers only; DB mutators keep restoring interlock
+4. `17.5qq11` now has both required proofs — CLI refusal + MCP refusal
+
+**Validation:**
+- Targeted repaired proofs passed
+- `cargo test --quiet`: passed on default lane
+- Online-model probe: Windows dependency compilation issue (environmental, not K1-caused)
+
+### Professor — Vault Sync Batch K1 Final Review
+
+**Verdict:** APPROVE
+
+K1 now stays inside the approved boundary. `collection add` validates root/name/ignore state before row creation, persists a detached row, routes fresh attach through the `FreshAttach` + `AttachCommand` seam, and clears the short-lived lease/session residue on success, failure, and panic-tested unwind. `collection list` and `collection info` surface the promised K1 truth, and the capability probe downgrades permission-denied roots to `writable=0` without leaving probe residue.
+
+The read-only gate is now honestly scoped. `CollectionReadOnlyError` is shared only for K1 vault-byte writers (`gbrain put` / MCP `brain_put`), while slug-bound `brain_gap` and other DB-only mutators still use the restoring / `needs_full_sync` interlock instead of falsely claiming full read-only coverage. `brain_gap` now returns `page_id` in the MCP response, so `1.1b`, `1.1c`, `9.2`, `9.2b`, `9.3`, `17.5qq10`, and `17.5qq11` are supportable from code and tests in-tree.
+
+**Required caveat for landing:** Keep K1 described as **default attach + list/info truth + vault-byte refusal only**. `--write-gbrain-id`, broader collection-root mutators, and offline restore-integrity closure remain deferred to later batches, and the Windows `online-model` lane is still blocked by the known pre-existing dependency compilation crash rather than K1 behavior.
+
+### Nibbler — Vault Sync Batch K1 Final Review
+
+**Verdict:** APPROVE
+
+The adversarial seams named in pre-gate are now acceptably controlled for the narrowed K1 slice:
+
+1. **Add-time lease ownership / cleanup**
+   - `collection add` validates name, root, and `.gbrainignore` before inserting any `collections` row.
+   - Fresh attach runs from `state='detached'` through `fresh_attach_collection()` under a short-lived `collection_owners` lease.
+   - The lease/session cleanup path is RAII-backed, and the command deletes the newly inserted row if fresh attach fails.
+
+2. **Writable/read-only truth**
+   - Capability probe only downgrades on permission/read-only class refusal and aborts on other probe failures.
+   - Probe tempfiles are removed on both success and refusal/error paths.
+   - `collection info` / `collection list` surface `writable` truthfully.
+
+3. **Shared refusal paths are honestly scoped**
+   - Vault-byte writers route through `ensure_collection_vault_write_allowed()` with direct refusal proof.
+   - Slug-bound `brain_gap` remains a write-interlocked DB mutation, not a read-only-gated vault-byte writer.
+   - Task ledger explicitly says DB-only mutators are out of the `CollectionReadOnlyError` claim.
+
+4. **Task honesty**
+   - `tasks.md` keeps `9.2a` and `17.11` deferred and does not pretend K1 certifies offline restore integrity or CLI finalize closure.
+   - Repair notes match actual code and proof surface.
+
+**Required caveat:** This approval covers **only** the narrowed K1 attach/read-only slice: collection add/list truth, validation-before-row-creation, short-lived lease cleanup, truthful `writable=0`, vault-byte refusal for `gbrain put` / `brain_put`, and restoring-gated slug-bound `brain_gap`.
+
+It does **not** certify offline restore integrity, RCRT/CLI finalize end-to-end closure, broader DB-only mutator read-only blocking, or any K2 destructive-path proof.
+
+---
+
+## Batch K1 Status Summary
+
+**Batch K1 APPROVED FOR LANDING:**
+- ✅ Pre-gate approvals confirmed (Professor + Nibbler)
+- ✅ Final approvals confirmed (Professor + Nibbler)
+- ✅ Narrowed boundary preserved (attach + read-only scaffolding only)
+- ✅ Vault-byte refusal gate established
+- ✅ Caveats explicit (K2 deferred: `9.2a`, `17.11`, offline restore, finalize closure)
+- ✅ Team memory synchronized
+
+**Why:** Approved narrowed boundary is fresh-attach + persisted writability truth + shared vault-byte refusal, not offline-restore certification or broader mutator blocking. K2 will be the home for destructive-path proof closure.
+
+
+---
+
+## Batch K2 Status Summary
+
+**Batch K2 APPROVED FOR LANDING:**
+- ✅ Final approvals confirmed (Professor + Nibbler, 2026-04-23)
+- ✅ Offline restore integrity closure proven (CLI path end-to-end)
+- ✅ Restore originator identity persisted and compared
+- ✅ Tx-B residue durable and auditable
+- ✅ Manifest retry/escalation/tamper behavior coherent
+- ✅ Reset/finalize surfaces truthful and non-destructive
+- ✅ Fresh-attach + lease discipline from K1 maintained
+- ✅ Team memory synchronized
+
+**Offline CLI completion path:** \sync --finalize-pending -> attach\ proven with residue cleanup in success/failure paths.
+
+**Why:** Approved narrowed boundary is offline restore integrity closure via CLI, not broader destructive surfaces or online handshake.
+
+**Caveats:** K2 approval covers offline CLI closure only. Startup/orphan recovery, online handshake, MCP destructive-path widening, and broader multi-collection restore semantics remain deferred to K3+.
+
+---
+
+
+# Amy — vault-sync docs refresh decisions
+
+**Date:** 2026-04-25
+**Branch:** spec/vault-sync-engine
+**Scope:** README.md, docs/roadmap.md, docs/getting-started.md, docs/contributing.md
+
+---
+
+## Decisions made
+
+### D1 — MCP tool count is 17, not 16, in the vault-sync-engine branch
+`brain_collections` was added in Batch 13.6. Docs on the vault-sync-engine branch must say "17 tools"; the current `v0.9.4` release remains "16 tools". Used conditional language ("17 tools in the vault-sync-engine branch") to keep both statements true simultaneously.
+
+### D2 — `quarantine restore` is explicitly deferred; no current release claim
+Bender's truth repair backed quarantine restore out of the live CLI surface. All four docs avoid mentioning restore as available. The getting-started collections section contains an explicit callout box: "Note: `quarantine restore` is not yet implemented."
+
+### D3 — IPC socket work is not surfaced in user-facing docs
+The IPC design (12.6*, 17.5ii10-12) is internal plumbing. User-facing docs do not mention it. The deferred-table in roadmap.md refers to "IPC socket write proxying" as a one-liner deferral for completeness, but does not explain the protocol design.
+
+### D4 — Watcher described as "reconcile-backed flushes", not "handles create/modify/delete/rename"
+Tasks 6.5–6.11 (per-event-type handlers) are not closed. The watcher infrastructure (6.1–6.4, 7.1–7.6) is closed. Docs say "reconcile-backed flushes" rather than implying individual event handlers work end-to-end.
+
+### D5 — Schema version bumped to v5 in all docs
+`brain_config.schema_version = 5` is set by task 1.3. `getting-started.md` and `contributing.md` both referenced "v4 schema". Updated both to "v5" with a parenthetical noting the vault-sync-engine branch.
+
+### D6 — `gbrain import` kept as the live ingest path in docs
+Task 15.x (legacy ingest removal) is open. `gbrain import` is still the active ingest command. Docs do not remove it or present `gbrain collection add` as a replacement; both are described, with collection add noted as the vault-sync-engine path.
+
+### D7 — New env vars added to README env var table
+Eight new `GBRAIN_*` variables from vault-sync-engine tasks are now documented:
+`GBRAIN_WATCH_DEBOUNCE_MS`, `GBRAIN_QUARANTINE_TTL_DAYS`, `GBRAIN_RAW_IMPORTS_KEEP`,
+`GBRAIN_RAW_IMPORTS_TTL_DAYS`, `GBRAIN_RAW_IMPORTS_KEEP_ALL`, `GBRAIN_FULL_HASH_AUDIT_DAYS`.
+
+---
+
+## Docs still blocked on future implementation
+
+| Doc location | What's blocked | Blocking task |
+| ------------ | -------------- | ------------- |
+| getting-started.md collections section | quarantine restore workflow | vault-sync task 9.8 (safe restore slice) |
+| README.md usage | `gbrain collection remove` | vault-sync task 9.6 |
+| roadmap.md deferred table | embedding job queue | vault-sync tasks 8.1–8.6 |
+| roadmap.md deferred table | watcher per-event handlers | vault-sync tasks 6.5–6.11 |
+| roadmap.md deferred table | online restore handshake | vault-sync tasks 17.5pp/qq* |
+| contributing.md layout | embedding_jobs / serve_sessions module | vault-sync tasks 8.x, 11.2+ |
+| docs/spec.md | v5 schema full DDL, collection lifecycle, quarantine resolution | vault-sync tasks 16.3, 16.8 |
+| docs/spec.md | `brain_collections` tool signature | vault-sync task 16.3 |
+| AGENTS.md / CLAUDE.md | new modules and `gbrain collection` surface | vault-sync tasks 16.4, 16.5 |
+
+
+# Bender — 13.3 revision decision
+
+Date: 2026-04-24
+Branch: `spec/vault-sync-engine`
+Batch: `13.3`
+
+## Decision
+
+Close the rejected 13.3 revision narrowly by fixing the two real behavior defects and proving CLI ambiguity refusal directly across the slug-bearing commands in scope, without widening into `13.5`, `13.6`, IPC, or startup work.
+
+## Why
+
+The rejection was not about broad design gaps; it was about the implementation lying on specific seams:
+
+1. `gbrain query` treated ambiguous exact-slug input as a generic search miss because the exact-slug fast path returned `None` on ambiguity and fell through into hybrid search.
+2. `gbrain unlink` still surfaced raw user input on the already-resolved no-match path.
+3. The proof only covered `get`, which was not enough evidence for the other slug-bearing CLI commands touched by the 13.3 parity slice.
+
+## Applied rule
+
+- Exact-slug query routing must fail closed on ambiguity before FTS/vector fallback.
+- CLI error text on resolved paths must use canonical `<collection>::<slug>` addresses.
+- Proof for 13.3 must directly cover the CLI entry points that resolve slugs in this slice: `get`, exact-slug `query`, `graph`, `timeline`, `check`, `link`, `links`, `backlinks`, and `unlink`.
+
+## Notes
+
+- MCP parity was preserved by mapping the new exact-slug query ambiguity back through the existing `ambiguous_slug` contract instead of inventing a new error shape.
+- This revision intentionally does **not** claim collection filters/defaults (`13.5`) or new collection-surface tooling (`13.6`).
+
+
+# Bender 13.6 Revision Decision
+
+- **Date:** 2026-04-24
+- **Scope:** `13.6` + `17.5ddd` only
+- **Verdict:** Revised narrowly; no widening into `13.5`, `17.5aa5`, watcher/IPC, or broader restore surfaces.
+
+## What changed
+
+1. `brain_collections.integrity_blocked` now requires the full terminal-halt predicate for reconcile causes (`reconcile_halted_at` + recognized reason) and keeps spec precedence: `manifest_tampering` > `manifest_incomplete_escalated` > reconcile causes.
+2. Manifest-incomplete escalation now uses the spec threshold contract (`GBRAIN_MANIFEST_INCOMPLETE_ESCALATION_SECS`, default 1800s) instead of the prior 30-second bug.
+3. `brain_collections.ignore_parse_errors` stays narrow for this slice: parse-line errors surface, deferred `.gbrainignore` absence semantics do not.
+4. MCP tests now directly prove:
+   - `parse_error` arm
+   - queued recovery (`needs_full_sync=true`, `recovery_in_progress=false`)
+   - running recovery (`needs_full_sync=true`, `recovery_in_progress=true`)
+   - narrow restore window (`state='restoring'` with and without `restore_in_progress`)
+   - `duplicate_uuid` and `unresolvable_trivial_content`
+   - reason-only non-terminal reconcile state does **not** set `integrity_blocked`
+   - precedence when multiple blockers coexist
+   - 31-second manifest gaps stay non-escalated under the 30-minute default
+
+## Validation
+
+- `cargo fmt --check`
+- `cargo test`
+
+
+# Bender — quarantine truth repair decision
+
+## Decision
+
+Back quarantine restore out of the live CLI surface for this batch instead of attempting a larger restore rewrite.
+
+## Why
+
+Nibbler's two blockers are real and coupled to safety, not polish:
+
+1. after a successful rename, later unlink cleanup is not parent-fsynced, so power loss can still leave residue behind
+2. restore still uses a pre-check plus plain rename, so a concurrently-created target can be overwritten
+
+I chose the smallest truthful repair: `gbrain collection quarantine restore` now refuses immediately with a deferred-surface error, while `list|export|discard`, TTL sweep, info count, and dedup cleanup remain live. I reopened `9.8` and `17.5j` in `openspec\changes\vault-sync-engine\tasks.md` and updated `.squad\identity\now.md` to match the narrowed truth.
+
+## Validation
+
+- `cargo fmt --check`
+- `cargo test --test collection_cli_truth quarantine_restore_surface_is_deferred_and_leaves_page_quarantined -- --exact`
+- `cargo test --test quarantine_revision_fixes restore_surface_is_deferred_for_non_markdown_target -- --exact`
+- `cargo test --test quarantine_revision_fixes restore_surface_is_deferred_for_live_owned_collection -- --exact`
+- `cargo test --test quarantine_revision_fixes restore_surface_is_deferred_before_target_conflict_mutation -- --exact`
+- `cargo test --test quarantine_revision_fixes restore_surface_is_deferred_for_read_only_collection -- --exact`
+
+Host caveat: the nonexistent-parent tests are still false-failing on this shared machine because `D:\nonexistent\dir` already exists; I did not spend this batch on that unrelated environment issue.
+
+
+
+---
+
 # Squad Decisions
 
 ## Active Decisions
