@@ -192,6 +192,8 @@ pub struct MemoryCollectionView {
     pub page_count: i64,
     pub last_sync_at: Option<String>,
     pub embedding_queue_depth: i64,
+    #[serde(skip_serializing)]
+    pub failing_jobs: i64,
     pub ignore_parse_errors: Option<Vec<IgnoreParseErrorView>>,
     pub needs_full_sync: bool,
     pub recovery_in_progress: bool,
@@ -934,7 +936,15 @@ pub fn list_memory_collections(
                  FROM embedding_jobs ej
                  JOIN pages p ON p.id = ej.page_id
                  WHERE p.collection_id = c.id
+                   AND ej.job_state IN ('pending', 'running')
              ), 0) AS embedding_queue_depth,
+             COALESCE((
+                 SELECT COUNT(*)
+                 FROM embedding_jobs ej
+                 JOIN pages p ON p.id = ej.page_id
+                 WHERE p.collection_id = c.id
+                   AND ej.job_state = 'failed'
+             ), 0) AS failing_jobs,
              CASE
                  WHEN c.pending_manifest_incomplete_at IS NOT NULL
                   AND strftime('%s', 'now') - strftime('%s', c.pending_manifest_incomplete_at) >= ?1
@@ -965,7 +975,8 @@ pub fn list_memory_collections(
                 row.get::<_, Option<String>>(14)?,
                 row.get::<_, i64>(15)?,
                 row.get::<_, i64>(16)?,
-                row.get::<_, i64>(17)? != 0,
+                row.get::<_, i64>(17)?,
+                row.get::<_, i64>(18)? != 0,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -990,6 +1001,7 @@ pub fn list_memory_collections(
                 watcher_released_at,
                 page_count,
                 embedding_queue_depth,
+                failing_jobs,
                 manifest_incomplete_escalated,
             )| {
                 let state = state_raw.parse()?;
@@ -1034,6 +1046,7 @@ pub fn list_memory_collections(
                     page_count,
                     last_sync_at: collection.last_sync_at.clone(),
                     embedding_queue_depth,
+                    failing_jobs,
                     ignore_parse_errors: parse_ignore_parse_errors(
                         collection.ignore_parse_errors.clone(),
                     )?,
@@ -1757,10 +1770,22 @@ fn run_startup_sequence(
     sweep_stale_sessions(conn)?;
     claim_owned_collections(conn, session_id)?;
     recover_owned_collection_sentinels(conn, &recovery_root_for_db_path(db_path), session_id)?;
+    let _ = resume_orphaned_embedding_jobs(conn)?;
     let _ = quarantine::sweep_expired_quarantined_pages(conn);
     let _ = run_rcrt_pass(conn, session_id);
     sync_supervisor_handles(conn, session_id)?;
     Ok(())
+}
+
+pub(crate) fn resume_orphaned_embedding_jobs(conn: &Connection) -> Result<usize, VaultSyncError> {
+    conn.execute(
+        "UPDATE embedding_jobs
+         SET job_state = 'pending',
+             started_at = NULL
+         WHERE job_state = 'running'",
+        [],
+    )
+    .map_err(Into::into)
 }
 
 pub fn database_path(conn: &Connection) -> Result<String, VaultSyncError> {
@@ -3180,6 +3205,8 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         let mut last_dedup_sweep = Instant::now();
         #[cfg(unix)]
         let mut last_overflow_recovery = Instant::now();
+        let mut last_embedding_drain =
+            Instant::now() - Duration::from_secs(embedding_drain_interval_secs());
         while !stop_signal.load(Ordering::SeqCst) {
             if let Ok(conn) = Connection::open(&db_path) {
                 if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_INTERVAL_SECS) {
@@ -3254,6 +3281,12 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 }
                 let _ = run_rcrt_pass(&conn, &session_id_for_thread);
                 let _ = sync_supervisor_handles(&conn, &session_id_for_thread);
+                if last_embedding_drain.elapsed()
+                    >= Duration::from_secs(embedding_drain_interval_secs())
+                {
+                    let _ = drain_embedding_queue(&conn);
+                    last_embedding_drain = Instant::now();
+                }
                 #[cfg(unix)]
                 {
                     let _ = publish_watcher_health(&session_id_for_thread, &watchers);
@@ -3276,6 +3309,230 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
         handle: Some(handle),
         session_id,
     })
+}
+
+#[derive(Debug, Clone)]
+struct EmbeddingJobClaim {
+    id: i64,
+    page_id: i64,
+    attempt_count: i64,
+}
+
+fn embedding_drain_interval_secs() -> u64 {
+    2
+}
+
+fn configured_embedding_concurrency() -> usize {
+    std::env::var("QUAID_EMBEDDING_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| {
+            thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+                .min(4)
+        })
+}
+
+fn embedding_backoff_secs(attempt_count: i64) -> i64 {
+    match attempt_count {
+        count if count <= 0 => 0,
+        count => 1_i64 << ((count - 1).min(4) as u32),
+    }
+}
+
+/// (id, page_id, job_state, attempt_count, last_attempt_epoch)
+type EmbeddingJobRow = (i64, i64, String, i64, i64);
+
+fn load_embedding_job_candidates(
+    conn: &Connection,
+) -> Result<Vec<EmbeddingJobRow>, VaultSyncError> {
+    let mut stmt = conn.prepare(
+        "SELECT id,
+                page_id,
+                job_state,
+                attempt_count,
+                COALESCE(
+                    CAST(strftime('%s', started_at) AS INTEGER),
+                    CAST(strftime('%s', enqueued_at) AS INTEGER),
+                    0
+                ) AS last_attempt_epoch
+         FROM embedding_jobs
+         WHERE job_state IN ('pending', 'failed')
+           AND attempt_count < 5
+         ORDER BY priority DESC, enqueued_at ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+        ))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn claim_embedding_jobs(conn: &Connection) -> Result<Vec<EmbeddingJobClaim>, VaultSyncError> {
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+    let limit = configured_embedding_concurrency();
+    let candidates = load_embedding_job_candidates(conn)?;
+    let ready = candidates
+        .into_iter()
+        .filter(|(_, _, state, attempt_count, last_attempt_epoch)| {
+            state == "pending"
+                || now_epoch - *last_attempt_epoch >= embedding_backoff_secs(*attempt_count)
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    if ready.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut claimed = Vec::new();
+    for (id, page_id, _state, _attempt_count, _last_attempt_epoch) in ready {
+        let updated = tx.execute(
+            "UPDATE embedding_jobs
+             SET job_state = 'running',
+                 started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                 attempt_count = attempt_count + 1,
+                 last_error = NULL
+             WHERE id = ?1
+               AND job_state IN ('pending', 'failed')
+               AND attempt_count < 5",
+            [id],
+        )?;
+        if updated == 1 {
+            let attempt_count = tx.query_row(
+                "SELECT attempt_count FROM embedding_jobs WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            claimed.push(EmbeddingJobClaim {
+                id,
+                page_id,
+                attempt_count,
+            });
+        }
+    }
+    tx.commit()?;
+    Ok(claimed)
+}
+
+fn load_page_for_embedding_job(
+    conn: &Connection,
+    page_id: i64,
+) -> Result<Option<crate::core::types::Page>, VaultSyncError> {
+    let row = conn
+        .query_row(
+            "SELECT collection_id, slug FROM pages WHERE id = ?1",
+            [page_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((collection_id, slug)) = row else {
+        return Ok(None);
+    };
+    get_page_by_key(conn, collection_id, &slug)
+        .map(Some)
+        .map_err(|error| VaultSyncError::InvariantViolation {
+            message: error.to_string(),
+        })
+}
+
+fn process_embedding_job_on_connection(
+    conn: &Connection,
+    job_id: i64,
+    page_id: i64,
+) -> Result<(), VaultSyncError> {
+    let Some(page) = load_page_for_embedding_job(conn, page_id)? else {
+        conn.execute("DELETE FROM embedding_jobs WHERE id = ?1", [job_id])?;
+        return Ok(());
+    };
+
+    crate::core::inference::refresh_page_embeddings(conn, page_id, &page).map_err(|err| {
+        VaultSyncError::InvariantViolation {
+            message: format!("embedding refresh failed for page_id={page_id}: {err}"),
+        }
+    })?;
+    conn.execute("DELETE FROM embedding_jobs WHERE id = ?1", [job_id])?;
+    Ok(())
+}
+
+fn mark_embedding_job_failed(
+    conn: &Connection,
+    job_id: i64,
+    error: &VaultSyncError,
+) -> Result<(), VaultSyncError> {
+    conn.execute(
+        "UPDATE embedding_jobs
+         SET job_state = 'failed',
+             last_error = ?2
+         WHERE id = ?1",
+        params![job_id, error.to_string()],
+    )?;
+    Ok(())
+}
+
+pub fn drain_embedding_queue(conn: &Connection) -> Result<(), VaultSyncError> {
+    let claimed = claim_embedding_jobs(conn)?;
+    if claimed.is_empty() {
+        return Ok(());
+    }
+
+    let db_path = database_path(conn).unwrap_or_default();
+    if db_path.is_empty() || db_path == ":memory:" || claimed.len() == 1 {
+        for job in claimed {
+            if let Err(error) = process_embedding_job_on_connection(conn, job.id, job.page_id) {
+                mark_embedding_job_failed(conn, job.id, &error)?;
+                if job.attempt_count >= 5 {
+                    eprintln!(
+                        "WARN: embedding_job_failed_permanently job_id={} page_id={} error={}",
+                        job.id, job.page_id, error
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let mut handles = Vec::new();
+    for job in claimed {
+        let path = db_path.clone();
+        handles.push(thread::spawn(move || {
+            let conn = crate::core::db::open(&path).map_err(|error| {
+                VaultSyncError::InvariantViolation {
+                    message: format!("embedding worker failed to open database: {error}"),
+                }
+            })?;
+            let result = process_embedding_job_on_connection(&conn, job.id, job.page_id);
+            if let Err(ref error) = result {
+                let _ = mark_embedding_job_failed(&conn, job.id, error);
+            }
+            result.map(|_| (job.id, job.page_id, job.attempt_count))
+        }));
+    }
+
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                eprintln!("WARN: embedding_job_failed error={error}");
+            }
+            Err(_) => {
+                eprintln!("WARN: embedding_worker_thread_panicked");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn begin_restore(
@@ -4185,6 +4442,48 @@ pub fn get_page_by_input(
 mod tests {
     use super::*;
     use crate::core::db;
+    use std::ffi::OsString;
+
+    static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_mutation_lock() -> &'static Mutex<()> {
+        ENV_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn clear(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = self.previous.as_ref() {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn open_test_db() -> Connection {
         db::open(":memory:").unwrap()
@@ -4264,6 +4563,274 @@ mod tests {
         )
         .unwrap();
         page_id
+    }
+
+    #[test]
+    fn drain_embedding_queue_marks_failed_jobs_and_retries_after_backoff() {
+        let conn = open_test_db();
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            1,
+            "notes/retry",
+            &Uuid::now_v7().to_string(),
+            "Retry candidate truth.",
+            b"---\ntitle: Retry\ntype: note\n---\nRetry candidate truth.\n",
+            "notes/retry.md",
+        );
+        crate::core::raw_imports::enqueue_embedding_job(&conn, page_id).unwrap();
+        conn.execute(
+            "UPDATE embedding_models SET vec_table = 'bad-table' WHERE active = 1",
+            [],
+        )
+        .unwrap();
+
+        drain_embedding_queue(&conn).unwrap();
+
+        let failed_row: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, last_error
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(failed_row.0, "failed");
+        assert_eq!(failed_row.1, 1);
+        assert!(failed_row
+            .2
+            .as_deref()
+            .is_some_and(|message| message.contains("unsafe vec table name")));
+
+        drain_embedding_queue(&conn).unwrap();
+        let attempt_count_after_immediate_retry: i64 = conn
+            .query_row(
+                "SELECT attempt_count FROM embedding_jobs WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(attempt_count_after_immediate_retry, 1);
+
+        conn.execute(
+            "UPDATE embedding_jobs
+             SET started_at = datetime('now', '-2 seconds')
+             WHERE page_id = ?1",
+            [page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE embedding_models
+             SET vec_table = 'page_embeddings_vec_384'
+             WHERE active = 1",
+            [],
+        )
+        .unwrap();
+
+        drain_embedding_queue(&conn).unwrap();
+
+        let remaining_jobs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_jobs WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_jobs, 0);
+    }
+
+    #[test]
+    fn configured_embedding_concurrency_uses_positive_env_override_when_present() {
+        let _lock = env_mutation_lock().lock().unwrap();
+        let _clear = EnvVarGuard::clear("QUAID_EMBEDDING_CONCURRENCY");
+        let _override = EnvVarGuard::set("QUAID_EMBEDDING_CONCURRENCY", "3");
+
+        assert_eq!(configured_embedding_concurrency(), 3);
+    }
+
+    #[test]
+    fn configured_embedding_concurrency_falls_back_for_zero_or_invalid_values() {
+        let _lock = env_mutation_lock().lock().unwrap();
+        let _clear = EnvVarGuard::clear("QUAID_EMBEDDING_CONCURRENCY");
+        let fallback = configured_embedding_concurrency();
+
+        let _zero = EnvVarGuard::set("QUAID_EMBEDDING_CONCURRENCY", "0");
+        assert_eq!(configured_embedding_concurrency(), fallback);
+        drop(_zero);
+
+        let _invalid = EnvVarGuard::set("QUAID_EMBEDDING_CONCURRENCY", "bogus");
+        assert_eq!(configured_embedding_concurrency(), fallback);
+    }
+
+    #[test]
+    fn drain_embedding_queue_leaves_five_attempt_jobs_failed_without_reclaiming() {
+        let conn = open_test_db();
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            1,
+            "notes/permanent-failure",
+            &Uuid::now_v7().to_string(),
+            "Permanent failure truth.",
+            b"---\ntitle: Permanent Failure\ntype: note\n---\nPermanent failure truth.\n",
+            "notes/permanent-failure.md",
+        );
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error, started_at)
+             VALUES (?1, 'failed', 5, 'still broken', '2026-04-28T00:00:00Z')",
+            [page_id],
+        )
+        .unwrap();
+
+        drain_embedding_queue(&conn).unwrap();
+
+        let row: (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, last_error, started_at
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "failed");
+        assert_eq!(row.1, 5);
+        assert_eq!(row.2.as_deref(), Some("still broken"));
+        assert_eq!(row.3.as_deref(), Some("2026-04-28T00:00:00Z"));
+    }
+
+    #[test]
+    fn resume_orphaned_embedding_jobs_resets_running_rows_to_pending() {
+        let conn = open_test_db();
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            1,
+            "notes/resume",
+            &Uuid::now_v7().to_string(),
+            "Resume candidate truth.",
+            b"---\ntitle: Resume\ntype: note\n---\nResume candidate truth.\n",
+            "notes/resume.md",
+        );
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, started_at)
+             VALUES (?1, 'running', 3, '2026-04-28T00:00:00Z')",
+            [page_id],
+        )
+        .unwrap();
+
+        let resumed = resume_orphaned_embedding_jobs(&conn).unwrap();
+        assert_eq!(resumed, 1);
+
+        let row: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, started_at
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 3);
+        assert!(row.2.is_none());
+    }
+
+    #[test]
+    fn run_startup_sequence_resumes_running_embedding_jobs_before_runtime_loop_starts() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/startup-resume",
+            &Uuid::now_v7().to_string(),
+            "Startup resume truth.",
+            b"---\ntitle: Startup Resume\ntype: note\n---\nStartup resume truth.\n",
+            "notes/startup-resume.md",
+        );
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, started_at)
+             VALUES (?1, 'running', 2, '2026-04-28T00:00:00Z')",
+            [page_id],
+        )
+        .unwrap();
+        let session_id = register_session(&conn).unwrap();
+
+        run_startup_sequence(&conn, Path::new(&db_path), &session_id).unwrap();
+
+        let row: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, started_at
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 2);
+        assert!(row.2.is_none());
+
+        unregister_session(&conn, &session_id).unwrap();
+    }
+
+    #[test]
+    fn list_memory_collections_counts_pending_and_running_separately_from_failed_jobs() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let pending_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/pending",
+            &Uuid::now_v7().to_string(),
+            "Pending truth.",
+            b"---\ntitle: Pending\ntype: note\n---\nPending truth.\n",
+            "notes/pending.md",
+        );
+        let running_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/running",
+            &Uuid::now_v7().to_string(),
+            "Running truth.",
+            b"---\ntitle: Running\ntype: note\n---\nRunning truth.\n",
+            "notes/running.md",
+        );
+        let failed_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/failed",
+            &Uuid::now_v7().to_string(),
+            "Failed truth.",
+            b"---\ntitle: Failed\ntype: note\n---\nFailed truth.\n",
+            "notes/failed.md",
+        );
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state) VALUES (?1, 'pending')",
+            [pending_page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, started_at)
+             VALUES (?1, 'running', '2026-04-28T00:00:00Z')",
+            [running_page_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error)
+             VALUES (?1, 'failed', 5, 'boom')",
+            [failed_page_id],
+        )
+        .unwrap();
+
+        let view = list_memory_collections(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|view| view.name == "work")
+            .unwrap();
+        assert_eq!(view.embedding_queue_depth, 2);
+        assert_eq!(view.failing_jobs, 1);
     }
 
     fn write_restore_file(root: &Path, relative_path: &str, bytes: &[u8]) {
