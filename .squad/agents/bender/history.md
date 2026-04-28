@@ -21,6 +21,7 @@
 - The Link struct has a known schema-vs-task mismatch: task says from_slug/to_slug, schema uses from_page_id/to_page_id (integer FK). Must verify Fry's resolution.
 - `type` is a Rust keyword; the Page struct must rename the field (e.g., `page_type`) and handle serde/rusqlite column mapping.
 - Anticipatory QA validation plan for tasks 2.1–2.6 written to `.squad/decisions/inbox/bender-p1-foundation-validation.md` on 2026-04-14.
+- **PR #110 PathBuf fix (2026-04-28):** `WatchEvent::DirtyPath(path) if path == "notes/already-buffered.md"` fails on CI runner because `PathBuf` does not implement `PartialEq<&str>`. One-line fix: replace bare `&str` with `PathBuf::from("notes/already-buffered.md")` in the match guard. Fix is commit `489b990` on `fix/no-direct-main-guardrails`. All three local gates passed: `cargo fmt --all -- --check` (exit 0), `cargo clippy --all-targets -- -D warnings` (exit 0), `cargo check --all-targets` (exit 0). Rule: `PathBuf` match guards must always use `PathBuf::from(...)`, never bare `&str`.
 
 ## 2026-04-14 Scribe Merge (2026-04-14T03:50:40Z)
 
