@@ -1641,13 +1641,6 @@ mod tests {
 
     #[test]
     fn refresh_page_embeddings_replaces_existing_rows_and_returns_chunk_count() {
-        let _env_guard = env_mutation_lock()
-            .lock()
-            .expect("env mutation lock poisoned");
-        let _force_hash_shim = EnvVarGuard::set("QUAID_FORCE_HASH_SHIM", "1");
-        configure_runtime_model(default_model());
-        model_runtime().lock().expect("lock").loaded = None;
-
         let conn = open_test_db();
         conn.execute(
             "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
