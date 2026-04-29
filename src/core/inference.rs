@@ -31,6 +31,7 @@ use tokenizers::Tokenizer;
 #[cfg(feature = "online-model")]
 use uuid::Uuid;
 
+use super::chunking::chunk_page;
 use super::types::{InferenceError, SearchError, SearchResult};
 
 #[cfg(all(feature = "embedded-model", feature = "online-model"))]
@@ -1186,6 +1187,23 @@ fn active_model(conn: &Connection) -> Result<(String, String), SearchError> {
     })
 }
 
+pub fn refresh_page_embeddings(
+    conn: &Connection,
+    page_id: i64,
+    page: &crate::core::types::Page,
+) -> Result<usize, SearchError> {
+    let (model_name, vec_table) = active_model(conn)?;
+    if !is_safe_identifier(&vec_table) {
+        return Err(SearchError::Internal {
+            message: format!("unsafe vec table name: {vec_table}"),
+        });
+    }
+
+    let chunks = chunk_page(page);
+    replace_page_embeddings(conn, page_id, &model_name, &vec_table, &chunks)?;
+    Ok(chunks.len())
+}
+
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(std::mem::size_of_val(embedding));
     for value in embedding {
@@ -1199,6 +1217,74 @@ fn is_safe_identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn replace_page_embeddings(
+    conn: &Connection,
+    page_id: i64,
+    model_name: &str,
+    vec_table: &str,
+    chunks: &[crate::core::types::Chunk],
+) -> Result<(), SearchError> {
+    let tx = conn.unchecked_transaction()?;
+
+    let existing_rowids = existing_vec_rowids(&tx, page_id, model_name)?;
+    let delete_vec_sql = format!("DELETE FROM {vec_table} WHERE rowid = ?1");
+    for vec_rowid in existing_rowids {
+        tx.execute(&delete_vec_sql, [vec_rowid])?;
+    }
+
+    tx.execute(
+        "DELETE FROM page_embeddings WHERE page_id = ?1 AND model = ?2",
+        rusqlite::params![page_id, model_name],
+    )?;
+
+    let insert_vec_sql = format!("INSERT INTO {vec_table}(embedding) VALUES (?1)");
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let embedding = embed(&chunk.content).map_err(|err| SearchError::Internal {
+            message: err.to_string(),
+        })?;
+        let embedding_blob = embedding_to_blob(&embedding);
+        tx.execute(&insert_vec_sql, rusqlite::params![embedding_blob])?;
+        let vec_rowid = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO page_embeddings \
+                 (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, \
+                  content_hash, token_count, heading_path) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                page_id,
+                model_name,
+                vec_rowid,
+                chunk.chunk_type,
+                chunk_index as i64,
+                chunk.content,
+                chunk.content_hash,
+                chunk.token_count as i64,
+                chunk.heading_path,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+fn existing_vec_rowids(
+    conn: &Connection,
+    page_id: i64,
+    model_name: &str,
+) -> Result<Vec<i64>, SearchError> {
+    let mut stmt = conn.prepare(
+        "SELECT vec_rowid FROM page_embeddings WHERE page_id = ?1 AND model = ?2 ORDER BY chunk_index",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![page_id, model_name], |row| row.get(0))?;
+
+    let mut rowids = Vec::new();
+    for row in rows {
+        rowids.push(row?);
+    }
+    Ok(rowids)
 }
 
 fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
@@ -1219,6 +1305,8 @@ fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
 mod tests {
     use super::*;
     use crate::core::db;
+    use crate::core::types::Page;
+    use std::collections::HashMap;
     #[cfg(feature = "online-model")]
     use std::io::{Read, Write};
     #[cfg(feature = "online-model")]
@@ -1549,6 +1637,154 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
+    }
+
+    #[test]
+    fn refresh_page_embeddings_replaces_existing_rows_and_returns_chunk_count() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'old truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/refresh", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/refresh'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        let stale_embedding = embedding_to_blob(&embed("stale embedding").expect("embed stale"));
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![1_i64, stale_embedding],
+        )
+        .expect("insert stale vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'stale chunk', 'stale-hash', 2, 'State')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert stale metadata");
+
+        let page = Page {
+            slug: "notes/refresh".to_owned(),
+            uuid: uuid::Uuid::now_v7().to_string(),
+            page_type: "note".to_owned(),
+            title: "Refresh".to_owned(),
+            summary: String::new(),
+            compiled_truth: "## State\nFresh truth\n".to_owned(),
+            timeline: "- 2026-04-28: refreshed timeline entry".to_owned(),
+            frontmatter: HashMap::new(),
+            wing: "notes".to_owned(),
+            room: String::new(),
+            version: 2,
+            created_at: "2026-04-28T00:00:00Z".to_owned(),
+            updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            truth_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            timeline_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+        };
+        let expected_chunks = chunk_page(&page).len();
+
+        let refreshed = refresh_page_embeddings(&conn, page_id, &page).expect("refresh embeddings");
+
+        assert_eq!(refreshed, expected_chunks);
+        let stale_vec_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings_vec_384 WHERE rowid = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count stale vec rows");
+        assert_eq!(stale_vec_count, 0);
+        let metadata_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings WHERE page_id = ?1 AND model = 'BAAI/bge-small-en-v1.5'",
+                rusqlite::params![page_id],
+                |row| row.get(0),
+        )
+        .expect("count refreshed metadata rows");
+        assert_eq!(metadata_count as usize, expected_chunks);
+    }
+
+    #[test]
+    fn refresh_page_embeddings_rejects_unsafe_vec_table_names() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/unsafe-refresh", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        conn.execute(
+            "UPDATE embedding_models SET vec_table = 'page-embeddings-vec-384' WHERE active = 1",
+            [],
+        )
+        .expect("set unsafe vec table");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/unsafe-refresh'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        let page = Page {
+            slug: "notes/unsafe-refresh".to_owned(),
+            uuid: uuid::Uuid::now_v7().to_string(),
+            page_type: "note".to_owned(),
+            title: "Refresh".to_owned(),
+            summary: String::new(),
+            compiled_truth: "truth".to_owned(),
+            timeline: String::new(),
+            frontmatter: HashMap::new(),
+            wing: "notes".to_owned(),
+            room: String::new(),
+            version: 1,
+            created_at: "2026-04-28T00:00:00Z".to_owned(),
+            updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            truth_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            timeline_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+        };
+
+        let err = refresh_page_embeddings(&conn, page_id, &page).unwrap_err();
+
+        assert!(matches!(err, SearchError::Internal { .. }));
+        assert!(err.to_string().contains("unsafe vec table name"));
+    }
+
+    #[test]
+    fn existing_vec_rowids_returns_sorted_rowids_for_page_and_model() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/rowids", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/rowids'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 22, 'truth_section', 1, 'second', 'hash-b', 1, 'B')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert second rowid");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 11, 'truth_section', 0, 'first', 'hash-a', 1, 'A')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert first rowid");
+
+        let rowids = existing_vec_rowids(&conn, page_id, "BAAI/bge-small-en-v1.5").unwrap();
+
+        assert_eq!(rowids, vec![11, 22]);
     }
 
     #[test]
