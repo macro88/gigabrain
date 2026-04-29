@@ -300,7 +300,7 @@ mod tests {
         }
 
         #[test]
-        fn preserves_memory_id_frontmatter_field_when_present() {
+        fn preserves_quaid_id_frontmatter_field_when_present() {
             let input =
                 "---\nquaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\ntitle: Alice\n---\n# Alice\n";
             let (map, body) = parse_frontmatter(input);

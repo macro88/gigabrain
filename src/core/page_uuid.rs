@@ -8,14 +8,14 @@ pub const LEGACY_MEMORY_ID_FRONTMATTER_KEY: &str = "memory_id";
 
 #[derive(Debug, Error)]
 pub enum PageUuidError {
-    #[error("frontmatter quaid_id cannot be empty")]
+    #[error("frontmatter quaid_id/memory_id cannot be empty")]
     EmptyFrontmatterUuid,
 
-    #[error("invalid frontmatter quaid_id: {value}")]
+    #[error("invalid frontmatter quaid_id/memory_id: {value}")]
     InvalidFrontmatterUuid { value: String },
 
     #[error(
-        "frontmatter quaid_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
+        "frontmatter quaid_id/memory_id {frontmatter_uuid} does not match stored page uuid {stored_uuid}"
     )]
     UuidMismatch {
         stored_uuid: String,

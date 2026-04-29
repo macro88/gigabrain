@@ -69,7 +69,7 @@ pub struct CollectionAddArgs {
     pub read_only: bool,
     #[arg(long, conflicts_with = "read_only")]
     pub writable: bool,
-    #[arg(long = "write-quaid-id")]
+    #[arg(long = "write-quaid-id", conflicts_with = "read_only")]
     pub write_quaid_id: bool,
 }
 
@@ -265,6 +265,9 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
         }
         .to_string()));
     }
+    if args.write_quaid_id && !writable {
+        bail!("--write-quaid-id requires a writable collection root");
+    }
     if args.write_quaid_id {
         vault_sync::ensure_no_live_serve_owner_for_root_path(db, &root_path_string)
             .map_err(map_bulk_uuid_write_back_error)?;
@@ -382,6 +385,31 @@ fn run_uuid_write_back(
         )
     };
 
+    let mut summary = UuidMigrationSummary::default();
+    if dry_run {
+        let mut stmt = db.prepare(
+            "SELECT frontmatter
+             FROM pages
+             WHERE collection_id = ?1
+               AND quarantined_at IS NULL
+             ORDER BY slug",
+        )?;
+        let frontmatters = stmt
+            .query_map([collection.id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        for frontmatter_json in frontmatters {
+            let frontmatter: std::collections::HashMap<String, String> =
+                serde_json::from_str(&frontmatter_json).unwrap_or_default();
+            if frontmatter.contains_key(crate::core::page_uuid::QUAID_ID_FRONTMATTER_KEY) {
+                summary.already_had_uuid += 1;
+            } else {
+                summary.migrated += 1;
+            }
+        }
+        return Ok(summary);
+    }
+
     let mut stmt = db.prepare(
         "SELECT id
          FROM pages
@@ -393,24 +421,7 @@ fn run_uuid_write_back(
         .query_map([collection.id], |row| row.get::<_, i64>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut summary = UuidMigrationSummary::default();
     for page_id in page_ids {
-        let frontmatter_json: String = db.query_row(
-            "SELECT frontmatter FROM pages WHERE id = ?1",
-            [page_id],
-            |row| row.get(0),
-        )?;
-        let frontmatter: std::collections::HashMap<String, String> =
-            serde_json::from_str(&frontmatter_json).unwrap_or_default();
-        if frontmatter.contains_key(crate::core::page_uuid::QUAID_ID_FRONTMATTER_KEY) {
-            summary.already_had_uuid += 1;
-            continue;
-        }
-        if dry_run {
-            summary.migrated += 1;
-            continue;
-        }
-
         match vault_sync::write_quaid_id_to_file(db, collection, page_id)
             .map_err(|err| anyhow!(err.to_string()))?
         {
@@ -1593,6 +1604,35 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("collection root"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn add_refuses_write_quaid_id_when_attach_is_read_only_before_creating_collection_row() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: true,
+                writable: false,
+                write_quaid_id: true,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(!error.to_string().is_empty());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM collections WHERE name = 'work'",
