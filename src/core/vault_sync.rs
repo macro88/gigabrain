@@ -31,7 +31,7 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
-use crate::commands::get::get_page_by_key;
+use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
@@ -42,6 +42,7 @@ use crate::core::file_state;
 #[cfg(unix)]
 use crate::core::fs_safety;
 use crate::core::markdown;
+use crate::core::page_uuid;
 use crate::core::quarantine;
 use crate::core::reconciler::{
     fresh_attach_reconcile_and_activate, full_hash_reconcile_authorized, reconcile,
@@ -226,6 +227,20 @@ pub struct RestoreManifest {
     pub entries: Vec<RestoreManifestEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteBackOutcome {
+    Migrated,
+    SkippedReadOnly,
+    AlreadyHadUuid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveCollectionOwner {
+    pub session_id: String,
+    pub pid: i64,
+    pub host: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizeCaller {
     RestoreOriginator { command_id: String },
@@ -304,10 +319,14 @@ pub enum VaultSyncError {
     #[error("CollectionReadOnlyError: collection={collection_name}")]
     CollectionReadOnly { collection_name: String },
 
-    #[error("ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id}")]
+    #[error(
+        "ServeOwnsCollectionError: collection={collection_name} owner_session_id={owner_session_id} owner_pid={owner_pid} owner_host={owner_host}"
+    )]
     ServeOwnsCollectionError {
         collection_name: String,
         owner_session_id: String,
+        owner_pid: i64,
+        owner_host: String,
     },
 
     #[error("RestoreInProgressError: collection={collection_name}")]
@@ -1862,6 +1881,45 @@ pub fn session_is_live(conn: &Connection, session_id: &str) -> Result<bool, Vaul
     Ok(live != 0)
 }
 
+pub fn live_collection_owner(
+    conn: &Connection,
+    collection_id: i64,
+) -> Result<Option<LiveCollectionOwner>, VaultSyncError> {
+    conn.query_row(
+        "SELECT o.session_id, s.pid, s.host
+         FROM collection_owners o
+         JOIN serve_sessions s ON s.session_id = o.session_id
+         WHERE o.collection_id = ?1
+           AND s.heartbeat_at >= datetime('now', ?2)",
+        params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
+        |row| {
+            Ok(LiveCollectionOwner {
+                session_id: row.get(0)?,
+                pid: row.get(1)?,
+                host: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn ensure_no_live_serve_owner(
+    conn: &Connection,
+    collection_id: i64,
+) -> Result<(), VaultSyncError> {
+    let collection = load_collection_by_id(conn, collection_id)?;
+    if let Some(owner) = live_collection_owner(conn, collection_id)? {
+        return Err(VaultSyncError::ServeOwnsCollectionError {
+            collection_name: collection.name,
+            owner_session_id: owner.session_id,
+            owner_pid: owner.pid,
+            owner_host: owner.host,
+        });
+    }
+    Ok(())
+}
+
 pub fn owner_session_id(
     conn: &Connection,
     collection_id: i64,
@@ -1880,16 +1938,16 @@ pub fn acquire_owner_lease(
     collection_id: i64,
     session_id: &str,
 ) -> Result<(), VaultSyncError> {
-    let existing_owner = owner_session_id(conn, collection_id)?;
-    match existing_owner {
-        Some(owner) if owner != session_id && session_is_live(conn, &owner)? => {
+    if let Some(owner) = live_collection_owner(conn, collection_id)? {
+        if owner.session_id != session_id {
             let collection = load_collection_by_id(conn, collection_id)?;
             return Err(VaultSyncError::ServeOwnsCollectionError {
                 collection_name: collection.name,
-                owner_session_id: owner,
+                owner_session_id: owner.session_id,
+                owner_pid: owner.pid,
+                owner_host: owner.host,
             });
         }
-        _ => {}
     }
 
     let tx = conn.unchecked_transaction()?;
@@ -2003,6 +2061,59 @@ pub fn ensure_collection_vault_write_allowed(
         });
     }
     Ok(())
+}
+
+pub fn write_quaid_id_to_file(
+    conn: &Connection,
+    collection: &Collection,
+    page_id: i64,
+) -> Result<WriteBackOutcome, VaultSyncError> {
+    ensure_collection_vault_write_allowed(conn, collection.id)?;
+
+    let (slug, version, frontmatter_json): (String, i64, String) = conn.query_row(
+        "SELECT slug, version, frontmatter
+         FROM pages
+         WHERE id = ?1 AND collection_id = ?2",
+        params![page_id, collection.id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let frontmatter: HashMap<String, String> =
+        serde_json::from_str(&frontmatter_json).unwrap_or_default();
+    if frontmatter.contains_key(page_uuid::QUAID_ID_FRONTMATTER_KEY) {
+        return Ok(WriteBackOutcome::AlreadyHadUuid);
+    }
+
+    let page = get_page_by_key(conn, collection.id, &slug).map_err(|error| {
+        VaultSyncError::InvariantViolation {
+            message: error.to_string(),
+        }
+    })?;
+    let rendered = markdown::render_page(&page);
+    let canonical_slug = format!("{}::{}", collection.name, slug);
+
+    match put::put_from_string(conn, &canonical_slug, &rendered, Some(version)) {
+        Ok(()) => Ok(WriteBackOutcome::Migrated),
+        Err(error) => match error.downcast::<VaultSyncError>() {
+            Ok(vault_error) => match vault_error {
+                VaultSyncError::Io(io_error) => {
+                    let raw = io_error.raw_os_error().unwrap_or_default();
+                    if io_error.kind() == io::ErrorKind::PermissionDenied || raw == 30 {
+                        eprintln!(
+                            "WARN: quaid_id_write_back_skipped_read_only collection={} slug={} error={}",
+                            collection.name, slug, io_error
+                        );
+                        Ok(WriteBackOutcome::SkippedReadOnly)
+                    } else {
+                        Err(VaultSyncError::Io(io_error))
+                    }
+                }
+                other => Err(other),
+            },
+            Err(other) => Err(VaultSyncError::InvariantViolation {
+                message: other.to_string(),
+            }),
+        },
+    }
 }
 
 fn ensure_plain_sync_allowed(collection: &Collection) -> Result<(), VaultSyncError> {
@@ -2730,6 +2841,8 @@ pub fn mark_collection_restoring_for_handshake(
         VaultSyncError::ServeOwnsCollectionError {
             collection_name: collection.name.clone(),
             owner_session_id: "none".to_owned(),
+            owner_pid: 0,
+            owner_host: "unknown".to_owned(),
         }
     })?;
     if !session_is_live(conn, &expected_session_id)? {
@@ -4260,7 +4373,11 @@ fn load_new_root_files(root: &Path) -> Result<Vec<NewRootFileRow>, VaultSyncErro
         let (frontmatter, body) = markdown::parse_frontmatter(&text);
         rows.push(NewRootFileRow {
             relative_path: relative_path.clone(),
-            uuid: frontmatter.get("memory_id").cloned(),
+            uuid: page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|error| {
+                VaultSyncError::InvariantViolation {
+                    message: error.to_string(),
+                }
+            })?,
             sha256: sha256_hex(&bytes),
             body_size_bytes: body.trim().len(),
             has_nonempty_body: !body.trim().is_empty(),

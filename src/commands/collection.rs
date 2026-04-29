@@ -20,6 +20,13 @@ use crate::core::vault_sync;
 pub enum CollectionAction {
     /// Attach a vault as a collection
     Add(CollectionAddArgs),
+    /// Persist quaid_id frontmatter for pages that still lack it
+    #[command(name = "migrate-uuids")]
+    MigrateUuids {
+        name: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// List collections
     List,
     /// Show collection diagnostics
@@ -62,8 +69,8 @@ pub struct CollectionAddArgs {
     pub read_only: bool,
     #[arg(long, conflicts_with = "read_only")]
     pub writable: bool,
-    #[arg(long)]
-    pub write_memory_id: bool,
+    #[arg(long = "write-quaid-id")]
+    pub write_quaid_id: bool,
 }
 
 #[derive(Args, Debug)]
@@ -181,11 +188,22 @@ struct CollectionMetrics {
     quarantined_pages_awaiting_action: i64,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct UuidMigrationSummary {
+    migrated: usize,
+    skipped_readonly: usize,
+    already_had_uuid: usize,
+}
+
 pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> {
     match action {
         CollectionAction::Add(args) => {
             ensure_unix_collection_command("quaid collection add")?;
             add(db, args, json)
+        }
+        CollectionAction::MigrateUuids { name, dry_run } => {
+            ensure_unix_collection_command("quaid collection migrate-uuids")?;
+            migrate_uuids(db, &name, dry_run, json)
         }
         CollectionAction::List => list(db, json),
         CollectionAction::Info { name } => info(db, &name, json),
@@ -230,11 +248,6 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
     collections::validate_collection_name(&args.name).map_err(|err| anyhow!(err.to_string()))?;
     if collections::get_by_name(db, &args.name)?.is_some() {
         bail!("collection already exists: {}", args.name);
-    }
-    if args.write_memory_id {
-        bail!(
-            "--write-quaid-id is deferred in Batch K2; K1 only supports default read-only attach"
-        );
     }
 
     let root_path = resolve_collection_root(&args.path)?;
@@ -289,6 +302,14 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
 
     let collection = collections::get_by_name(db, &args.name)?
         .ok_or_else(|| anyhow!("collection not found after attach: {}", args.name))?;
+    let migration = if args.write_quaid_id {
+        match run_uuid_write_back(db, &collection, false) {
+            Ok(summary) => Some(summary),
+            Err(err) => return Err(anyhow!(err.to_string())),
+        }
+    } else {
+        None
+    };
     let metrics = collection_metrics(db, collection.id)?;
 
     render_success(
@@ -311,9 +332,77 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
             "new": stats.new,
             "missing": stats.missing,
             "uuid_renamed": stats.uuid_renamed,
-            "hash_renamed": stats.hash_renamed
+            "hash_renamed": stats.hash_renamed,
+            "uuid_write_back": migration
         }),
     )
+}
+
+fn migrate_uuids(db: &Connection, name: &str, dry_run: bool, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    let summary = run_uuid_write_back(db, &collection, dry_run)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        let mode = if dry_run { "dry-run" } else { "applied" };
+        println!(
+            "uuid migration {mode}: migrated={} skipped_readonly={} already_had_uuid={}",
+            summary.migrated, summary.skipped_readonly, summary.already_had_uuid
+        );
+    }
+    Ok(())
+}
+
+fn run_uuid_write_back(
+    db: &Connection,
+    collection: &collections::Collection,
+    dry_run: bool,
+) -> Result<UuidMigrationSummary> {
+    vault_sync::ensure_collection_vault_write_allowed(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    vault_sync::ensure_no_live_serve_owner(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    let mut stmt = db.prepare(
+        "SELECT id
+         FROM pages
+         WHERE collection_id = ?1
+           AND quarantined_at IS NULL
+         ORDER BY slug",
+    )?;
+    let page_ids = stmt
+        .query_map([collection.id], |row| row.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut summary = UuidMigrationSummary::default();
+    for page_id in page_ids {
+        let frontmatter_json: String = db.query_row(
+            "SELECT frontmatter FROM pages WHERE id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )?;
+        let frontmatter: std::collections::HashMap<String, String> =
+            serde_json::from_str(&frontmatter_json).unwrap_or_default();
+        if frontmatter.contains_key(crate::core::page_uuid::QUAID_ID_FRONTMATTER_KEY) {
+            summary.already_had_uuid += 1;
+            continue;
+        }
+        if dry_run {
+            summary.migrated += 1;
+            continue;
+        }
+
+        match vault_sync::write_quaid_id_to_file(db, collection, page_id)
+            .map_err(|err| anyhow!(err.to_string()))?
+        {
+            vault_sync::WriteBackOutcome::Migrated => summary.migrated += 1,
+            vault_sync::WriteBackOutcome::SkippedReadOnly => summary.skipped_readonly += 1,
+            vault_sync::WriteBackOutcome::AlreadyHadUuid => summary.already_had_uuid += 1,
+        }
+    }
+
+    Ok(summary)
 }
 
 fn list(db: &Connection, json: bool) -> Result<()> {
@@ -924,7 +1013,7 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             )),
             status_message: match reason {
                 "duplicate_uuid" => format!(
-                    "reconcile is halted on duplicate memory_id values; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
+                    "reconcile is halted on duplicate quaid_id values; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
                     collection.name
                 ),
                 "unresolvable_trivial_content" => format!(
@@ -1373,6 +1462,26 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(unix)]
+    fn active_raw_import_count(conn: &Connection, page_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1 AND is_active = 1",
+            [page_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn total_raw_import_count(conn: &Connection, page_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
     fn quarantine_page(conn: &Connection, page_id: i64, quarantined_at: &str) {
         conn.execute(
             "UPDATE pages SET quarantined_at = ?2 WHERE id = ?1",
@@ -1430,7 +1539,7 @@ mod tests {
                 path: root_path.to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -1450,7 +1559,7 @@ mod tests {
                 path: missing,
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -1481,7 +1590,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -1517,7 +1626,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -1603,7 +1712,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         );
@@ -1649,7 +1758,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: true,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -1777,7 +1886,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             },
             true,
         )
@@ -1786,33 +1895,130 @@ mod tests {
         assert!(error.to_string().contains("collection already exists"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn add_rejects_write_memory_id_before_creating_collection_row() {
-        let conn = open_test_db();
+    fn add_runs_uuid_write_back_when_requested() {
+        let (_dir, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
 
-        let error = add(
+        add(
             &conn,
             CollectionAddArgs {
                 name: "work".to_owned(),
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: true,
+                write_quaid_id: true,
             },
             true,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("--write-quaid-id is deferred"));
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 0);
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+        let rendered = fs::read_to_string(root.path().join("note.md")).unwrap();
+        assert!(rendered.contains("quaid_id: "));
+        assert!(!rendered.contains("memory_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_dry_run_mutates_nothing() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let original = "---\ntitle: Note\ntype: note\n---\nhello\n";
+        fs::write(root.path().join("note.md"), original).unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+
+        let summary = run_uuid_write_back(&conn, &collection, true).unwrap();
+
+        assert_eq!(summary.migrated, 1);
+        assert_eq!(summary.skipped_readonly, 0);
+        assert_eq!(summary.already_had_uuid, 0);
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            original
+        );
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_refuses_live_serve_owner_with_pid_and_host() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 4321, 'batch3-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection.id],
+        )
+        .unwrap();
+
+        let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=4321"));
+        assert!(text.contains("owner_host=batch3-host"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_skips_permission_denied_without_rotating_raw_imports() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+
+        let original_permissions = fs::metadata(root.path()).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_mode(0o555);
+        fs::set_permissions(root.path(), read_only_permissions).unwrap();
+
+        let summary = run_uuid_write_back(&conn, &collection, false).unwrap();
+
+        fs::set_permissions(root.path(), original_permissions).unwrap();
+
+        assert_eq!(summary.migrated, 0);
+        assert_eq!(summary.skipped_readonly, 1);
+        assert_eq!(summary.already_had_uuid, 0);
+        assert!(!fs::read_to_string(root.path().join("note.md"))
+            .unwrap()
+            .contains("quaid_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
     }
 
     #[cfg(unix)]
@@ -2045,7 +2251,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             }),
             true,
         )
@@ -2899,7 +3105,7 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
+                write_quaid_id: false,
             },
             true,
         )
