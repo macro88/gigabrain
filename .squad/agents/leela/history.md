@@ -9,6 +9,7 @@
 - 2026-04-29T20:33:01.970+08:00 — Release prep for `v0.12.0` must start from merged `main` (current main is `0.11.6`), follow `.github\workflows\release.yml` + `.github\RELEASE_CHECKLIST.md`, and manually verify the coverage report stays above 90% because CI publishes coverage evidence but does not enforce the threshold itself.
 - 2026-04-29T21:29:11.071+08:00 — Batch 3 ancestry is confirmed clean: branch `spec/vault-sync-engine-batch3-v0120` was created from `origin/main` at `fdc20a0`, not from `origin/release/v0.11.0`, so branch-base conflict recovery is not required.
 - 2026-04-29T21:29:11.071+08:00 — Merge-lane rule: even after `CI/Check`, `Test`, `Coverage`, offline benchmarks, and macOS preflight jobs go green, the PR can still stay policy-blocked by a failing third-party status like `codecov/patch`; do not admin-merge around it.
+- 2026-04-29T21:29:11.071+08:00 — `release/v0.12.0` only cleared the final merge lane after the blockers were fixed in-branch: serialize the process-global env-var tests, cover the env-guard restore path so `codecov/patch` passes, address the live docs review thread, resolve review conversations, and then merge PR `#123` cleanly to `main` at `5a8bdf068bf54be52f9b2bc661af34056473221a`.
 
 ## 20260429T173541Z — Team sync
 
@@ -34,3 +35,10 @@
 - Amy: docs truth review STARTED
 - Leela: merge lane STARTED
 - Scribe: memory checkpoint logged
+
+## 2026-04-29T13:29:11Z Session Outcome
+- Status: COMPLETE (merge lane closed)
+- PR #123: release/v0.12.0 merged to main
+- Release SHA: 5a8bdf068bf54be52f9b2bc661af34056473221a
+- All quality gates cleared: test race fixed, codecov/patch cleared, review threads resolved
+- Next: Awaiting v0.12.0 tag creation

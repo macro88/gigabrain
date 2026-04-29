@@ -7796,3 +7796,57 @@ The revised Batch 3 implementation now honestly closes the prior rejection findi
 
 
 
+
+---
+---
+timestamp: 2026-04-29T21:29:11.071+08:00
+requested_by: macro88
+worktree: D:\repos\quaid-v0.12.0-release
+branch: release/v0.12.0
+head: 90f888ab48fd7e36869b84757a04c5abecffa8ef
+topic: v0.12.0 docs/release truth review
+---
+
+# Decision: APPROVE `release/v0.12.0` docs truth
+
+## Verdict
+
+APPROVE
+
+## Why
+
+1. `Cargo.toml` is bumped to `0.12.0`, and the public install surfaces now treat `v0.12.0` as branch-prep state rather than pretending the tag is already published.
+2. `README.md`, `docs/getting-started.md`, `docs/roadmap.md`, and `website/src/content/docs/tutorials/install.mdx` now truthfully describe the shipped Batch 3 UUID slice: opt-in `quaid collection add --write-quaid-id`, offline `quaid collection migrate-uuids [--dry-run]`, UUID-migration preflight before restore/remap, and `memory_put` preserving `quaid_id`.
+3. The docs match the implementation boundary: bulk UUID rewrites are Unix-only and offline, while preserved-UUID behavior is covered on the write/read path.
+
+## Blocking findings
+
+None.
+
+## Non-blocking polish
+
+- Optional: mirror the getting-started page's explicit "Unix-only bulk rewrite" caveat into the README Batch 3 mention so every top-level surface carries the same constraint wording.
+
+---
+# Leela decision — v0.12.0 merge lane
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Requested by:** macro88
+- **PR:** `#123`
+- **Scope:** `release/v0.12.0` final merge lane
+
+## Decision
+
+Clear only the real merge blockers inside the release branch, then merge normally. That meant fixing the flaky env-var test race, adding coverage for the env-guard restore path so `codecov/patch` cleared, accepting the docs correction raised in review, resolving the review threads, and explicitly avoiding an admin merge.
+
+## Why
+
+- The branch itself was already the intended release-prep lane and was only blocked by merge policy.
+- The failing `Test` / `codecov/patch` gate and the unresolved review conversations were all scoped to the branch and could be repaired surgically without reopening release scope.
+- Admin merge would have hidden a real quality gate failure and violated the no-bypass rule already established for merge-lane work.
+
+## Outcome
+
+- PR `#123` merged cleanly into `main`.
+- The exact `main` SHA to tag for `v0.12.0` is `5a8bdf068bf54be52f9b2bc661af34056473221a`.
+
