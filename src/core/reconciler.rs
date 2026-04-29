@@ -2674,13 +2674,48 @@ impl From<std::io::Error> for ReconcileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use crate::core::file_state::upsert_file_state;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    use std::sync::{Mutex, OnceLock};
     #[cfg(unix)]
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
+
+    static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_mutation_lock() -> &'static Mutex<()> {
+        ENV_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = self.previous.as_ref() {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     fn open_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -5889,19 +5924,17 @@ mod tests {
 
     #[test]
     fn default_restore_stability_max_iters_uses_env_var_when_set() {
-        // Safety: we must reset after the test to avoid polluting other tests.
-        // This sets the env var for this thread only, but note: env is process-global.
-        std::env::set_var("QUAID_RESTORE_STABILITY_MAX_ITERS", "12");
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "12");
         let value = default_restore_stability_max_iters();
-        std::env::remove_var("QUAID_RESTORE_STABILITY_MAX_ITERS");
         assert_eq!(value, 12);
     }
 
     #[test]
     fn default_restore_stability_max_iters_falls_back_to_default_when_var_is_zero() {
-        std::env::set_var("QUAID_RESTORE_STABILITY_MAX_ITERS", "0");
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "0");
         let value = default_restore_stability_max_iters();
-        std::env::remove_var("QUAID_RESTORE_STABILITY_MAX_ITERS");
         assert_eq!(value, DEFAULT_RESTORE_STABILITY_MAX_ITERS);
     }
 
