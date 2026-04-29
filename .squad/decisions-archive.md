@@ -5496,3 +5496,50 @@ should be updated at the same time.
 
 
 
+
+
+# Amy decision inbox — v0.11.0 doc truth repair
+
+- **Date:** 2026-04-28T21:46:33.929+08:00
+- **Requested by:** macro88
+
+## Decision
+
+For a release branch that exists before the GitHub tag is published, user-facing docs must separate:
+
+1. **The branch target** — what the upcoming release is preparing (here: `v0.11.0` / Batch 2).
+2. **The latest published tag** — what GitHub Releases downloads and `install.sh` can actually install today.
+
+## Applied rule
+
+- Status and release-summary prose may describe the upcoming slice on the branch.
+- Install snippets that fetch GitHub Release assets must use `<published-tag>` placeholders or explicit "latest published tag" wording until the release workflow completes.
+- If readers need the unreleased branch behavior, docs should point them to a source build instead of implying the tag already exists.
+
+## Why
+
+This branch already carries the Batch 2 embedding-worker work, but a literal `v0.11.0` install/download command would be false until the tag is live. Separating "branch target" from "published asset" keeps README, getting-started, and docs-site install guidance truthful during the release lane.
+
+
+# Amy decision inbox — v0.11.0 doc truth repair
+
+- **Date:** 2026-04-28T21:46:33.929+08:00
+- **Requested by:** macro88
+
+## Decision
+
+For a release branch that exists before the GitHub tag is published, user-facing docs must separate:
+
+1. **The branch target** — what the upcoming release is preparing (here: `v0.11.0` / Batch 2).
+2. **The latest published tag** — what GitHub Releases downloads and `install.sh` can actually install today.
+
+## Applied rule
+
+- Status and release-summary prose may describe the upcoming slice on the branch.
+- Install snippets that fetch GitHub Release assets must use `<published-tag>` placeholders or explicit "latest published tag" wording until the release workflow completes.
+- If readers need the unreleased branch behavior, docs should point them to a source build instead of implying the tag already exists.
+
+## Why
+
+This branch already carries the Batch 2 embedding-worker work, but a literal `v0.11.0` install/download command would be false until the tag is live. Separating "branch target" from "published asset" keeps README, getting-started, and docs-site install guidance truthful during the release lane.
+

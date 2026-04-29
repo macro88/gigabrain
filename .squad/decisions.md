@@ -1,24 +1,47 @@
-# Amy decision inbox — v0.11.0 doc truth repair
 
-- **Date:** 2026-04-28T21:46:33.929+08:00
-- **Requested by:** macro88
+# Batch 3 validation gate verdict
 
-## Decision
+- Verdict: **FAIL**
+- Worktree: `D:\repos\quaid-vault-sync-batch3-v0120`
+- Branch/HEAD: `spec/vault-sync-engine-batch3-v0120` @ `4401ed7c6ef2ed5cb0652a2902d53c75b3c3c627`
 
-For a release branch that exists before the GitHub tag is published, user-facing docs must separate:
+## What passed
 
-1. **The branch target** — what the upcoming release is preparing (here: `v0.11.0` / Batch 2).
-2. **The latest published tag** — what GitHub Releases downloads and `install.sh` can actually install today.
+- Windows validation lane reached **90.52% line coverage** (`24,794 / 27,391`) and **89.03% region coverage**.
+- The `memory_put` / UUID-preservation slice is exercised on Windows:
+  - `src\commands\put.rs::update_without_memory_id_frontmatter_keeps_existing_page_uuid`
+  - `src\commands\put.rs::put_render_cannot_strip_existing_memory_id_when_update_omits_it`
+  - `src\core\markdown.rs` render-page UUID preservation tests
+  - `tests\roundtrip_raw.rs::export_reproduces_canonical_markdown_fixture_byte_for_byte`
 
-## Applied rule
+## What blocks approval
 
-- Status and release-summary prose may describe the upcoming slice on the branch.
-- Install snippets that fetch GitHub Release assets must use `<published-tag>` placeholders or explicit "latest published tag" wording until the release workflow completes.
-- If readers need the unreleased branch behavior, docs should point them to a source build instead of implying the tag already exists.
+1. **Claimed Batch 3 UUID write-back coverage is not exercised on the Windows lane.**
+   - `17.5ww` / `5a.7` write-back rotation proof is only in Unix-gated tests:
+     - `src\commands\collection.rs::add_runs_uuid_write_back_when_requested`
+     - `tests\collection_cli_truth.rs::collection_add_write_quaid_id_updates_file_and_rotates_raw_imports`
+   - `17.5ww2` dry-run proof is only in Unix-gated tests:
+     - `src\commands\collection.rs::migrate_uuids_dry_run_mutates_nothing`
+     - `tests\collection_cli_truth.rs::collection_migrate_uuids_dry_run_reports_without_mutation`
+   - `17.5ww3` read-only WARN/skip proof is only in a Unix-gated unit test:
+     - `src\commands\collection.rs::migrate_uuids_skips_permission_denied_without_rotating_raw_imports`
 
-## Why
+2. **Coverage confirms the Windows lane does not execute the Batch 3 write-back bodies.**
+   - `src\commands\collection.rs` line coverage: **88.34%**
+   - `src\core\vault_sync.rs` line coverage: **81.90%**
+   - The Windows coverage export shows zero-hit counts through:
+     - `src\commands\collection.rs::migrate_uuids` / `run_uuid_write_back`
+     - `src\core\vault_sync.rs::write_quaid_id_to_file`
 
-This branch already carries the Batch 2 embedding-worker work, but a literal `v0.11.0` install/download command would be false until the tag is live. Separating "branch target" from "published asset" keeps README, getting-started, and docs-site install guidance truthful during the release lane.
+3. **The exact repo Windows coverage flow currently fails to compile in the dirty worktree.**
+   - `src\core\vault_sync.rs:1917` — borrowed `stmt` lifetime issue in `collection_ids_for_root_path`
+   - `src\core\vault_sync.rs:3772` — `LeaseGuard` initialized with a non-existent field
+
+## Routing guidance
+
+- If the coordinator wants a truthful **Windows** gate for Batch 3, route a follow-up that adds Windows-reachable proof seams or narrows the claim away from Windows execution.
+- If the coordinator wants the current branch approved as-is, the dirty worktree compile blockers must be repaired first, then the exact Windows coverage flow must be rerun.
+
 
 
 # Decision: Clippy type_complexity fix — release/v0.11.0

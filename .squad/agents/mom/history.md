@@ -150,3 +150,10 @@ containing a mix of required glue and a dropped Fry artifact piece.
 - **Mom:** Reassigned to fix both blocking findings. Fry locked out.
 - **Scruffy:** Paused validation; coverage lane held pending implementation revisions.
 
+
+## 2026-04-29T13:57:48Z — Memory Cycle: Batch 3 Validation Gate FAIL
+
+- Scruffy validation: **REJECTED** (Windows lane 90.52% line, 89.03% region; UUID write-back proof Unix-only; compile blockers at vault_sync.rs:1917 & :3772)
+- Mom: Revision cycle RUNNING; Fry locked out pending completion
+- Decisions merged: 1 inbox entry
+- Archive: 22 entries moved to decisions-archive.md (file was 438KB)

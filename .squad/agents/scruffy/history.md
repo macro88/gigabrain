@@ -137,6 +137,7 @@ Reviewed only the 13.5 MCP read-filter slice on `spec/vault-sync-engine`. `brain
 ## Learnings
 
 - 2026-04-29T20:33:01.970+08:00 — Batch 3 UUID write-back coverage reconnaissance: the honest test split is `src/core/vault_sync.rs` for atomic rewrite + `file_state`/`raw_imports` rotation + live-owner seams, `src/commands/collection.rs` for `WriteAdmin` routing / dry-run / restoring-write-gate behavior, and `tests/collection_cli_truth.rs` for subprocess exit-code plus JSON/text operator guidance. `tests/command_surface_coverage.rs` is only the cheap dispatch backstop if the new `collection migrate-uuids` arm still misses under coverage. On Windows, iterate with targeted `cargo test` first, then measure with `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` and refresh exact misses via `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`.
+- 2026-04-29T20:33:01.970+08:00 — Batch 3 validation gate: the Windows coverage lane can clear a 90% **line** bar while still failing the honest task gate. In this branch, `memory_put`/frontmatter UUID preservation is exercised on Windows, but the UUID write-back/dry-run/read-only claims live behind `#[cfg(unix)]` tests, so `src\commands\collection.rs::migrate_uuids` and `src\core\vault_sync.rs::write_quaid_id_to_file` stay uncovered on the Windows lane and must not be counted as proven there.
 ## 2026-04-29T13:29:11Z — Batch 3 review close
 
 - **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.
@@ -144,3 +145,10 @@ Reviewed only the 13.5 MCP read-filter slice on `spec/vault-sync-engine`. `brain
 - **Mom:** Reassigned to fix both blocking findings. Fry locked out.
 - **Scruffy:** Paused validation; coverage lane held pending implementation revisions.
 
+
+## 2026-04-29T13:57:48Z — Memory Cycle: Batch 3 Validation Gate FAIL
+
+- Scruffy validation: **REJECTED** (Windows lane 90.52% line, 89.03% region; UUID write-back proof Unix-only; compile blockers at vault_sync.rs:1917 & :3772)
+- Mom: Revision cycle RUNNING; Fry locked out pending completion
+- Decisions merged: 1 inbox entry
+- Archive: 22 entries moved to decisions-archive.md (file was 438KB)
