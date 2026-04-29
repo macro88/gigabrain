@@ -1,3 +1,52 @@
+## Leela Batch 3 merge lane
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **PR:** `#122`
+- **Branch:** `spec/vault-sync-engine-batch3-v0120`
+
+### Decision
+
+Do **not** use admin merge for Batch 3. Stop the lane at the current policy blocker and hand off the failing `codecov/patch` status explicitly before release tagging.
+
+### Why
+
+- The branch was pushed, PR `#122` was created, repo CI/workflow checks were repaired to green, and the review threads were cleaned up.
+- GitHub still reports the PR as non-mergeable under base-branch policy because `codecov/patch` is failing, so merging now would require bypassing policy rather than completing the lane honestly.
+
+
+# Zapp decision — v0.12.0 release prep
+
+---
+timestamp: 2026-04-29T21:29:11.071+08:00
+requested_by: macro88
+worktree: D:\repos\quaid-vault-sync-batch3-v0120
+topic: v0.12.0 release prep
+---
+
+# Decision: hold `v0.12.0` until merge, then do a truth pass before tagging
+
+## Decision
+
+Do **not** create or publish `v0.12.0` from the Batch 3 worktree. Once the branch is merged to `main`, the release lane still needs a short truth pass before tagging:
+
+1. Bump `Cargo.toml` from `0.11.6` to `0.12.0` so the release workflow's exact tag/version gate will pass.
+2. Refresh stale public release surfaces that still describe `v0.11.0` / Batch 2 instead of the Batch 3 `v0.12.0` lane.
+
+## Why
+
+- `.github/workflows/release.yml` fails closed if `Cargo.toml` does not exactly match the pushed tag.
+- The release asset contract itself is already aligned: workflow matrix, `.github/release-assets.txt`, `.github/RELEASE_CHECKLIST.md`, and `scripts/install.sh` all agree on the 17-file release shape.
+- The user-facing truth layer is not aligned yet. `README.md`, `docs/getting-started.md`, `website/src/content/docs/tutorials/install.mdx`, and `docs/roadmap.md` still point at `v0.11.0` / Batch 2, and `docs/roadmap.md` still says opt-in UUID write-back / `migrate-uuids` are deferred even though Batch 3 tasks are closed.
+
+## Operational implication
+
+After merge to `main`, the release sequence should be:
+
+1. Update manifest/docs truth for `v0.12.0`.
+2. Re-run the normal release validation on `main`.
+3. Create the `v0.12.0` tag only after those edits are merged.
+
+
 # Professor coverage delta review
 
 - **Timestamp:** 2026-04-29T21:29:11.071+08:00
@@ -7742,5 +7791,6 @@ The revised Batch 3 implementation now honestly closes the prior rejection findi
 ## Non-blocking follow-ups
 
 - None.
+
 
 

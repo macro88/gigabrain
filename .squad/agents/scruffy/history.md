@@ -175,3 +175,8 @@ Batch 3 revision received multi-agent re-review for same-root alias race and off
 - Windows validation: 91.02% line / 89.32% region
 - UUID write-back proof annotated as Unix-proven
 - Passed to Professor and Nibbler for delta review
+
+## 20260429T173541Z — Team sync
+
+**Scribe update:** Decisions merged (inbox → decisions.md), orchestration logs written, Batch 3 merge lane BLOCKED by codecov/patch.
+
