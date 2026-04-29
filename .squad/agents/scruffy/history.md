@@ -133,3 +133,14 @@ Reviewed only the 13.5 MCP read-filter slice on `spec/vault-sync-engine`. `brain
 - Batch 1 coverage audit complete (2026-04-27T23:51:40Z): Guard tests landed with low conflict. Honest >90% coverage cannot be claimed due to pending implementation-coupled proof for tasks 6.7a, 6.9, 6.10, 6.11. Coverage audit recorded in .squad/orchestration-log/2026-04-27T23-51-40Z-scruffy.md.
 - Batch 1 coverage lift (2026-04-28): the honest Windows coverage command is `cargo llvm-cov --lib --tests --summary-only`, not the bare default invocation. After repairing CLI binary discovery for coverage runs (`tests/common/mod.rs`) and stale lib tests in `src/commands/call.rs` / `src/commands/timeline.rs`, the repo measures **84.51%** line coverage (`20,190 / 23,891`), still **1,312 covered lines short** of a 90% gate. The remaining gap is concentrated in `src/commands/collection.rs` (46.07%), `src/core/reconciler.rs` (59.71%), and `src/core/vault_sync.rs` (77.90%), so Batch 1 is not truthfully shippable from this lane without a dedicated backfill sprint across those three files.
 - Coverage-safe CLI tests (2026-04-28): subprocess tests that invoke `quaid` should resolve the binary through `tests/common/mod.rs::quaid_bin()` rather than raw `env!("CARGO_BIN_EXE_quaid")`. `cargo llvm-cov` on this Windows lane leaves some integration suites with a missing direct env path even though sibling `target\llvm-cov-target\debug\deps\quaid.exe` exists; the fallback helper keeps `tests/collection_cli_truth.rs`, `tests/quarantine_revision_fixes.rs`, and `tests/search_hardening.rs` runnable under both plain `cargo test` and coverage runs.
+
+## Learnings
+
+- 2026-04-29T20:33:01.970+08:00 — Batch 3 UUID write-back coverage reconnaissance: the honest test split is `src/core/vault_sync.rs` for atomic rewrite + `file_state`/`raw_imports` rotation + live-owner seams, `src/commands/collection.rs` for `WriteAdmin` routing / dry-run / restoring-write-gate behavior, and `tests/collection_cli_truth.rs` for subprocess exit-code plus JSON/text operator guidance. `tests/command_surface_coverage.rs` is only the cheap dispatch backstop if the new `collection migrate-uuids` arm still misses under coverage. On Windows, iterate with targeted `cargo test` first, then measure with `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` and refresh exact misses via `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`.
+## 2026-04-29T13:29:11Z — Batch 3 review close
+
+- **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.
+- **Nibbler:** Rejected Batch 3 on safety: live-owner guard keyed to `collection_id` (not unique), bulk rewrite lacks offline lease, test coverage insufficient.
+- **Mom:** Reassigned to fix both blocking findings. Fry locked out.
+- **Scruffy:** Paused validation; coverage lane held pending implementation revisions.
+

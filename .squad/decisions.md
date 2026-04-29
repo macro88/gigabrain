@@ -7707,3 +7707,153 @@ most directly breaking of the three Nibbler findings.
   bin/quaid, scripts/postinstall.js) were already correct; only the git tracking was missing.
 
 
+### 2026-04-29T21:29:11.071+08:00: User directive
+**By:** macro88 (via Copilot)
+**What:** Start implementation branches from main/origin-main, not from an existing release or dirty branch.
+**Why:** User request — captured for team memory
+
+
+# Fry Batch 3 implementation
+
+- Date: 2026-04-29T20:33:01.970+08:00
+- Decision: Keep `page_uuid` dual-read (`quaid_id` first, legacy `memory_id` fallback) but canonicalize every render/write/export to `quaid_id`.
+- Why: Batch 3 needs an explicit migration target for files missing `quaid_id`, while existing vault content and fixtures can still be ingested safely during the transition. Reusing `put_from_string` for write-back preserves the rename-before-commit and raw_import invariants without maintaining a second file writer.
+
+
+# Fry Batch 3 Recon
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 reconnaissance and execution order for `v0.12.0`
+
+## Decision
+
+Implement Batch 3 in this order:
+
+1. Settle the UUID/frontmatter contract seam first (`memory_id` vs `quaid_id`) and thread that decision through the shared UUID helpers.
+2. Extract or reuse the existing rename-before-commit writer path so UUID write-back uses the same sentinel + dedup + post-rename stat + single-tx `file_state`/`raw_imports` rotation as `memory_put`.
+3. Add bulk-write guard helpers for WriteAdmin/offline-live-owner checks before exposing new CLI entrypoints.
+4. Only then wire `collection migrate-uuids` and `collection add --write-quaid-id`, followed immediately by task-aligned tests and OpenSpec checkbox updates.
+
+## Why
+
+The current tree has three coupled seams: the frontmatter key name is still `memory_id`, the only production rename-before-commit implementation lives in `src\commands\put.rs`, and live-owner refusal currently reports only `owner_session_id` even though pid/host data already exists in `serve_sessions`. Landing CLI surface changes before those seams are resolved would either duplicate the write path, produce dishonest task closures, or force follow-up churn across tests and error text.
+
+This ordering also keeps task checkboxes honest. `5a.5`/`17.5ww*` become true when the shared writer path is real, `17.5ii9` becomes true when the live-owner helper is wired, and `5a.5a`/`9.2a` only close once the CLI commands are actually surfaced on top of those lower-level guarantees.
+
+## Notes
+
+- Existing write-gate semantics already live in `src\core\vault_sync.rs::ensure_collection_write_allowed`; Batch 3 should preserve the restoring/`needs_full_sync` fail-closed behavior for WriteAdmin flows.
+- The reconciler preflight already points operators at `quaid collection migrate-uuids`, so the new CLI should be added in the same lane as the real write-back implementation, not earlier.
+
+
+# Leela Batch 3 lane
+
+- **Timestamp:** 2026-04-29T20:33:01.970+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Safe execution lane + release sequencing for Batch 3 / `v0.12.0`
+
+## Decision
+
+Use a separate clean worktree for Batch 3 implementation and release prep staging.
+
+- **Keep untouched:** `D:\repos\quaid` on `release/v0.11.0` (dirty `.squad/` state, ahead of origin by 1 commit)
+- **Implementation lane:** `D:\repos\quaid-vault-sync-batch3-v0120`
+- **Branch:** `spec/vault-sync-engine-batch3-v0120`
+- **Base:** `origin/main` at `fdc20a0` (`Cargo.toml` = `0.11.6`, latest published release = `v0.11.6`)
+
+## Why
+
+The current checkout is not safe for Batch 3 or release work: it is on an old release branch, has uncommitted `.squad/` changes, and diverges from `origin/main`. A sibling worktree isolates implementation from that state and lines Batch 3 up with the real release base.
+
+## Release sequencing constraints
+
+1. Batch 3 is still open in OpenSpec (`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`), so `v0.12.0` cannot ship yet.
+2. The next release must not start from `release/v0.11.0`; it must start from the clean main-based lane and merge back to `main` first, per the user instruction.
+3. `Cargo.toml` on main is still `0.11.6`; a `v0.12.0` tag would require a version bump before tagging.
+4. Release automation is tag-driven (`.github\workflows\release.yml`) and fails if the tag/version mismatch or the 17-file release manifest is incomplete.
+5. Coverage over 90% must be checked explicitly via `cargo llvm-cov`; CI reports coverage but does not fail the build for dipping below the requested threshold.
+
+## Routing
+
+- **Fry first:** implement Batch 3 in the clean worktree using the existing recon order (UUID/frontmatter seam → shared write path → live-owner guard → CLI surfaces/tests/OpenSpec checkboxes).
+- **Professor second:** review `src\core\vault_sync.rs`, `src\core\page_uuid.rs`, and any shared writer extraction before merge.
+- **Scruffy third:** run targeted test/coverage passes and verify the coverage report stays above 90%.
+- **Nibbler fourth:** adversarial review of serve-live refusal, write-gate enforcement, and rename-before-commit safety.
+- **Zapp last:** only after PR review is complete, comments are resolved, CI is green, and the branch is merged to `main`; then run the release checklist and tag/release `v0.12.0` from the merged state.
+
+
+# Leela Batch 3 branch ancestry
+
+- **Timestamp:** 2026-04-29T21:29:11.071+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Batch 3 branch ancestry and conflict-risk only
+
+## Decision
+
+No branch-base recovery is needed.
+
+The Batch 3 worktree branch `spec/vault-sync-engine-batch3-v0120` was created from `origin/main` at `fdc20a0` and then received one Batch 3 commit (`4401ed7`). It was not started from `origin/release/v0.11.0`.
+
+## Why
+
+- The branch reflog records the branch creation point as `origin/main`.
+- `HEAD` is a single-child commit on top of `fdc20a0`, which is `origin/main` / `v0.11.6`.
+- Relative to `origin/release/v0.11.0`, the branch is three commits ahead because it includes the newer main-line commits plus the Batch 3 commit; that is expected ancestry, not evidence of a wrong starting branch.
+
+## Recovery action
+
+Do not rebase, cherry-pick, or rebuild the branch for base-branch reasons. If merge conflicts appear later, treat them as normal forward-integration conflicts from subsequent changes, not as fallout from starting Batch 3 on the wrong base.
+
+
+# Nibbler Batch 3 review
+
+- **Date:** 2026-04-29T20:33:01.970+08:00
+- **Requested by:** macro88
+- **Verdict:** REJECT
+
+## Decision
+
+Batch 3 safety is not acceptable to ship.
+
+## Blocking findings
+
+1. `collection add --write-quaid-id` does not truly refuse live serve ownership for the same vault root. The guard is keyed to the newly created `collection_id`, while `collections.root_path` is not unique and `add()` only rejects duplicate names. A second collection row can point at the same canonical root and run bulk UUID rewrites while serve still owns the original row.
+2. The bulk UUID rewrite path does not hold an offline owner lease for the duration of the batch. `run_uuid_write_back()` only performs a one-time `ensure_no_live_serve_owner()` preflight, and `collection add --write-quaid-id` drops the fresh-attach short-lived lease before starting the rewrite. A serve session can claim ownership after preflight and race the rewrite mid-batch.
+3. The completion claims overstate proof. The landed tests cover `migrate-uuids` live-owner refusal for an existing collection, dry-run, and permission skip, but they do not prove `collection add --write-quaid-id` refusal, the same-root alias case, or the missing lease/race seam.
+
+## Rejected artifacts
+
+- `D:\repos\quaid-vault-sync-batch3-v0120\src\commands\collection.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\src\core\vault_sync.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\tests\collection_cli_truth.rs`
+- `D:\repos\quaid-vault-sync-batch3-v0120\openspec\changes\vault-sync-engine\tasks.md` (the checked closure claims for `5a.5a`, `9.2a`, `12.6b`, `17.5ii9`)
+
+
+# Professor Batch 3 Review
+
+**Date:** 2026-04-29T20:33:01.970+08:00
+**Reviewer:** Professor
+**Verdict:** REJECT
+
+## Blocking findings
+
+1. `src\commands\collection.rs` / `src\core\vault_sync.rs`
+   - Batch 3 closes `12.6b` and `17.5ii9` in `openspec\changes\vault-sync-engine\tasks.md`, and the implementation plan says the refusal must name pid/host **and instruct the operator to stop serve first**.
+   - The landed `ServeOwnsCollectionError` now includes pid/host, but neither the error text nor the CLI handler adds the required operator guidance. Current tests only assert the tag plus pid/host, so the claimed task closure is not truthful.
+
+## Non-blocking notes
+
+- The shared rename-before-commit seam reuse is honest: `write_quaid_id_to_file(...)` delegates to `put::put_from_string(...)`, so UUID write-back rides the existing sentinel/tempfile/rename/fsync/post-rename-stat/single-tx path instead of introducing a parallel writer.
+- The frozen `brain_collections` MCP contract stays closed: `failing_jobs` remains skipped from serialization and the exact-key test still enforces the existing field set.
+
+
+## 2026-04-29T20:33:01.970+08:00 — Batch 3 coverage lane split
+
+- Keep the Batch 3 proof on the real seams:
+  - `src/core/vault_sync.rs` owns atomic UUID write-back, read-only skip, `file_state`/`raw_imports` rotation, and live-owner refusal helpers.
+  - `src/commands/collection.rs` owns `collection add --write-quaid-id` / `collection migrate-uuids --dry-run` routing, restoring-state/write-gate checks, and summary shaping.
+  - `tests/collection_cli_truth.rs` owns subprocess truth: exit codes, JSON summary, plain-text operator guidance, and serve-live refusal wording.
+- Treat `tests/command_surface_coverage.rs` as a last-mile dispatch smoke only; do not spend Batch 3 effort there until the real helper and CLI truth seams are locked.
+- Windows iteration should stay cheap: targeted tests first, then `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`, then `cargo llvm-cov report --json --output-path target\llvm-cov-report.json` for missed-line movement.
+

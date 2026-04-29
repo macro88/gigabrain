@@ -143,3 +143,10 @@ containing a mix of required glue and a dropped Fry artifact piece.
 - 2026-04-28T21:46:33.929+08:00 — `src/core/db.rs`: an empty `quaid_config` is only recoverable when the DB is still bootstrap-fresh (default collection only, no user rows in mutable tables). Once page/link/job state exists, missing model metadata is corruption and must stay fail-closed.
 - 2026-04-28T21:46:33.929+08:00 — For the v7 bootstrap crash window, `embedding_models` is the trustworthy model hint if it already has an active row; the legacy `config.embedding_model` seed is only bootstrap default noise. Key repair/tests live in `src/core/db.rs`, with Batch 2 truth surfaces still anchored in `src/schema.sql`, `tests/collection_cli_truth.rs`, and `tests/common/mod.rs`.
 - 2026-04-28T21:46:33.929+08:00 — The Windows release-gate measurement for this branch still runs through `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`, followed by `cargo llvm-cov report --json --output-path target\\llvm-cov-report.json`; this repair held the gate at 90.77% line coverage.
+## 2026-04-29T13:29:11Z — Batch 3 review close
+
+- **Professor:** Rejected Batch 3 on incomplete task closure (`12.6b`/`17.5ii9`). Error text lacks "stop serve first" guidance. Tests incomplete.
+- **Nibbler:** Rejected Batch 3 on safety: live-owner guard keyed to `collection_id` (not unique), bulk rewrite lacks offline lease, test coverage insufficient.
+- **Mom:** Reassigned to fix both blocking findings. Fry locked out.
+- **Scruffy:** Paused validation; coverage lane held pending implementation revisions.
+
