@@ -10,6 +10,9 @@
 - [2026-04-29T20:33:01.970+08:00] Live-owner data already exists in `serve_sessions(pid, host, heartbeat_at)` plus `collection_owners`, but `VaultSyncError::ServeOwnsCollectionError` only carries `owner_session_id`; Batch 3 bulk-write guards will need an owner-detail lookup seam before CLI can report pid/host truthfully.
 - [2026-04-29T20:33:01.970+08:00] Batch 3 landed by routing UUID write-back through `src\commands\put.rs::put_from_string`, so `collection add --write-quaid-id` and `collection migrate-uuids` reuse the production sentinel/tempfile/rename/file_state/raw_imports path instead of duplicating a weaker writer.
 - [2026-04-29T20:33:01.970+08:00] `src\core\page_uuid.rs` now accepts legacy `memory_id` on read, but `src\core\markdown.rs::render_page` canonicalizes every persisted/exported write to `quaid_id`; migration commands intentionally rewrite files that still lack `quaid_id`. 
+- [2026-04-30T06:37:20.531+08:00] Batch 4 audit: the rename-before-commit core is mostly landed in `src\commands\put.rs`, but the real `12.1` gap is still step 2 — `src\core\fs_safety.rs::walk_to_parent` has no `create_dirs` mode, and the writer still falls back to path-based `fs::create_dir_all(...)` before reopening the parent fd.
+- [2026-04-30T06:37:20.531+08:00] Batch 4 audit: `implementation_plan.md` assumes Batch 3 `migrate-uuids` / `--write-quaid-id` already exist for `12.6b`, but `src\commands\collection.rs` still rejects `write_memory_id` as deferred and has no `MigrateUuids` action, so Batch 3 task state is still incomplete/stale.
+- [2026-04-30T06:37:20Z] Batch 4 decision merged to team ledger. Awaiting Leela worktree setup before implementation begins.
 
 ## 2026-04-29T13:57:48Z — Memory Cycle: Batch 3 Validation Gate FAIL
 

@@ -7623,3 +7623,351 @@ Clear only the real merge blockers inside the release branch, then merge normall
 - The exact `main` SHA to tag for `v0.12.0` is `5a8bdf068bf54be52f9b2bc661af34056473221a`.
 
 
+
+
+# Fry Batch 4 gap audit
+
+- **Date:** 2026-04-30T06:37:20.531+08:00
+- **Change:** `vault-sync-engine`
+- **Scope:** Read-only Batch 4 audit for tasks `12.1`, `12.6`, `12.6a`, `12.6b`, `12.7`
+
+## Decision
+
+Do **not** start Batch 4 implementation on this branch state yet. The rename-before-commit core is close, but `12.6b` is blocked by missing Batch 3 UUID-write surfaces, and the remaining `12.1` gap is still a real source-seam issue rather than a checkbox cleanup.
+
+## Guardrails
+
+1. Keep the Unix platform gate narrow; do **not** widen Windows vault-write support as part of this slice.
+2. Keep `memory_collections` on the frozen 13-field MCP schema; no Batch 4 work should add fields there.
+
+## Task 12.1 — full 13-step rename-before-commit
+
+### Already implemented
+
+- Shared writer core exists and is used by both CLI and MCP through `src\commands\put.rs::put_from_string(...)` and `persist_with_vault_write(...)` (`src\commands\put.rs:100-191`, `342-623`).
+- The current writer already covers most of the design sequence:
+  - step 1 CAS / write gate: `resolve_slug_for_op`, `ensure_collection_vault_write_allowed`, `check_update_expected_version` (`src\commands\put.rs:109-117`, `376-381`; `src\core\vault_sync.rs:556-577`)
+  - step 3 precondition: `check_fs_precondition_before_sentinel(...)` (`src\commands\put.rs:382-387`; `src\core\vault_sync.rs:667-674`)
+  - step 4 sha256: `prepared.sha256` (`src\commands\put.rs:166`, `372-375`)
+  - steps 5-6 sentinel + tempfile fsync: `create_recovery_sentinel(...)`, `create_tempfile(...)` (`src\commands\put.rs:390`, `424-438`, `652-719`)
+  - step 7 symlink guard: `stat_at_nofollow(...)` check before rename (`src\commands\put.rs:439-451`)
+  - step 8 dedup insert: `insert_write_dedup(...)` + `remember_self_write_path(...)` (`src\commands\put.rs:467-489`)
+  - steps 9-11 rename, parent fsync, post-rename stat/inode/hash guard (`src\commands\put.rs:506-595`)
+  - steps 12-13 single SQLite tx + sentinel unlink (`src\commands\put.rs:597-623`)
+
+### Partially implemented
+
+- The filesystem precondition logic itself is good and tested (`src\core\vault_sync.rs:581-700`, `5259-5402`), but it is still wired as a separate helper that reopens the root / parent rather than operating on the final trusted parent fd that the writer later uses.
+- Post-rename abort handling is already fail-closed and sentinel-backed (`src\commands\put.rs:750-778`), so the recovery model is mostly correct even before the last seam is repaired.
+
+### Still missing
+
+- **Step 2 is not design-complete.** `walk_to_parent(...)` has no `create_dirs=true` mode (`src\core\fs_safety.rs:58-132`), and the writer still falls back to path-based `fs::create_dir_all(parent)` before reopening the parent fd (`src\commands\put.rs:392-412`). That is the main remaining `12.1` gap.
+- The actual step ordering is still split: precondition runs through `check_fs_precondition_before_sentinel(...)` before the final parent fd is opened for writing (`src\commands\put.rs:382-387` vs `399-412`), instead of one exact fd-relative sequence.
+- The symlink refusal path still returns a generic I/O error string (`"target path is a symlink"`) rather than a dedicated typed write error (`src\commands\put.rs:439-449`).
+- The implementation-plan pointer is stale: it says audit `put_from_string` in `vault_sync.rs`, but the production writer lives in `src\commands\put.rs`.
+
+### Tests that already exist
+
+- Precondition/OCC before sentinel: `unix_update_without_expected_version_conflicts_before_sentinel_creation`, `unix_stale_expected_version_conflicts_before_sentinel_creation`, `unix_external_delete_conflicts_before_sentinel_creation`, `unix_external_create_conflicts_before_sentinel_creation`, `unix_fresh_create_succeeds_without_existing_file_state` (`src\commands\put.rs:1221-1347`)
+- Failure matrix and recovery: sentinel failure, pre-rename failure, rename failure, parent fsync failure, foreign rename, commit busy recovery, foreign-rename + startup recovery (`src\commands\put.rs:1462-1754`)
+- Filesystem-precondition behavior: fast path, ctime self-heal, hash mismatch, same-size external rewrite (`src\core\vault_sync.rs:5259-5402`)
+
+### Tests still missing
+
+- Explicit tempfile `fsync` failure coverage (today there is no dedicated hook for the tempfile fsync branch)
+- Explicit post-rename `stat` failure coverage
+- Explicit dedup-insert collision / duplicate-entry failure coverage
+- Typed symlink-escape coverage (today only the raw error string is present)
+
+## Task 12.6 — mandatory `expected_version` everywhere
+
+### Already implemented
+
+- MCP enforces the contract up front:
+  - existing page + missing `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1651-1673`, `1677-1707`)
+  - stale `expected_version` → conflict (`src\mcp\server.rs:589-615`, tests at `1711-1740`)
+  - create with unexpected `expected_version` → conflict (`src\mcp\server.rs:597-604`, tests at `1814-1828`)
+- The Unix CLI/write-through core also enforces missing/stale update versions before sentinel creation (`src\commands\put.rs:376-381`, tests at `1221-1280`).
+- CLI help text already documents the intended rule: `--expected-version` required for Unix updates, optional for creates (`src\main.rs:41-46`).
+
+### Partially implemented
+
+- The real OCC rule is already present for the shipped MCP and direct Unix CLI path, so this task is mostly a truth-closure task rather than a missing-core-logic task.
+
+### Still missing
+
+- The contract is not yet closed through the deferred live-routing path from `12.6a`; `quaid put` still writes directly regardless of serve ownership.
+- There is still a non-Unix fallback path and test that allow unconditional update semantics (`src\commands\put.rs:323-339`, `1780-1792`). Do **not** widen platform support to “fix” this; instead keep the Unix gate truthful and keep Batch 4 scoped to vault-write surfaces only.
+
+### Tests that already exist
+
+- MCP OCC tests: `src\mcp\server.rs:1651-1828`
+- Unix CLI-core OCC tests: `src\commands\put.rs:1221-1280`
+
+### Tests still missing
+
+- A serve-owned CLI-routing test proving the same OCC contract still holds once `12.6a` is implemented
+
+## Task 12.6a — `quaid put` live-owner/offline routing
+
+### Already implemented
+
+- Core owner-lease infrastructure exists:
+  - `acquire_owner_lease(...)` / `owner_session_id(...)` (`src\core\vault_sync.rs:1865-1910`)
+  - tests for refusing a live foreign owner and reclaiming stale residue (`src\core\vault_sync.rs:6422-6492`)
+
+### Partially implemented
+
+- `ServeOwnsCollectionError` exists, but it only carries `owner_session_id`, not the `pid/host` detail required by the Batch 4 wording (`src\core\vault_sync.rs:307-310`).
+
+### Still missing
+
+- `quaid put` is still direct-dispatch only:
+  - `main.rs` sends `Commands::Put` straight to `commands::put::run(...)` (`src\main.rs:301-305`)
+  - `commands::put::run(...)` only applies the Unix gate, reads stdin, and calls `put_from_string(...)` (`src\commands\put.rs:90-97`)
+  - there is **no** live-owner detection, no refusal instructing “use MCP or stop serve”, no offline temporary lease/heartbeat wrapper, and no IPC path
+- This task must stay in the refuse-or-offline shape only; do not reopen Batch 5 IPC work here.
+
+### Tests that already exist
+
+- Only lower-level lease helper tests in `vault_sync.rs` (`6422-6492`)
+
+### Tests still missing
+
+- `quaid put` refuses while a live serve owner exists
+- `quaid put` acquires/releases an offline owner lease when no live owner exists
+- refusal message includes pid/host once the error surface is repaired
+
+## Task 12.6b — bulk rewrite routing
+
+### Already implemented
+
+- Nothing user-facing for this task is actually implemented yet.
+
+### Partially implemented
+
+- The branch has prerequisite clues only:
+  - restore/reconcile status text already tells operators to run `migrate-uuids work` in the trivial-content halt case (`src\commands\collection.rs:3000-3005`)
+  - Batch 3 tasks remain open in `tasks.md` (`openspec\changes\vault-sync-engine\tasks.md:116-121`, `174`, `236`, `373`, `418-419`)
+
+### Still missing
+
+- `CollectionAction` still has **no** `MigrateUuids` variant (`src\commands\collection.rs:19-55`)
+- `CollectionAddArgs` still uses the old `write_memory_id` field name, and `add(...)` explicitly rejects it as deferred (`src\commands\collection.rs:58-67`, `234-237`)
+- There is a direct defer-test proving the flag is still blocked (`src\commands\collection.rs:1790-1812`)
+- No live-owner refusal exists for bulk UUID rewrites because the bulk UUID rewrite commands themselves do not exist yet
+- Even if they did exist, the current `ServeOwnsCollectionError` cannot yet name pid/host
+
+### Batch 3 stale/incomplete callout
+
+- `tasks.md` is honest that Batch 3 remains open (`5a.5`, `5a.5a`, `9.2a`, `17.5ii9`, `17.5ww`, `17.5ww2` are still unchecked), but the current `implementation_plan.md` is stale where it says Batch 3 bulk-write routing “already implements” the `12.6b` refusal (`openspec\changes\vault-sync-engine\implementation_plan.md:221`).
+- That stale assumption is contradicted by the live code in `src\commands\collection.rs`, which still rejects `--write-quaid-id` and exposes no `migrate-uuids` command.
+
+### Tests that already exist
+
+- Only the defer test: `add_rejects_write_memory_id_before_creating_collection_row` (`src\commands\collection.rs:1790-1812`)
+
+### Tests still missing
+
+- `migrate-uuids` offline success
+- `migrate-uuids --dry-run` no-op
+- `collection add --write-quaid-id` live-owner refusal
+- bulk refusal message naming pid/host and stop-serve guidance
+
+## Task 12.7 — tests
+
+### What already exists
+
+- Strong direct coverage already exists for:
+  - OCC-before-sentinel and filesystem-precondition cases (`src\commands\put.rs:1221-1347`)
+  - per-slug mutex behavior (`src\commands\put.rs:1351-1458`)
+  - sentinel/pre-rename/rename cleanup (`src\commands\put.rs:1462-1538`)
+  - parent-fsync failure (`src\commands\put.rs:1578-1615`)
+  - foreign rename / concurrent rename (`src\commands\put.rs:1619-1653`)
+  - commit failure and sentinel-driven startup recovery (`src\commands\put.rs:1657-1754`)
+  - MCP-side OCC / no-vault-mutation assertions (`src\mcp\server.rs:1651-1828`)
+
+### What is still missing
+
+- explicit tempfile fsync failure
+- explicit post-rename stat failure
+- explicit dedup-entry collision
+- CLI live-owner routing tests (`12.6a`)
+- bulk UUID rewrite routing tests (`12.6b`, blocked by missing Batch 3 commands)
+
+## Concrete implementation checklist once branch state is corrected
+
+1. **Do not touch platform scope or MCP schema.**
+   - Keep the Unix gate closed.
+   - Keep `memory_collections` frozen at 13 fields.
+2. **Repair Batch 3 first; Batch 4 depends on it.**
+   - Add `CollectionAction::MigrateUuids { name, dry_run }`
+   - Rename `write_memory_id` to the truthful `write_quaid_id`
+   - Implement the actual bulk UUID writer by reusing the production writer path, not a second file rewrite path
+   - Add the live-owner refusal for those bulk commands, with pid/host detail
+   - Mark Batch 3 tasks immediately as each one is truly done
+3. **Finish the real `12.1` seam.**
+   - Replace the path-based `fs::create_dir_all(...)` fallback with an fd-relative parent-directory creation/walk flow
+   - Unify the write sequence so the precondition and rename operate on the same trusted parent-fd path
+   - Add a typed symlink-escape error instead of a generic I/O string
+4. **Implement `12.6a` in the narrowed Batch 4 shape only.**
+   - Before direct `quaid put`, detect a live owner from `collection_owners` + `serve_sessions`
+   - If live owner exists, refuse and instruct the operator to use MCP or stop serve
+   - If no live owner exists, acquire a temporary offline lease + heartbeat around the direct write, then release it
+5. **Close `12.7` with the missing failure tests.**
+   - tempfile fsync failure
+   - post-rename stat failure
+   - dedup collision
+   - CLI live-owner refusal / offline lease flow
+   - bulk UUID rewrite routing once Batch 3 surfaces exist
+6. **Protect the >90% coverage bar during the implementation lane.**
+   - keep new tests inline with the touched modules
+   - rerun the existing coverage command after Batch 3 + Batch 4 land together
+
+
+---
+created_at: 2026-04-30T06:37:20.531+08:00
+author: Leela
+type: routing-decision
+subject: Batch 4 execution lane — recovery path from stale checkout
+---
+
+# Decision: Batch 4 Branch Routing and Recovery Path
+
+## Context
+
+The current working directory (`D:\repos\quaid`) is parked on `release/v0.11.0`, which is
+12 commits ahead of `origin/release/v0.11.0` (all Scribe log commits) and is **not on main**.
+`origin/main` is at `v0.12.0` (SHA `5a8bdf0`). The local tasks.md shows Batch 3 items as
+open only because the stale branch predates the Batch 3 merge — all Batch 3 closures
+(`5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`, `12.6b`, `17.5www`)
+are confirmed closed on `origin/main`. No `v0.13.0` tag or `release/v0.13.0` branch exists.
+There are 2 modified `.squad/` files and 1 untracked `.squad/` health report in the working tree.
+
+## Decision
+
+**Batch 4 work begins in a sibling worktree created from `origin/main`.**
+
+The `D:\repos\quaid` checkout is NOT touched for Batch 4 code work. The stale
+`release/v0.11.0` working tree's dirty files are low-risk (`.squad/` only) and do not
+conflict with a sibling worktree's object store.
+
+### Worktree setup
+
+```powershell
+cd D:\repos\quaid
+git fetch origin main --tags
+git worktree add ..\quaid-vault-sync-batch4-v0130 -b spec/vault-sync-engine-batch4-v0130 origin/main
+```
+
+Starting SHA: `5a8bdf0` (tagged `v0.12.0`, confirmed clean).
+
+### Batch 4 task scope
+
+Open tasks on `origin/main`:
+- `12.1` — complete the 13-step rename-before-commit sequence (audit `put_from_string` against all 13 steps; wire steps 2 `walk_to_parent`, 3 `check_fs_precondition`, 7 symlink defense-in-depth, and 8 dedup insert timing on ALL vault-byte write paths)
+- `12.6` — mandatory `expected_version` enforcement audit across MCP + CLI (no blind-update escape hatch)
+- `12.6a` — CLI write routing for `quaid put` single-file (refuse with `ServeOwnsCollectionError` when live owner exists; offline lease path when no live owner)
+- `12.6b` — **ALREADY CLOSED** on main (Batch 3 Mom revision). Verify guard in place; no re-implementation needed.
+- `12.7` — tests covering every rename-before-commit failure mode (tempfile fsync error, parent fsync error, commit error, foreign rename in window, concurrent dedup entries, external write mid-precondition)
+
+### Agent assignments
+
+| Agent | Task |
+|-------|------|
+| Fry | Implements 12.1, 12.6, 12.6a, 12.7 in the sibling worktree |
+| Scruffy | Monitors unit test coverage ≥ 90% throughout |
+| Professor | Code peer review of 12.1 (security-adjacent) and 12.6 (contract enforcement) |
+| Nibbler | Adversarial review of 12.6a (CLI write routing, live-owner detection) |
+| Bender | End-to-end validation pass after Fry signals implementation complete |
+| Amy | Documentation review for any new error types or CLI changes |
+| Zapp | Release lane: `release/v0.13.0` → PR → merge to main → tag `v0.13.0` after all gates clear |
+
+### Gate sequence before code begins
+
+1. ✅ No active reviewer gate (all prior Batch 3 gates cleared at v0.12.0 merge)
+2. ✅ No v0.13.0 tag collision
+3. ✅ `origin/main` is clean at `5a8bdf0`
+4. ✅ Batch 3 closures verified on `origin/main` — no re-closure needed
+5. **Required before first commit:** Fry creates the worktree as specified above
+
+### Gate sequence before release
+
+1. `cargo test` green in the worktree
+2. Coverage ≥ 90% confirmed by Scruffy (CI publishes coverage evidence; Scruffy must confirm manually)
+3. Professor and Nibbler approve (no admin-merge around reviewer gates — lesson from v0.12.0)
+4. All review threads resolved
+5. `release/v0.13.0` branch PR opened against `main`
+6. PR merged cleanly
+7. Zapp creates annotated tag `v0.13.0` from merge SHA and pushes it
+
+### Constraints
+
+- **Do NOT merge Batch 4 into or from `release/v0.11.0`** — that branch is dead.
+- **Do NOT touch the 3 dirty files in `D:\repos\quaid`** during Batch 4 — they are Scribe artifacts and should be committed or pruned separately by Scribe.
+- Tasks `12.6c`–`12.6g` (IPC socket) are **Batch 5 scope** — do not pull them into Batch 4.
+- `12.6b` is already closed; Batch 4 only needs to verify the guard is present, not re-implement it.
+
+## Risk flags
+
+- `12.1` is security-adjacent (rename-before-commit discipline). Professor must review before merge, not after.
+- The coverage threshold is not CI-enforced — human confirmation required before Zapp starts release lane.
+- `now.md` is stale (updated 2026-04-25). The active branch field says `spec/vault-sync-engine` but actual work branch is a sibling worktree. No action needed for Batch 4 execution, but Scribe should update `now.md` after Batch 4 lands.
+
+
+---
+created_at: 2026-04-30T06:37:20.531+08:00
+author: Scruffy
+type: testing-decision
+subject: Batch 4 coverage baseline and closure guard
+---
+
+# Decision: Batch 4 coverage baseline and truthful closure gate
+
+## Context
+
+A read-only Batch 4 assessment on `D:\repos\quaid` found that the current repo-wide Rust
+coverage baseline is **89.47%** from
+`cargo llvm-cov --lib --tests --summary-only --no-clean -j 1`.
+
+The Batch 4 lane is uneven:
+
+- `src\core\vault_sync.rs` — 83.22% line coverage
+- `src\commands\put.rs` — 95.70%
+- `src\commands\collection.rs` — 91.70%
+- `src\mcp\server.rs` — 96.90%
+
+The same assessment also confirmed that Batch 4 routing tasks are still genuinely open:
+`quaid put` does not yet perform live-owner routing, `ServeOwnsCollectionError` still lacks
+the pid/host detail required by the spec, `--write-quaid-id` is still explicitly deferred,
+and there is no `migrate-uuids` collection subcommand in the current command surface.
+
+## Decision
+
+**Do not claim Batch 4 is above 90% or closure-complete unless validation includes both:**
+
+1. a fresh `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` run, and
+2. a refreshed `target\llvm-cov-report.json` via
+   `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`.
+
+**Do not close `12.6`, `12.6a`, `12.6b`, or `12.7` on the current surface.**
+
+## Rationale
+
+- The repo is already below the stated 90% bar before any Batch 4 code lands.
+- `vault_sync.rs` is the dominant coverage risk, so touching it without direct backfill is
+  likely to worsen both patch and project coverage.
+- The current codebase has good low-level OCC and rename-failure proof, but it still lacks the
+  live-owner routing and bulk UUID rewrite surfaces needed for truthful closure of the open
+  Batch 4 tasks.
+
+## Lean validation path
+
+For Batch 4 implementation work, the lean honest path is:
+
+1. targeted Rust tests for `src\commands\put.rs` and `src\core\vault_sync.rs`
+2. any new CLI truth tests needed for live-owner refusal / offline lease flow
+3. final coverage rerun with the two-command llvm-cov loop above
+
+This keeps scope tight while still proving the real Batch 4 contract.
