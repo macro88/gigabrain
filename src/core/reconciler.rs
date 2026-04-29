@@ -5939,6 +5939,22 @@ mod tests {
     }
 
     #[test]
+    fn default_restore_stability_max_iters_guard_restores_previous_value() {
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _original = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "7");
+        {
+            let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "12");
+            assert_eq!(default_restore_stability_max_iters(), 12);
+        }
+
+        assert_eq!(
+            std::env::var("QUAID_RESTORE_STABILITY_MAX_ITERS").as_deref(),
+            Ok("7")
+        );
+        assert_eq!(default_restore_stability_max_iters(), 7);
+    }
+
+    #[test]
     fn sentinel_count_ignores_files_without_needs_full_sync_extension() {
         let recovery_root = tempfile::TempDir::new().unwrap();
         let collection_id = 1i64;
