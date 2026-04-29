@@ -524,7 +524,7 @@ mod tests {
         }
 
         #[test]
-        fn renders_persisted_uuid_even_when_frontmatter_map_lacks_memory_id() {
+        fn renders_persisted_uuid_even_when_frontmatter_map_lacks_quaid_id() {
             let page = make_page(vec![("title", "Alice")], "# Alice\n", "");
 
             let rendered = render_page(&page);
@@ -558,7 +558,7 @@ mod tests {
         }
 
         #[test]
-        fn parses_and_renders_memory_id_frontmatter() {
+        fn parses_and_renders_quaid_id_frontmatter() {
             let canonical = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\n# Alice\n";
             let (frontmatter, body) = parse_frontmatter(canonical);
 
@@ -571,7 +571,7 @@ mod tests {
             page.uuid = frontmatter
                 .get("quaid_id")
                 .cloned()
-                .expect("memory_id should remain available");
+                .expect("quaid_id should remain available");
             let rendered = render_page(&Page {
                 frontmatter,
                 ..page

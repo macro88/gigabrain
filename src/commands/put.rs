@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn update_without_memory_id_frontmatter_keeps_existing_page_uuid() {
+    fn update_without_quaid_id_frontmatter_keeps_existing_page_uuid() {
         let conn = open_test_db();
         let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Alice\ntype: person\n---\nOriginal.\n";
         put_from_string(&conn, "people/alice", original, None).unwrap();
