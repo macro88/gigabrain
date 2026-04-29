@@ -169,3 +169,9 @@ Batch 3 revision received multi-agent re-review for same-root alias race and off
 - Nibbler → Scruffy: Revalidation launched on Windows lane; coverage still insufficient
 - Scruffy: Blocking on honest Windows coverage for 17.5ww/ww2/ww3 or narrowed claims
 
+
+## 2026-04-29 — Coverage fix complete
+- Commit: 397d7c7
+- Windows validation: 91.02% line / 89.32% region
+- UUID write-back proof annotated as Unix-proven
+- Passed to Professor and Nibbler for delta review

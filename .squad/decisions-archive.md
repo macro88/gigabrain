@@ -5543,3 +5543,266 @@ For a release branch that exists before the GitHub tag is published, user-facing
 
 This branch already carries the Batch 2 embedding-worker work, but a literal `v0.11.0` install/download command would be false until the tag is live. Separating "branch target" from "published asset" keeps README, getting-started, and docs-site install guidance truthful during the release lane.
 
+
+
+---\n
+# Mom — Vault-Sync Edge Case Audit
+
+**Status:** Audit complete; no code modified  
+**Date:** 2026-04-25  
+**Author:** Mom (read-only audit)  
+**Scope:** `vault_sync.rs`, `quarantine.rs`, `collection.rs`, `tests/watcher_core.rs`, `tests/quarantine_revision_fixes.rs`
+
+---
+
+## Findings
+
+### Finding 1 — Deferred-restore tests assert the bail, not the validation logic
+
+All four restore tests in `tests/quarantine_revision_fixes.rs` assert the same bail string:
+
+```
+"quarantine restore is deferred in this batch until crash-durable cleanup and no-replace install land"
+```
+
+Their names describe behaviors that are not exercised:
+
+| Test name | Named behavior | Actually tested |
+|---|---|---|
+| `restore_surface_is_deferred_for_non_markdown_target` | `.md` extension validation | CLI bail fires before function call |
+| `restore_surface_is_deferred_for_live_owned_collection` | live-owner gate | CLI bail fires before function call |
+| `restore_surface_is_deferred_before_target_conflict_mutation` | conflict detection + no mutation | CLI bail fires before function call |
+| `restore_surface_is_deferred_for_read_only_collection` | writable flag enforcement | CLI bail fires before function call |
+
+**Impact:** The test names create false confidence that these behaviors are tested. When restore is re-enabled, the tests must be updated — but there is no indication of this in the test code itself. The bail string is also a substring match, so if the message changes the assertion still passes vacuously if the substring happens to reappear.
+
+**Action:** When restore is re-enabled at the CLI layer, all four tests must be rewritten to assert actual behavior. Until then, a comment at the top of the test file should state: _"These tests assert the deferred-surface bail, not the validation logic their names describe."_
+
+---
+
+### Finding 2 — Discard happy-path after successful export is untested
+
+`blocker_1_failed_export_does_not_unlock_discard` (the sole real production-behavior test in `quarantine_revision_fixes.rs`) proves the negative case: failed export → `quarantine_exports` row not written → discard remains blocked.
+
+**The positive case is not tested anywhere:**
+- Successful export → `quarantine_exports` row written with current epoch → `has_current_export = true` → `discard_quarantined_page(force=false)` succeeds even when `counts.any() = true`
+
+This is the direct intended behavior of the blocker-1 fix. Only one side of the contract is tested.
+
+**Highest-value missing test:** `discard_succeeds_after_current_epoch_export_with_db_only_state`  
+**File:** `src/core/quarantine.rs` unit tests or `tests/quarantine_revision_fixes.rs`
+
+```rust
+#[test]
+fn discard_succeeds_after_current_epoch_export_with_db_only_state() {
+    // insert quarantined page with knowledge_gap (db_only_state)
+    // call export_quarantined_page → should succeed
+    // assert quarantine_exports row exists with current epoch
+    // call discard_quarantined_page(force=false) → should succeed
+    // assert page deleted from DB
+}
+```
+
+---
+
+### Finding 3 — `discard` with `force=true` is untested
+
+The `force=true` branch in `discard_quarantined_page` bypasses the `ExportRequired` guard entirely:
+
+```rust
+if counts.any() && !force && !exported_before_discard {
+    return Err(QuarantineError::ExportRequired { ... });
+}
+```
+
+No test at any level (unit or integration) exercises `force=true` with `counts.any()=true`. The force path is used by the CLI `--force` flag but is untested.
+
+**Missing test:** `discard_with_force_and_db_only_state_skips_export_guard`  
+**File:** `src/core/quarantine.rs` unit tests
+
+---
+
+### Finding 4 — `discard_quarantined_page` writable-flag policy is undocumented and untested
+
+`discard_quarantined_page` calls `ensure_collection_write_allowed`, which checks only `state` and `needs_full_sync`. It does **not** check the `writable` flag. This means discarding a quarantined page from a `writable=false` collection succeeds.
+
+This is probably intentional: `discard` is a pure SQLite `DELETE FROM pages` with no vault filesystem bytes written. The `writable` flag guards vault-byte writes. Discard is not a vault write.
+
+But it is undocumented and there is no test asserting this is the contract.
+
+**Decision needed (P1):** Is `discard` on a read-only collection intentionally allowed? If yes, add a test and a code comment on the call site. If no, replace `ensure_collection_write_allowed` with `ensure_collection_vault_write_allowed`.
+
+**Recommendation:** The intentional reading is correct. Add a test and a comment.
+
+**Missing test:** `discard_allowed_on_read_only_active_collection`  
+**File:** `src/core/quarantine.rs` unit tests  
+
+```rust
+// writable=false should not block discard because discard writes no vault bytes
+fn insert_collection_readonly(conn: &Connection) -> i64 {
+    conn.execute(
+        "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+         VALUES ('work', '/vault', 'active', 0, 0)",
+        [],
+    ).unwrap();
+    conn.last_insert_rowid()
+}
+
+#[test]
+fn discard_allowed_on_read_only_active_collection() {
+    let conn = open_test_db();
+    let cid = insert_collection_readonly(&conn);
+    let page_id = insert_quarantined_page(&conn, cid, "notes/q", "2026-01-01T00:00:00Z");
+    // no db_only_state, no force needed
+    let receipt = discard_quarantined_page(&conn, "work::notes/q", false).unwrap();
+    assert_eq!(receipt.slug, "notes/q");
+    // page is gone
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM pages WHERE id=?1", [page_id], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+}
+```
+
+---
+
+### Finding 5 — `record_quarantine_export` upsert silently overwrites audit trail
+
+```sql
+ON CONFLICT(page_id, quarantined_at) DO UPDATE SET
+    exported_at = excluded.exported_at,
+    output_path = excluded.output_path
+```
+
+Re-exporting a quarantined page to a different output path silently updates `exported_at` and `output_path`. The original export timestamp is lost. If re-export is a valid user operation (exporting to a different path), the behavior is correct. If the intent is an append-only audit trail, it is wrong.
+
+The current test (`current_export_only_matches_current_quarantine_epoch`) tests epoch-matching only. No test exercises re-export.
+
+**Decision needed (P2):** Is re-export a valid user operation? If yes, document the upsert semantics and add a test. If no, add an existence check before INSERT and return a conflict error.
+
+**Recommendation:** Re-export to a different path is a legitimate use case (e.g., relocating the output file). Keep the upsert. Add a test documenting the behavior and an `eprintln!` noting the overwrite.
+
+**Missing test:** `re_export_updates_exported_at_and_output_path`  
+**File:** `src/core/quarantine.rs` unit tests
+
+---
+
+### Finding 6 — `sweep` with `GBRAIN_QUARANTINE_TTL_DAYS=0` is untested
+
+`sweep_expired_quarantined_pages` uses:
+```sql
+CAST(strftime('%s', 'now') - strftime('%s', quarantined_at) AS INTEGER) >= (?1 * 86400)
+```
+
+With `ttl_days=0`, the filter becomes `>= 0` which matches every quarantined page. The existing test uses a fixed past date (`2026-01-01T00:00:00Z`) which is always expired, bypassing the boundary condition.
+
+**Missing test:** `sweep_with_zero_ttl_discards_page_quarantined_just_now`  
+**File:** `src/core/quarantine.rs` unit tests  
+
+```rust
+#[test]
+fn sweep_with_zero_ttl_discards_page_quarantined_just_now() {
+    std::env::set_var("GBRAIN_QUARANTINE_TTL_DAYS", "0");
+    let conn = open_test_db();
+    let cid = insert_collection(&conn);
+    // insert page with quarantined_at = strftime now
+    conn.execute(
+        "INSERT INTO pages ... quarantined_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') ...",
+        ...
+    ).unwrap();
+    let page_id = conn.last_insert_rowid();
+    let summary = sweep_expired_quarantined_pages(&conn).unwrap();
+    assert_eq!(summary.discarded, 1);
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM pages WHERE id=?1", [page_id], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+    std::env::remove_var("GBRAIN_QUARANTINE_TTL_DAYS");
+}
+```
+
+---
+
+### Finding 7 — Watcher integration coverage is minimal
+
+`tests/watcher_core.rs` has exactly one test: `start_serve_runtime_defers_fresh_restore_without_mutating_page_rows`. This proves that `start_serve_runtime` does not mutate a collection in `restoring` state with a live foreign heartbeat. The watcher itself is essentially integration-untested.
+
+**Missing coverage areas:**
+
+| Gap | File target | Difficulty |
+|---|---|---|
+| Non-.md file events filtered by `relative_markdown_path` | `src/core/vault_sync.rs` unit tests | Low — unit test `relative_markdown_path(Path::new("file.json"))` returns `None` |
+| Watcher replaced on `generation` bump (`sync_collection_watchers`) | `tests/watcher_core.rs` | Medium — two sequential serve sessions, verify watcher rebuilt |
+| Reconcile halt written via `convert_reconcile_error` | `src/core/vault_sync.rs` unit tests | Low — can call `convert_reconcile_error` directly with a halt-class error |
+| Channel overflow → `needs_full_sync` | `tests/watcher_core.rs` | High — requires flooding the channel before poll drains it |
+
+**Minimum valuable addition:** Add a unit test for `relative_markdown_path` with non-.md inputs. This is a two-line test that closes a gap in the event-filtering contract.
+
+---
+
+### Finding 8 — `QUARANTINE_SWEEP_INTERVAL_SECS` is not configurable
+
+`start_serve_runtime` uses a hardcoded `const QUARANTINE_SWEEP_INTERVAL_SECS: u64 = 24 * 60 * 60`. There is no env-var override. Writing an integration test that proves the serve loop fires the sweep requires either a 24-hour wait or a testability escape hatch.
+
+**Action if serve-loop sweep integration test is desired:** Add `GBRAIN_QUARANTINE_SWEEP_INTERVAL_SECS` env var override (analogous to the existing `GBRAIN_QUARANTINE_TTL_DAYS` override).
+
+---
+
+## Prioritized test backlog
+
+| Priority | Test | File | Complexity |
+|---|---|---|---|
+| P1 | `discard_succeeds_after_current_epoch_export_with_db_only_state` | `quarantine.rs` unit tests | Low |
+| P1 | `discard_with_force_and_db_only_state_skips_export_guard` | `quarantine.rs` unit tests | Low |
+| P1 | `discard_allowed_on_read_only_active_collection` (+ decision) | `quarantine.rs` unit tests | Low |
+| P2 | `re_export_updates_exported_at_and_output_path` | `quarantine.rs` unit tests | Low |
+| P2 | `sweep_with_zero_ttl_discards_page_quarantined_just_now` | `quarantine.rs` unit tests | Low |
+| P3 | `relative_markdown_path_returns_none_for_non_md_inputs` | `vault_sync.rs` unit tests | Low |
+| P3 | `convert_reconcile_error_writes_reconcile_halted_at` | `vault_sync.rs` unit tests | Low |
+| P4 | `watcher_rebuilt_on_generation_bump` | `tests/watcher_core.rs` | Medium |
+| P5 | Convert 4 deferred-restore tests to real behavior tests | `tests/quarantine_revision_fixes.rs` | High (needs restore re-enabled first) |
+| P5 | `sweep_fires_in_serve_loop` (needs interval override) | `tests/watcher_core.rs` | High (needs FIX-3) |
+
+---
+
+## Production fix candidates
+
+### FIX-1: Clarify discard writable-gate policy (comment + test)
+
+Add a comment on the `ensure_collection_write_allowed` call in `discard_quarantined_page`:
+
+```rust
+// discard is a pure DB operation (DELETE FROM pages); it writes no vault bytes,
+// so we enforce state/sync guards only — not the writable flag.
+vault_sync::ensure_collection_write_allowed(conn, resolved.collection_id)?;
+```
+
+Add unit test `discard_allowed_on_read_only_active_collection` to lock this in.
+
+**Risk:** Low. Documents existing behavior.
+
+### FIX-2: Log re-export overwrite in `record_quarantine_export`
+
+Add an `eprintln!` when the INSERT detects a conflict (re-export case):
+
+```rust
+// After execute: check rows_changed. If 0 rows inserted (conflict handled by DO UPDATE),
+// log the overwrite.
+eprintln!(
+    "INFO: quarantine_re_exported page_id={} quarantined_at={} new_output_path={}",
+    page_id, quarantined_at, output_path
+);
+```
+
+This makes re-export visible in logs without changing semantics.
+
+**Risk:** Low. Additive logging only.
+
+### FIX-3 (if needed): Add `GBRAIN_QUARANTINE_SWEEP_INTERVAL_SECS` env override
+
+Analogous to existing `GBRAIN_QUARANTINE_TTL_DAYS`. Required only if a serve-loop sweep integration test is planned.
+
+**Risk:** Low. Additive env var.
+
+
+## 2026-04-24: Vault-sync-engine Batch 13.3 review
+**By:** Nibbler
+**What:** REJECT Batch 13.3 in its current form.
+**Why:** The main CLI slug-bearing paths are close: explicit `<collection>::<slug>` routing looks aligned with MCP, canonical page references now show up across get/link/graph/timeline/check/list/search/query surfaces, and the coupled `assertions.rs` UUID-first fallback is justified because duplicate-slug brains would otherwise let `extract_assertions()` bind import assertions to the wrong page_id. But two fail-closed seams remain open: `src/core/search.rs::exact_slug_result_canonical()` collapses `SlugResolution::Ambiguous` into `Ok(None)` and silently falls through to generic search semantics for `gbrain query`, and `src/commands/link.rs::unlink()` still emits `no matching link found between {from} and {to}` using raw user input after both pages were already resolved collection-aware.
+**Required follow-up:** Make exact-slug query mode surface the same ambiguity failure instead of degrading into search/no-results behavior, canonicalize the resolved `unlink` no-match failure path, and keep the closure note tightly scoped to CLI slug-routing/output parity only. Do not claim `13.5` collection filters/defaults, `13.6`, or anything broader than the narrowly necessary duplicate-slug assertion binding fix.
