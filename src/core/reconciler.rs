@@ -3716,15 +3716,10 @@ mod tests {
 
     #[test]
     fn raw_import_invariant_result_reports_zero_rows_and_multi_active_histories() {
-        let missing = raw_import_invariant_result(
-            7,
-            0,
-            0,
-            "reconcile",
-            RawImportInvariantPolicy::Enforce,
-        )
-        .unwrap_err()
-        .to_string();
+        let missing =
+            raw_import_invariant_result(7, 0, 0, "reconcile", RawImportInvariantPolicy::Enforce)
+                .unwrap_err()
+                .to_string();
         assert!(missing.contains("InvariantViolationError"));
         assert!(missing.contains("page_id=7 has zero total raw_imports rows"));
 
@@ -3738,7 +3733,9 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(multi_active.contains("InvariantViolationError"));
-        assert!(multi_active.contains("page_id=9 has 2 active raw_imports rows across 3 total rows"));
+        assert!(
+            multi_active.contains("page_id=9 has 2 active raw_imports rows across 3 total rows")
+        );
     }
 
     #[test]
@@ -3777,8 +3774,11 @@ mod tests {
         assert!(full_hash_error.contains("active-lease authorization"));
         assert!(full_hash_error.contains("overflow-recovery mode"));
 
-        let snapshot_error = take_stat_snapshot(&conn, &collection).unwrap_err().to_string();
-        assert!(snapshot_error.contains("take_stat_snapshot: fd-relative operations not supported on Windows"));
+        let snapshot_error = take_stat_snapshot(&conn, &collection)
+            .unwrap_err()
+            .to_string();
+        assert!(snapshot_error
+            .contains("take_stat_snapshot: fd-relative operations not supported on Windows"));
 
         let mount_error = verify_read_only_mount(&collection).unwrap_err().to_string();
         assert!(mount_error.contains("restore/remap safety checks are not supported on Windows"));

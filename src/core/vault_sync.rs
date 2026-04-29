@@ -5398,7 +5398,11 @@ mod tests {
         let manifest = build_restore_manifest_for_directory(root.path()).unwrap();
 
         assert_eq!(
-            manifest.entries.iter().map(|entry| entry.relative_path.as_str()).collect::<Vec<_>>(),
+            manifest
+                .entries
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
             vec!["notes/a.md", "notes/z.md"]
         );
         assert_eq!(manifest.entries[0].sha256, sha256_hex(b"alpha"));
@@ -5457,7 +5461,8 @@ mod tests {
         let views = list_memory_collections(&conn).unwrap();
 
         assert_eq!(
-            views.iter()
+            views
+                .iter()
                 .find(|view| view.name == "manifest-tamper")
                 .unwrap()
                 .integrity_blocked
@@ -5465,7 +5470,8 @@ mod tests {
             Some("manifest_tampering")
         );
         assert_eq!(
-            views.iter()
+            views
+                .iter()
                 .find(|view| view.name == "manifest-retry")
                 .unwrap()
                 .integrity_blocked
@@ -5473,7 +5479,8 @@ mod tests {
             Some("manifest_incomplete_escalated")
         );
         assert_eq!(
-            views.iter()
+            views
+                .iter()
                 .find(|view| view.name == "duplicate-uuid")
                 .unwrap()
                 .integrity_blocked
@@ -5481,20 +5488,20 @@ mod tests {
             Some("duplicate_uuid")
         );
         assert_eq!(
-            views.iter()
+            views
+                .iter()
                 .find(|view| view.name == "trivial")
                 .unwrap()
                 .integrity_blocked
                 .as_deref(),
             Some("unresolvable_trivial_content")
         );
-        assert!(
-            views.iter()
-                .find(|view| view.name == "unknown")
-                .unwrap()
-                .integrity_blocked
-                .is_none()
-        );
+        assert!(views
+            .iter()
+            .find(|view| view.name == "unknown")
+            .unwrap()
+            .integrity_blocked
+            .is_none());
     }
 
     #[test]
@@ -5533,7 +5540,13 @@ mod tests {
             .as_deref(),
             Some("unresolvable_trivial_content")
         );
-        assert!(integrity_blocked_label(&None, false, &Some("2026-04-28T00:00:00Z".to_owned()), &Some("mystery".to_owned())).is_none());
+        assert!(integrity_blocked_label(
+            &None,
+            false,
+            &Some("2026-04-28T00:00:00Z".to_owned()),
+            &Some("mystery".to_owned())
+        )
+        .is_none());
         assert!(integrity_blocked_label(&None, false, &None, &None).is_none());
 
         let conn = open_test_db();
@@ -5731,11 +5744,14 @@ mod tests {
         assert_eq!(placeholder.root_path, "");
 
         let no_pending_id = insert_collection(&conn, "no-pending", Path::new("vault-no-pending"));
-        let no_pending =
-            finalize_pending_restore(&conn, no_pending_id, FinalizeCaller::ExternalFinalize {
+        let no_pending = finalize_pending_restore(
+            &conn,
+            no_pending_id,
+            FinalizeCaller::ExternalFinalize {
                 session_id: "serve-1".to_owned(),
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(no_pending, FinalizeOutcome::NoPendingWork);
 
         let orphan_id = insert_collection(&conn, "orphan", Path::new("vault-orphan"));
@@ -5748,11 +5764,14 @@ mod tests {
             [orphan_id],
         )
         .unwrap();
-        let orphan =
-            finalize_pending_restore(&conn, orphan_id, FinalizeCaller::ExternalFinalize {
+        let orphan = finalize_pending_restore(
+            &conn,
+            orphan_id,
+            FinalizeCaller::ExternalFinalize {
                 session_id: "serve-1".to_owned(),
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(orphan, FinalizeOutcome::OrphanRecovered);
 
         let aborted_id = insert_collection(&conn, "aborted", Path::new("vault-aborted"));
@@ -5767,11 +5786,14 @@ mod tests {
             [aborted_id],
         )
         .unwrap();
-        let aborted =
-            finalize_pending_restore(&conn, aborted_id, FinalizeCaller::ExternalFinalize {
+        let aborted = finalize_pending_restore(
+            &conn,
+            aborted_id,
+            FinalizeCaller::ExternalFinalize {
                 session_id: "serve-1".to_owned(),
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(aborted, FinalizeOutcome::Aborted);
     }
 
