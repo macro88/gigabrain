@@ -429,7 +429,7 @@ In this release line, `quaid collection info` also surfaces `queue_depth` and `f
 
 Once attached, `quaid serve` starts a file watcher for the collection. Changes you make in Obsidian or any editor are debounced over 1.5 s and flushed via the stat-diff reconciler.
 
-`quaid collection migrate-uuids` and `quaid collection add --write-quaid-id` are Unix-only bulk rewrite paths. They refuse when `quaid serve` already owns the collection, so stop `serve`, run the migration offline, then restart.
+Collection attach and other filesystem-mutating collection operations in this release line are Unix-only, including `quaid collection add`, `quaid collection migrate-uuids`, and `quaid collection add --write-quaid-id`. These offline rewrite flows refuse when `quaid serve` already owns the collection, so stop `serve`, run the migration or attach step offline, then restart.
 
 > **Platform note.** `quaid serve` and the core MCP tools are cross-platform. Live vault-sync watcher threads start only on Unix (macOS / Linux); on Windows `quaid serve` starts the MCP server normally but watcher-backed auto-reconcile is not active. The MCP read/write tools (`memory_get`, `memory_put`, `memory_query`, etc.) work on all platforms.
 
