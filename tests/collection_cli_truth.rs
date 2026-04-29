@@ -76,6 +76,13 @@ fn test_db_path(dir: &tempfile::TempDir, name: &str) -> PathBuf {
     dir.path().join(name)
 }
 
+#[cfg(unix)]
+fn init_db(dir: &tempfile::TempDir) -> PathBuf {
+    let db_path = test_db_path(dir, "test.db");
+    drop(open_test_db(&db_path));
+    db_path
+}
+
 fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
     conn.execute(
         "INSERT INTO collections (name, root_path, state, writable, is_write_target)
