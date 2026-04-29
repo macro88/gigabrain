@@ -8566,6 +8566,22 @@ mod tests {
     }
 
     #[test]
+    fn short_lived_owner_lease_for_root_path_requires_existing_collection_rows() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().display().to_string();
+
+        match start_short_lived_owner_lease_for_root_path(&conn, &root_path) {
+            Err(VaultSyncError::InvariantViolation { message }) => {
+                assert!(message.contains("missing collection rows for short-lived owner lease"));
+                assert!(message.contains(&root_path));
+            }
+            Ok(_) => panic!("expected InvariantViolationError"),
+            Err(other) => panic!("expected InvariantViolationError, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn short_lived_owner_lease_for_root_path_claims_same_root_aliases_and_cleans_up() {
         let (_dir, _db_path, conn) = open_test_db_file();
         let temp = tempfile::TempDir::new().unwrap();
