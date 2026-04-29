@@ -2674,8 +2674,8 @@ impl From<std::io::Error> for ReconcileError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
     use crate::core::file_state::upsert_file_state;
+    use std::ffi::OsString;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
