@@ -14,3 +14,17 @@
 
 **Scribe update:** Decisions merged (inbox → decisions.md), orchestration logs written, Batch 3 merge lane BLOCKED by codecov/patch.
 
+## 20260429T132911Z — Session: Merge Lane Active
+
+**Status:** STARTED
+**PR:** #122 (spec/vault-sync-engine-batch3-v0120)
+**Policy Gate:** codecov/patch pending rerun
+
+**Summary:** Watching PR #122 checks and merging as soon as GitHub policy allows.
+
+**Details:**
+- All required checks green or pending
+- Policy blocked on codecov/patch status
+- No admin merge; waiting for green
+- Ready to merge on gate clearance
+
