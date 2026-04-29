@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn page_serde_roundtrip_preserves_memory_id_frontmatter() {
+    fn page_serde_roundtrip_preserves_quaid_id_frontmatter() {
         let page = Page {
             slug: "people/alice".to_string(),
             uuid: "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),

@@ -489,7 +489,7 @@ mod tests {
         }
 
         #[test]
-        fn render_parse_render_keeps_memory_id_in_canonical_frontmatter() {
+        fn render_parse_render_keeps_quaid_id_in_canonical_frontmatter() {
             let canonical = "---\nquaid_id: 0195c7c0-2d06-7df0-bf59-acde48001122\nsource: vault\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n---\n2024-01-01: Joined Acme.\n";
 
             let (map, body) = parse_frontmatter(canonical);
@@ -499,7 +499,7 @@ mod tests {
             page.uuid = map
                 .get("quaid_id")
                 .cloned()
-                .expect("memory_id should remain available");
+                .expect("quaid_id should remain available");
             page.frontmatter = map;
 
             let rendered = render_page(&page);

@@ -1811,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn put_render_cannot_strip_existing_memory_id_when_update_omits_it() {
+    fn put_render_cannot_strip_existing_quaid_id_when_update_omits_it() {
         let conn = open_test_db();
         let original = "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Carol\ntype: person\n---\n# Carol\n\nOriginal.\n";
         put_from_string(&conn, "people/carol", original, None).unwrap();
@@ -1824,7 +1824,7 @@ mod tests {
 
         assert!(
             rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"),
-            "memory_put must not let a UUID-bearing page render back out without memory_id"
+            "memory_put must not let a UUID-bearing page render back out without quaid_id"
         );
     }
 

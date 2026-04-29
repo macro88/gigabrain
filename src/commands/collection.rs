@@ -301,17 +301,22 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
         Ok(stats) => stats,
         Err(err) => {
             let _ = db.execute("DELETE FROM collections WHERE id = ?1", [collection_id]);
-            return Err(anyhow!(err.to_string()));
+            return Err(anyhow::Error::new(err)
+                .context(format!("failed to attach collection '{}'", args.name)));
         }
     };
 
     let collection = collections::get_by_name(db, &args.name)?
         .ok_or_else(|| anyhow!("collection not found after attach: {}", args.name))?;
     let migration = if args.write_quaid_id {
-        match run_uuid_write_back(db, &collection, false) {
-            Ok(summary) => Some(summary),
-            Err(err) => return Err(anyhow!(err.to_string())),
-        }
+        Some(
+            run_uuid_write_back(db, &collection, false).with_context(|| {
+                format!(
+                    "failed to write Quaid IDs for collection '{}'",
+                    collection.name
+                )
+            })?,
+        )
     } else {
         None
     };
@@ -3259,9 +3264,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Vault sync commands require Unix"));
+        let message = error.to_string();
+        assert!(message.contains("failed to attach collection 'work'"));
         assert!(collections::get_by_name(&conn, "work").unwrap().is_none());
     }
 
