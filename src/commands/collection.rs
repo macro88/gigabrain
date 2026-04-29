@@ -3154,6 +3154,41 @@ mod tests {
     }
 
     #[test]
+    fn run_routes_list_and_info_json_helpers_for_seeded_collection() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/info",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Info\ntype: note\n---\nbody\n",
+            "notes/info.md",
+        );
+        quarantine_page(&conn, page_id, "2026-04-28T00:00:00Z");
+        insert_embedding_job(&conn, page_id, "failed", 2);
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z',
+                 ignore_parse_errors = 'line 1 raw=\"[broken\" error=Invalid glob pattern'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        run(&conn, CollectionAction::List, true).unwrap();
+        run(
+            &conn,
+            CollectionAction::Info {
+                name: "work".to_owned(),
+            },
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn resolve_collection_root_rejects_non_directory_paths() {
         let root = tempfile::TempDir::new().unwrap();
         let file_path = root.path().join("note.md");
@@ -3181,6 +3216,23 @@ mod tests {
         assert!(error
             .to_string()
             .contains("collection root does not exist or cannot be resolved"));
+    }
+
+    #[test]
+    fn ignore_render_and_match_helpers_cover_empty_and_comment_cases() {
+        assert_eq!(render_patterns_file(&[]), "");
+        assert_eq!(
+            render_patterns_file(&["notes/**".to_owned(), "*.tmp".to_owned()]),
+            "notes/**\n*.tmp\n"
+        );
+        assert!(ignore_content_contains_pattern(
+            "# comment\n\nnotes/**\n",
+            "notes/**"
+        ));
+        assert!(!ignore_content_contains_pattern(
+            "# comment\n\nnotes/**\n",
+            "*.tmp"
+        ));
     }
 
     #[cfg(not(unix))]

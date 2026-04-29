@@ -5379,6 +5379,402 @@ mod tests {
         assert!(restoring_live.restore_in_progress);
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn ensure_unix_platform_fails_closed_on_windows() {
+        let error = ensure_unix_platform("quaid collection sync")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("UnsupportedPlatformError"));
+        assert!(error.contains("quaid collection sync"));
+    }
+
+    #[test]
+    fn build_restore_manifest_for_directory_sorts_paths_and_hashes_contents() {
+        let root = tempfile::TempDir::new().unwrap();
+        write_restore_file(root.path(), "notes/z.md", b"zeta");
+        write_restore_file(root.path(), "notes/a.md", b"alpha");
+
+        let manifest = build_restore_manifest_for_directory(root.path()).unwrap();
+
+        assert_eq!(
+            manifest.entries.iter().map(|entry| entry.relative_path.as_str()).collect::<Vec<_>>(),
+            vec!["notes/a.md", "notes/z.md"]
+        );
+        assert_eq!(manifest.entries[0].sha256, sha256_hex(b"alpha"));
+        assert_eq!(manifest.entries[0].size_bytes, 5);
+        assert_eq!(manifest.entries[1].sha256, sha256_hex(b"zeta"));
+        assert_eq!(manifest.entries[1].size_bytes, 4);
+    }
+
+    #[test]
+    fn list_memory_collections_reports_integrity_blocked_variants() {
+        let conn = open_test_db();
+        let manifest_tamper = insert_collection(&conn, "manifest-tamper", Path::new("vault-a"));
+        let manifest_retry = insert_collection(&conn, "manifest-retry", Path::new("vault-b"));
+        let duplicate_uuid = insert_collection(&conn, "duplicate-uuid", Path::new("vault-c"));
+        let trivial = insert_collection(&conn, "trivial", Path::new("vault-d"));
+        let unknown = insert_collection(&conn, "unknown", Path::new("vault-e"));
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [manifest_tamper],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = datetime('now', '-7200 seconds')
+             WHERE id = ?1",
+            [manifest_retry],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [duplicate_uuid],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'unresolvable_trivial_content'
+             WHERE id = ?1",
+            [trivial],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-28T00:00:00Z',
+                 reconcile_halt_reason = 'mystery'
+             WHERE id = ?1",
+            [unknown],
+        )
+        .unwrap();
+
+        let views = list_memory_collections(&conn).unwrap();
+
+        assert_eq!(
+            views.iter()
+                .find(|view| view.name == "manifest-tamper")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            views.iter()
+                .find(|view| view.name == "manifest-retry")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("manifest_incomplete_escalated")
+        );
+        assert_eq!(
+            views.iter()
+                .find(|view| view.name == "duplicate-uuid")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("duplicate_uuid")
+        );
+        assert_eq!(
+            views.iter()
+                .find(|view| view.name == "trivial")
+                .unwrap()
+                .integrity_blocked
+                .as_deref(),
+            Some("unresolvable_trivial_content")
+        );
+        assert!(
+            views.iter()
+                .find(|view| view.name == "unknown")
+                .unwrap()
+                .integrity_blocked
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn integrity_blocked_reason_and_restore_in_progress_cover_all_helper_branches() {
+        assert_eq!(
+            integrity_blocked_label(
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                false,
+                &None,
+                &None
+            )
+            .as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            integrity_blocked_label(&None, true, &None, &None).as_deref(),
+            Some("manifest_incomplete_escalated")
+        );
+        assert_eq!(
+            integrity_blocked_label(
+                &None,
+                false,
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                &Some("duplicate_uuid".to_owned())
+            )
+            .as_deref(),
+            Some("duplicate_uuid")
+        );
+        assert_eq!(
+            integrity_blocked_label(
+                &None,
+                false,
+                &Some("2026-04-28T00:00:00Z".to_owned()),
+                &Some("unresolvable_trivial_content".to_owned())
+            )
+            .as_deref(),
+            Some("unresolvable_trivial_content")
+        );
+        assert!(integrity_blocked_label(&None, false, &Some("2026-04-28T00:00:00Z".to_owned()), &Some("mystery".to_owned())).is_none());
+        assert!(integrity_blocked_label(&None, false, &None, &None).is_none());
+
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        let mut collection = load_collection_by_id(&conn, collection_id).unwrap();
+        collection.state = CollectionState::Restoring;
+        collection.restore_command_id = Some("restore-1".to_owned());
+        collection.watcher_released_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(restore_in_progress(&collection));
+        collection.watcher_released_at = None;
+        assert!(!restore_in_progress(&collection));
+        collection.watcher_released_at = Some("2026-04-28T00:00:00Z".to_owned());
+        collection.restore_command_id = None;
+        assert!(!restore_in_progress(&collection));
+        collection.state = CollectionState::Active;
+        collection.restore_command_id = Some("restore-1".to_owned());
+        assert!(!restore_in_progress(&collection));
+    }
+
+    #[test]
+    fn ensure_restore_not_blocked_reports_pending_finalize_progress_and_integrity_failures() {
+        let conn = open_test_db();
+        let collection_id = insert_collection(&conn, "work", Path::new("vault"));
+        let base = load_collection_by_id(&conn, collection_id).unwrap();
+
+        let mut integrity_blocked = base.clone();
+        integrity_blocked.state = CollectionState::Restoring;
+        integrity_blocked.pending_root_path = Some("D:\\restored".to_owned());
+        integrity_blocked.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&integrity_blocked).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "integrity_failed_at",
+                ..
+            }
+        ));
+
+        let mut manifest_blocked = base.clone();
+        manifest_blocked.state = CollectionState::Restoring;
+        manifest_blocked.pending_root_path = Some("D:\\restored".to_owned());
+        manifest_blocked.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&manifest_blocked).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "pending_manifest_incomplete_at",
+                ..
+            }
+        ));
+
+        let mut pending_finalize = base.clone();
+        pending_finalize.state = CollectionState::Restoring;
+        pending_finalize.pending_root_path = Some("D:\\restored".to_owned());
+        let pending_error = ensure_restore_not_blocked(&pending_finalize)
+            .unwrap_err()
+            .to_string();
+        assert!(pending_error.contains("RestorePendingFinalizeError"));
+        assert!(pending_error.contains("D:\\restored"));
+
+        let mut in_progress = base.clone();
+        in_progress.state = CollectionState::Restoring;
+        let progress_error = ensure_restore_not_blocked(&in_progress)
+            .unwrap_err()
+            .to_string();
+        assert!(progress_error.contains("RestoreInProgressError"));
+
+        let mut active_integrity = base.clone();
+        active_integrity.integrity_failed_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&active_integrity).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "integrity_failed_at",
+                ..
+            }
+        ));
+
+        let mut active_manifest = base.clone();
+        active_manifest.pending_manifest_incomplete_at = Some("2026-04-28T00:00:00Z".to_owned());
+        assert!(matches!(
+            ensure_restore_not_blocked(&active_manifest).unwrap_err(),
+            VaultSyncError::RestoreIntegrityBlocked {
+                blocking_column: "pending_manifest_incomplete_at",
+                ..
+            }
+        ));
+
+        assert!(ensure_restore_not_blocked(&base).is_ok());
+    }
+
+    #[test]
+    fn ensure_restore_target_is_empty_accepts_missing_and_empty_paths_only() {
+        let root = tempfile::TempDir::new().unwrap();
+        let missing = root.path().join("missing");
+        assert!(ensure_restore_target_is_empty(&missing).is_ok());
+
+        let empty_dir = root.path().join("empty");
+        fs::create_dir_all(&empty_dir).unwrap();
+        assert!(ensure_restore_target_is_empty(&empty_dir).is_ok());
+
+        let file_target = root.path().join("file.txt");
+        fs::write(&file_target, b"occupied").unwrap();
+        let file_error = ensure_restore_target_is_empty(&file_target)
+            .unwrap_err()
+            .to_string();
+        assert!(file_error.contains("RestoreNonEmptyTargetError"));
+
+        let busy_dir = root.path().join("busy");
+        fs::create_dir_all(&busy_dir).unwrap();
+        fs::write(busy_dir.join("child.txt"), b"occupied").unwrap();
+        let busy_error = ensure_restore_target_is_empty(&busy_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(busy_error.contains("RestoreNonEmptyTargetError"));
+    }
+
+    #[test]
+    fn restore_reset_reports_each_block_reason_before_terminal_reset() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let manifest_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(manifest_error.contains("RestoreResetBlockedError"));
+        assert!(manifest_error.contains("manifest_incomplete_retryable"));
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_manifest_incomplete_at = NULL,
+                 state = 'restoring',
+                 pending_root_path = 'D:\\restored'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let pending_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(pending_error.contains("RestoreResetBlockedError"));
+        assert!(pending_error.contains("pending_finalize"));
+
+        conn.execute(
+            "UPDATE collections
+             SET pending_root_path = NULL,
+                 state = 'restoring',
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let progress_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(progress_error.contains("RestoreResetBlockedError"));
+        assert!(progress_error.contains("restore_in_progress"));
+
+        conn.execute(
+            "UPDATE collections
+             SET state = 'active',
+                 needs_full_sync = 0
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let clean_error = restore_reset(&conn, "work").unwrap_err().to_string();
+        assert!(clean_error.contains("RestoreResetBlockedError"));
+        assert!(clean_error.contains("no_integrity_failure"));
+    }
+
+    #[test]
+    fn reconcile_reset_reports_missing_collection() {
+        assert!(matches!(
+            reconcile_reset(&open_test_db(), "missing"),
+            Err(VaultSyncError::CollectionNotFound { name }) if name == "missing"
+        ));
+    }
+
+    #[test]
+    fn restore_reset_can_return_collection_to_detached_and_finalize_covers_remaining_outcomes() {
+        let conn = open_test_db();
+        let placeholder_id = insert_collection(&conn, "placeholder", Path::new("vault"));
+        conn.execute(
+            "UPDATE collections
+             SET root_path = '',
+                 state = 'restoring',
+                 integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [placeholder_id],
+        )
+        .unwrap();
+        restore_reset(&conn, "placeholder").unwrap();
+        let placeholder = load_collection_by_id(&conn, placeholder_id).unwrap();
+        assert_eq!(placeholder.state, CollectionState::Detached);
+        assert_eq!(placeholder.root_path, "");
+
+        let no_pending_id = insert_collection(&conn, "no-pending", Path::new("vault-no-pending"));
+        let no_pending =
+            finalize_pending_restore(&conn, no_pending_id, FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(no_pending, FinalizeOutcome::NoPendingWork);
+
+        let orphan_id = insert_collection(&conn, "orphan", Path::new("vault-orphan"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-1',
+                 pending_root_path = NULL
+             WHERE id = ?1",
+            [orphan_id],
+        )
+        .unwrap();
+        let orphan =
+            finalize_pending_restore(&conn, orphan_id, FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(orphan, FinalizeOutcome::OrphanRecovered);
+
+        let aborted_id = insert_collection(&conn, "aborted", Path::new("vault-aborted"));
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = 'D:\\missing-restore-root',
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_id = 'restore-1',
+                 pending_command_heartbeat_at = datetime('now', '-120 seconds')
+             WHERE id = ?1",
+            [aborted_id],
+        )
+        .unwrap();
+        let aborted =
+            finalize_pending_restore(&conn, aborted_id, FinalizeCaller::ExternalFinalize {
+                session_id: "serve-1".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(aborted, FinalizeOutcome::Aborted);
+    }
+
     #[cfg(unix)]
     fn startup_recovery_sentinel_count(recovery_root: &Path, collection_id: i64) -> usize {
         recovery_sentinel_paths(recovery_root, collection_id)

@@ -417,9 +417,9 @@
 - [ ] 17.5vv5 `WriteAdmin` honors `CollectionRestoringError` interlock.
 - [ ] 17.5vv5b `WriteAdmin` honors write-gate (`needs_full_sync=1`).
 - [ ] 17.5vv6 Slug-less `memory_gap` routes via Read and succeeds during restoring.
-- [x] 17.5ww UUID write-back: `--write-quaid-id` rotates `file_state`+`raw_imports` atomically.
-- [x] 17.5ww2 `migrate-uuids --dry-run` mutates nothing.
-- [x] 17.5ww3 UUID write-back on EACCES/EROFS skips with WARN; `pages.uuid` remains set.
+- [x] 17.5ww UUID write-back: `--write-quaid-id` rotates `file_state`+`raw_imports` atomically. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
+- [x] 17.5ww2 `migrate-uuids --dry-run` mutates nothing. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
+- [x] 17.5ww3 UUID write-back on EACCES/EROFS skips with WARN; `pages.uuid` remains set. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
 - [x] 17.5www `memory_put` preserves `quaid_id` across write.
 - [x] 17.5xx `raw_imports` rotation atomic per content-changing write.
 - [x] 17.5yy Inline GC enforces `KEEP` + `TTL_DAYS`; active row never touched.
