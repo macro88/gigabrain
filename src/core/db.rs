@@ -1037,6 +1037,50 @@ mod tests {
     }
 
     #[test]
+    fn recover_crash_partial_fresh_db_returns_none_after_pages_exist() {
+        let conn = open_connection(":memory:").unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES ('notes/live', ?1, 'concept', 'Live', '', 'truth', '', '{}', 'notes', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+
+        let recovered =
+            recover_crash_partial_fresh_db(&conn, &default_model(), "memory.db").unwrap();
+
+        assert!(recovered.is_none());
+    }
+
+    #[test]
+    fn recover_crash_partial_fresh_db_rejects_registry_model_mismatches() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &resolve_model("base")).unwrap();
+
+        let err = recover_crash_partial_fresh_db(&conn, &default_model(), "memory.db").unwrap_err();
+
+        assert!(matches!(err, DbError::ModelMismatch { .. }));
+    }
+
+    #[test]
+    fn read_bootstrap_registry_model_maps_standard_aliases() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &resolve_model("m3")).unwrap();
+
+        let config = read_bootstrap_registry_model(&conn).unwrap().unwrap();
+
+        assert_eq!(config.model_alias, "m3");
+        assert_eq!(config.model_id, "BAAI/bge-m3");
+        assert_eq!(config.embedding_dim, 1024);
+    }
+
+    #[test]
+    fn model_alias_for_model_id_returns_custom_for_unknown_models() {
+        assert_eq!(model_alias_for_model_id("org/custom-model"), "custom");
+    }
+
+    #[test]
     fn compact_checkpoints_wal() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");

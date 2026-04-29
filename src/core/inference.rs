@@ -1305,6 +1305,8 @@ fn normalize(values: &mut [f32]) -> Result<(), InferenceError> {
 mod tests {
     use super::*;
     use crate::core::db;
+    use crate::core::types::Page;
+    use std::collections::HashMap;
     #[cfg(feature = "online-model")]
     use std::io::{Read, Write};
     #[cfg(feature = "online-model")]
@@ -1635,6 +1637,82 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
+    }
+
+    #[test]
+    fn refresh_page_embeddings_replaces_existing_rows_and_returns_chunk_count() {
+        let _env_guard = env_mutation_lock()
+            .lock()
+            .expect("env mutation lock poisoned");
+        let _force_hash_shim = EnvVarGuard::set("QUAID_FORCE_HASH_SHIM", "1");
+        configure_runtime_model(default_model());
+        model_runtime().lock().expect("lock").loaded = None;
+
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version) \
+             VALUES (?1, ?2, 'note', 'Refresh', '', 'old truth', '', '{}', 'notes', '', 1)",
+            rusqlite::params!["notes/refresh", uuid::Uuid::now_v7().to_string()],
+        )
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/refresh'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fetch page id");
+        let stale_embedding = embedding_to_blob(&embed("stale embedding").expect("embed stale"));
+        conn.execute(
+            "INSERT INTO page_embeddings_vec_384(rowid, embedding) VALUES (?1, ?2)",
+            rusqlite::params![1_i64, stale_embedding],
+        )
+        .expect("insert stale vec row");
+        conn.execute(
+            "INSERT INTO page_embeddings (page_id, model, vec_rowid, chunk_type, chunk_index, chunk_text, content_hash, token_count, heading_path) \
+             VALUES (?1, 'BAAI/bge-small-en-v1.5', 1, 'truth_section', 0, 'stale chunk', 'stale-hash', 2, 'State')",
+            rusqlite::params![page_id],
+        )
+        .expect("insert stale metadata");
+
+        let page = Page {
+            slug: "notes/refresh".to_owned(),
+            uuid: uuid::Uuid::now_v7().to_string(),
+            page_type: "note".to_owned(),
+            title: "Refresh".to_owned(),
+            summary: String::new(),
+            compiled_truth: "## State\nFresh truth\n".to_owned(),
+            timeline: "- 2026-04-28: refreshed timeline entry".to_owned(),
+            frontmatter: HashMap::new(),
+            wing: "notes".to_owned(),
+            room: String::new(),
+            version: 2,
+            created_at: "2026-04-28T00:00:00Z".to_owned(),
+            updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            truth_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+            timeline_updated_at: "2026-04-28T00:00:00Z".to_owned(),
+        };
+        let expected_chunks = chunk_page(&page).len();
+
+        let refreshed = refresh_page_embeddings(&conn, page_id, &page).expect("refresh embeddings");
+
+        assert_eq!(refreshed, expected_chunks);
+        let stale_vec_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings_vec_384 WHERE rowid = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count stale vec rows");
+        assert_eq!(stale_vec_count, 0);
+        let metadata_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM page_embeddings WHERE page_id = ?1 AND model = 'BAAI/bge-small-en-v1.5'",
+                rusqlite::params![page_id],
+                |row| row.get(0),
+            )
+            .expect("count refreshed metadata rows");
+        assert_eq!(metadata_count as usize, expected_chunks);
     }
 
     #[test]
