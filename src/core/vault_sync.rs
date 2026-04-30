@@ -5571,7 +5571,6 @@ mod tests {
         fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let socket_path = socket_dir.join("mode-regression.sock");
-        let _umask = UmaskGuard::set(0o177);
         let listener = UnixListener::bind(&socket_path).unwrap();
         fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o644)).unwrap();
 
