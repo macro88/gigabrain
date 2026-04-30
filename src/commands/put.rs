@@ -1175,6 +1175,11 @@ mod tests {
 
     fn open_test_db() -> Connection {
         let dir = tempfile::TempDir::new().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         let vault_root = dir.path().join("vault");
@@ -1197,6 +1202,10 @@ mod tests {
     #[cfg(unix)]
     fn open_test_db_with_vault() -> (tempfile::TempDir, String, Connection, PathBuf) {
         let dir = tempfile::TempDir::new().unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let db_path = dir.path().join("test_memory.db");
         let conn = db::open(db_path.to_str().unwrap()).unwrap();
         conn.busy_timeout(Duration::from_millis(0)).unwrap();
