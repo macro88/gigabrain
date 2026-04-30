@@ -613,7 +613,7 @@ impl QuaidServer {
             }
             _ => {}
         }
-        crate::commands::put::put_from_string(
+        crate::commands::put::put_from_string_quiet(
             &db,
             &canonical_slug(&resolved.collection_name, &resolved.slug),
             &input.content,
@@ -1672,6 +1672,45 @@ mod tests {
         assert_eq!(error.data, Some(json!({ "current_version": 1 })));
     }
 
+    #[test]
+    fn memory_put_update_with_expected_version_returns_updated_status_and_persists_body() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let created = server
+            .memory_put(MemoryPutInput {
+                slug: "notes/occ-happy".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nInitial body\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+        assert!(extract_text(&created).contains("Created"));
+
+        let updated = server
+            .memory_put(MemoryPutInput {
+                slug: "notes/occ-happy".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nUpdated body\n".to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap();
+
+        let text = extract_text(&updated);
+        assert!(text.contains("Updated"));
+        assert!(text.contains("notes/occ-happy"));
+        assert!(text.contains("(version 2)"));
+
+        let db = server.db.lock().unwrap();
+        let row: (i64, String) = db
+            .query_row(
+                "SELECT version, compiled_truth FROM pages WHERE slug = ?1",
+                ["notes/occ-happy"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 2);
+        assert_eq!(row.1, "Updated body");
+    }
+
     #[cfg(unix)]
     #[test]
     fn memory_put_existing_page_without_expected_version_conflicts_before_vault_mutation() {
@@ -1836,7 +1875,7 @@ mod tests {
         server
             .memory_put(MemoryPutInput {
                 slug: "notes/uuid".to_string(),
-                content: "---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
+                content: "---\nquaid_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: UUID\ntype: note\n---\nOriginal\n".to_string(),
                 expected_version: None,
             })
             .unwrap();
@@ -1855,7 +1894,7 @@ mod tests {
             .unwrap();
         let rendered = extract_text(&result);
 
-        assert!(rendered.contains("memory_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
+        assert!(rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
         assert!(rendered.contains("slug: default::notes/uuid"));
         assert!(rendered.contains("Updated"));
     }
@@ -4680,6 +4719,44 @@ mod tests {
         assert!(
             parsed["page_id"].is_null(),
             "memory_gap without slug must return null page_id: {parsed}"
+        );
+    }
+
+    /// Regression: memory_put must not call the printing `put_from_string` variant
+    /// (which would corrupt JSON-RPC framing by writing to stdout).  It must use
+    /// `put_from_string_quiet` (suppresses printing, returns `()`) or
+    /// `put_from_string_status` (returns a status string without printing).
+    #[test]
+    fn memory_put_does_not_call_printing_put_from_string_variant() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("mcp")
+                .join("server.rs"),
+        )
+        .unwrap();
+        // Locate the memory_put function body.
+        let fn_start = source
+            .find("pub fn memory_put(")
+            .expect("memory_put fn present");
+        // Find the closing brace of memory_put by looking at the next tool-decorated fn.
+        let fn_body_end = source[fn_start..]
+            .find("\n    #[tool(")
+            .map(|offset| fn_start + offset)
+            .expect("next tool fn after memory_put");
+        let fn_body = &source[fn_start..fn_body_end];
+
+        // The body must NOT contain the bare `put_from_string(` call (the printing variant).
+        assert!(
+            !fn_body.contains("put_from_string("),
+            "memory_put must not call the printing put_from_string variant; \
+             use put_from_string_quiet or put_from_string_status instead"
+        );
+        // The body MUST use a non-printing variant.
+        assert!(
+            fn_body.contains("put_from_string_quiet(")
+                || fn_body.contains("put_from_string_status("),
+            "memory_put must call put_from_string_quiet or put_from_string_status"
         );
     }
 

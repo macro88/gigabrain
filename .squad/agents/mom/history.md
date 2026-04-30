@@ -111,6 +111,44 @@ containing a mix of required glue and a dropped Fry artifact piece.
 
 ---
 
+### 2026-05-01 Batch 4 Revision — session_type fix + 12.7 reopen
+
+**Context:** Two review findings blocked the Batch 4 vault-sync-engine artifact. Nibbler found
+that `quaid put`'s live-owner check conflated offline CLI leases with real `quaid serve` sessions,
+producing a false "use MCP while serve is running" error when no serve process existed. Professor
+found that task 12.7 claimed "concurrent dedup entries" as a tested failure mode, but
+`insert_write_dedup` always returns `Ok(())` and there is no production failure path for a
+duplicate dedup key.
+
+**What happened:**
+
+1. **session_type column (Bug 1):** Added `session_type TEXT NOT NULL DEFAULT 'serve'` to
+   `serve_sessions` in schema.sql and a corresponding ALTER TABLE migration in db.rs.
+   Added `register_cli_session()` which inserts `session_type = 'cli'`. Changed
+   `start_short_lived_owner_leases_with_interval` to call `register_cli_session`.
+   Filtered both `live_collection_owner` and `live_collection_owner_for_root_path` to
+   `AND s.session_type = 'serve'`. Effect: offline CLI leases are invisible to the live-owner
+   check; serve sessions can steal CLI leases (correct for single-user tool).
+
+2. **Test updates:** Removed the now-wrong "serve-blocks-CLI" assertion from
+   `short_lived_owner_lease_for_root_path_claims_same_root_aliases_and_cleans_up`; added
+   `serve_session_can_steal_cli_short_lived_lease`, `ensure_no_live_serve_owner_for_root_path_ignores_cli_session`,
+   and `cli_put_does_not_refuse_cli_session_as_serve_owner` (unix).
+
+3. **12.7 reopen (Bug 2):** Reopened the task with a note explaining that "concurrent dedup
+   entries" is not testable because `insert_write_dedup` never fails on duplicate. Deferred
+   to the Batch 5 IPC proxy slice.
+
+**Result:** 834 lib tests pass. Decision record: `.squad/decisions/inbox/mom-batch4-revision.md`.
+
+**Lessons:**
+- A DEFAULT on a new column is not a type annotation — it's a schema contract. When the same
+  table stores two conceptually different kinds of rows, add a discriminator column early. Relying
+  on callers to "just know" which rows are which is a hidden coupling that produces false errors.
+- If a task closure claims X is "tested" and X is a bool return from a standard-library method
+  that the code ignores, the closure is wrong. A test can only prove what the production code
+  actually does — not what you wish it did.
+
 ## 2026-04-25 macOS Preflight Diagnostics — Issue #79/#80 Root Cause
 
 **Session:** mom-issue79-80-macos (2026-04-25T12:37:39Z)  

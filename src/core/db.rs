@@ -231,6 +231,7 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     conn.execute_batch(include_str!("../schema.sql"))?;
     ensure_pages_update_trigger_handles_quarantine(&conn)?;
     ensure_collection_owner_columns(&conn)?;
+    ensure_serve_session_columns(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
@@ -335,6 +336,24 @@ fn ensure_collection_owner_columns(conn: &Connection) -> Result<(), DbError> {
             "ALTER TABLE collections ADD COLUMN reconcile_halt_reason TEXT DEFAULT NULL",
         ),
     ] {
+        if !existing_columns.contains(column_name) {
+            conn.execute_batch(column_sql)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_serve_session_columns(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(serve_sessions)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    for (column_name, column_sql) in [(
+        "session_type",
+        "ALTER TABLE serve_sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'serve'",
+    )] {
         if !existing_columns.contains(column_name) {
             conn.execute_batch(column_sql)?;
         }
