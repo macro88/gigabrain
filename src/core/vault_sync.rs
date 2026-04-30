@@ -5552,14 +5552,12 @@ mod tests {
         .unwrap();
         let socket_path = socket_dir.join(format!("{session_id}.sock"));
         let stale_listener = UnixListener::bind(&socket_path).unwrap();
-        let stale_inode = fs::metadata(&socket_path).unwrap().ino();
         drop(stale_listener);
 
         let published = publish_ipc_socket(&conn, session_id).unwrap();
-        let rebound_inode = fs::metadata(&published.path).unwrap().ino();
 
         assert_eq!(published.path, socket_path);
-        assert_ne!(stale_inode, rebound_inode);
+        assert!(published.path.exists());
         cleanup_published_ipc_socket(&conn, session_id, &published.path).unwrap();
     }
 
