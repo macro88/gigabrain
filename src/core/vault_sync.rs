@@ -3,7 +3,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, BufWriter, Write};
+#[cfg(unix)]
+use std::mem::{size_of, zeroed};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
@@ -26,10 +38,6 @@ use notify::{
 use rustix::fd::AsFd;
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
-#[cfg(all(test, unix))]
-use std::io::Write;
-#[cfg(all(test, unix))]
-use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
@@ -331,6 +339,22 @@ pub enum VaultSyncError {
         owner_host: String,
     },
 
+    #[cfg(unix)]
+    #[error("IpcDirectoryInsecureError: path={path} reason={reason}")]
+    IpcDirectoryInsecure { path: String, reason: String },
+
+    #[cfg(unix)]
+    #[error("IpcSocketPermissionError: path={path} reason={reason}")]
+    IpcSocketPermission { path: String, reason: String },
+
+    #[cfg(unix)]
+    #[error("IpcSocketCollisionError: path={path} reason={reason}")]
+    IpcSocketCollision { path: String, reason: String },
+
+    #[cfg(unix)]
+    #[error("IpcPeerAuthFailedError: path={path} reason={reason}")]
+    IpcPeerAuthFailed { path: String, reason: String },
+
     #[error("RestoreInProgressError: collection={collection_name}")]
     RestoreInProgress { collection_name: String },
 
@@ -561,6 +585,55 @@ pub struct ServeRuntime {
     pub session_id: String,
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IpcPeerCredentials {
+    pub pid: i32,
+    pub uid: u32,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+pub(crate) struct LiveServeEndpoint {
+    pub session_id: String,
+    pub pid: i64,
+    pub ipc_path: String,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum IpcRequest {
+    WhoAmI,
+    Put {
+        slug: String,
+        content: String,
+        expected_version: Option<i64>,
+    },
+}
+
+#[cfg(unix)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum IpcResponse {
+    WhoAmI { session_id: String },
+    PutOk { status: String },
+    Error { error: String },
+}
+
+#[cfg(unix)]
+struct PublishedIpcSocket {
+    listener: UnixListener,
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+struct IpcSocketLocation {
+    runtime_root: PathBuf,
+    socket_dir: PathBuf,
+    create_runtime_root: bool,
+}
+
 impl Drop for ServeRuntime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -575,6 +648,11 @@ pub fn current_host() -> String {
         .ok()
         .or_else(|| std::env::var("HOSTNAME").ok())
         .unwrap_or_else(|| "unknown-host".to_owned())
+}
+
+#[cfg(unix)]
+pub(crate) fn current_effective_uid() -> u32 {
+    unsafe { libc::geteuid() as u32 }
 }
 
 #[cfg(unix)]
@@ -2001,6 +2079,47 @@ fn live_collection_owner_for_root_path(
     .map_err(Into::into)
 }
 
+#[cfg(unix)]
+pub(crate) fn live_serve_endpoint_for_root_path(
+    conn: &Connection,
+    root_path: &str,
+) -> Result<Option<LiveServeEndpoint>, VaultSyncError> {
+    let row = conn
+        .query_row(
+            "SELECT o.session_id, s.pid, s.ipc_path
+             FROM collections c
+             JOIN collection_owners o ON o.collection_id = c.id
+             JOIN serve_sessions s ON s.session_id = o.session_id
+             WHERE c.root_path = ?1
+               AND s.heartbeat_at >= datetime('now', ?2)
+               AND s.session_type = 'serve'
+             ORDER BY c.id
+             LIMIT 1",
+            params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    match row {
+        None => Ok(None),
+        Some((session_id, pid, Some(ipc_path))) => Ok(Some(LiveServeEndpoint {
+            session_id,
+            pid,
+            ipc_path,
+        })),
+        // ipc_path may be NULL during the shutdown race window (socket cleared before
+        // the session row is unregistered).  Treat this as "no live owner" so that the
+        // caller falls back to the direct-write path, where owner-lease checks still
+        // protect the collection.
+        Some((_session_id, _pid, None)) => Ok(None),
+    }
+}
+
 #[allow(dead_code)]
 pub fn ensure_no_live_serve_owner(
     conn: &Connection,
@@ -3407,16 +3526,558 @@ pub fn run_rcrt_pass(
     Ok(actions)
 }
 
+#[cfg(unix)]
+fn publish_ipc_socket(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<PublishedIpcSocket, VaultSyncError> {
+    let location = ipc_socket_location()?;
+    ensure_secure_ipc_directory(&location.runtime_root, location.create_runtime_root)?;
+    ensure_secure_ipc_directory(&location.socket_dir, true)?;
+    let socket_path = location.socket_dir.join(format!("{session_id}.sock"));
+    if socket_path.exists() {
+        clear_stale_ipc_socket(&socket_path)?;
+    }
+    let listener = UnixListener::bind(&socket_path)?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+    listener.set_nonblocking(true)?;
+    listen_with_backlog(&listener)?;
+    audit_bound_ipc_socket(&socket_path)?;
+    conn.execute(
+        "UPDATE serve_sessions SET ipc_path = ?1 WHERE session_id = ?2",
+        params![socket_path.display().to_string(), session_id],
+    )?;
+    Ok(PublishedIpcSocket {
+        listener,
+        path: socket_path,
+    })
+}
+
+#[cfg(unix)]
+fn ipc_socket_location() -> Result<IpcSocketLocation, VaultSyncError> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let runtime_root = PathBuf::from(runtime_dir);
+            return Ok(IpcSocketLocation {
+                socket_dir: runtime_root.join("quaid"),
+                runtime_root,
+                create_runtime_root: false,
+            });
+        }
+        dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home.join(".cache").join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home
+                    .join("Library")
+                    .join("Application Support")
+                    .join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        dirs::home_dir()
+            .map(|home| {
+                let runtime_root = home.join(".cache").join("quaid");
+                IpcSocketLocation {
+                    socket_dir: runtime_root.join("run"),
+                    runtime_root,
+                    create_runtime_root: true,
+                }
+            })
+            .ok_or_else(|| VaultSyncError::InvariantViolation {
+                message: "unable to resolve HOME for IPC directory".to_owned(),
+            })
+    }
+}
+
+#[cfg(unix)]
+fn ensure_secure_ipc_directory(path: &Path, create_if_missing: bool) -> Result<(), VaultSyncError> {
+    if !path.exists() {
+        if !create_if_missing {
+            return Err(VaultSyncError::IpcDirectoryInsecure {
+                path: path.display().to_string(),
+                reason: "path does not exist".to_owned(),
+            });
+        }
+        fs::create_dir_all(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_dir() {
+        return Err(VaultSyncError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: "path is not a directory".to_owned(),
+        });
+    }
+    if metadata.uid() != current_effective_uid() {
+        return Err(VaultSyncError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: format!(
+                "owner uid {} does not match current uid {}",
+                metadata.uid(),
+                current_effective_uid()
+            ),
+        });
+    }
+    if mode != 0o700 {
+        return Err(VaultSyncError::IpcDirectoryInsecure {
+            path: path.display().to_string(),
+            reason: format!("mode {:o} is not 700", mode),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn clear_stale_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket() {
+        return Err(VaultSyncError::IpcSocketCollision {
+            path: path.display().to_string(),
+            reason: "existing path is not a unix socket".to_owned(),
+        });
+    }
+    match UnixStream::connect(path) {
+        Ok(stream) => {
+            let creds = peer_credentials_for_stream(&stream)?;
+            return Err(VaultSyncError::IpcSocketCollision {
+                path: path.display().to_string(),
+                reason: format!("live listener already bound by pid {}", creds.pid),
+            });
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::NotFound
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::ConnectionAborted
+            ) =>
+        {
+            fs::remove_file(path)?;
+        }
+        Err(error) => {
+            return Err(VaultSyncError::IpcSocketCollision {
+                path: path.display().to_string(),
+                reason: error.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn listen_with_backlog(listener: &UnixListener) -> Result<(), VaultSyncError> {
+    let rc = unsafe { libc::listen(listener.as_raw_fd(), 16) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error().into())
+    }
+}
+
+#[cfg(unix)]
+fn audit_bound_ipc_socket(path: &Path) -> Result<(), VaultSyncError> {
+    let metadata = fs::symlink_metadata(path)?;
+    let mode = metadata.mode() & 0o777;
+    if !metadata.file_type().is_socket() {
+        return Err(VaultSyncError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: "bound path is not a unix socket".to_owned(),
+        });
+    }
+    if metadata.uid() != current_effective_uid() {
+        return Err(VaultSyncError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: format!(
+                "owner uid {} does not match current uid {}",
+                metadata.uid(),
+                current_effective_uid()
+            ),
+        });
+    }
+    if mode != 0o600 {
+        return Err(VaultSyncError::IpcSocketPermission {
+            path: path.display().to_string(),
+            reason: format!("mode {:o} is not 600", mode),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn cleanup_published_ipc_socket(
+    conn: &Connection,
+    session_id: &str,
+    socket_path: &Path,
+) -> Result<(), VaultSyncError> {
+    if socket_path.exists() {
+        let _ = fs::remove_file(socket_path);
+    }
+    conn.execute(
+        "UPDATE serve_sessions SET ipc_path = NULL WHERE session_id = ?1",
+        [session_id],
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn session_id_from_ipc_path(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(unix)]
+pub(crate) fn peer_credentials_for_stream(
+    stream: &UnixStream,
+) -> Result<IpcPeerCredentials, VaultSyncError> {
+    let fd = stream.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    {
+        let mut creds: libc::ucred = unsafe { zeroed() };
+        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut creds as *mut libc::ucred).cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        Ok(IpcPeerCredentials {
+            pid: creds.pid,
+            uid: creds.uid,
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+        if rc != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let mut pid: libc::pid_t = 0;
+        let mut len = size_of::<libc::pid_t>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                0,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        return Ok(IpcPeerCredentials {
+            pid,
+            uid: uid as u32,
+        });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(VaultSyncError::InvariantViolation {
+            message: "peer credentials unsupported on this unix platform".to_owned(),
+        })
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn authorize_server_peer(
+    socket_path: &Path,
+    peer: &IpcPeerCredentials,
+) -> Result<(), VaultSyncError> {
+    if peer.uid != current_effective_uid() {
+        return Err(VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!(
+                "peer uid {} does not match current uid {}",
+                peer.uid,
+                current_effective_uid()
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn authorize_client_peer(
+    socket_path: &Path,
+    path_session_id: &str,
+    owner_session_id: &str,
+    owner_pid: i64,
+    peer: &IpcPeerCredentials,
+    whoami_session_id: &str,
+) -> Result<(), VaultSyncError> {
+    if path_session_id != owner_session_id {
+        return Err(VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!(
+                "path session {} does not match owner session {}",
+                path_session_id, owner_session_id
+            ),
+        });
+    }
+    if peer.uid != current_effective_uid() {
+        return Err(VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!(
+                "peer uid {} does not match current uid {}",
+                peer.uid,
+                current_effective_uid()
+            ),
+        });
+    }
+    if i64::from(peer.pid) != owner_pid {
+        return Err(VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!(
+                "peer pid {} does not match owner pid {}",
+                peer.pid, owner_pid
+            ),
+        });
+    }
+    if whoami_session_id != path_session_id {
+        return Err(VaultSyncError::IpcPeerAuthFailed {
+            path: socket_path.display().to_string(),
+            reason: format!(
+                "whoami session {} does not match path session {}",
+                whoami_session_id, path_session_id
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Maximum concurrent in-flight IPC handler threads.  Connections that arrive
+/// when this cap is reached are immediately closed so a rogue same-UID caller
+/// cannot exhaust OS thread resources and impact serve liveness.
+#[cfg(unix)]
+const IPC_HANDLER_LIMIT: usize = 8;
+
+/// RAII guard: decrements the in-flight counter when dropped so the slot is
+/// always released even if the handler returns early or panics.
+#[cfg(unix)]
+struct IpcHandlerGuard(Arc<AtomicUsize>);
+
+#[cfg(unix)]
+impl Drop for IpcHandlerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(unix)]
+fn accept_ipc_clients(
+    listener: &UnixListener,
+    socket_path: &Path,
+    db_path: &str,
+    session_id: &str,
+    in_flight: &Arc<AtomicUsize>,
+) {
+    loop {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                // Enforce the in-flight cap before spawning.  fetch_add is atomic
+                // so concurrent accept calls on the same listener are race-free.
+                if in_flight.fetch_add(1, Ordering::AcqRel) >= IPC_HANDLER_LIMIT {
+                    // Already at or over the cap: roll back and discard the stream.
+                    in_flight.fetch_sub(1, Ordering::AcqRel);
+                    eprintln!(
+                        "WARN: ipc_handler_limit_reached path={} limit={} connection_closed",
+                        socket_path.display(),
+                        IPC_HANDLER_LIMIT,
+                    );
+                    // `stream` is dropped here, closing the connection immediately.
+                    // Break (not continue) so a same-UID flood at saturation cannot
+                    // drain the kernel accept queue indefinitely and starve heartbeats
+                    // and watchers in the main serve loop.  At most one connection is
+                    // discarded per tick before we return control to the serve loop.
+                    break;
+                }
+                // Offload each client to its own thread so that blocking reads/writes
+                // (up to 5 s per IPC timeout) cannot stall the main serve loop and
+                // cause a false-dead live-owner verdict.
+                // `guard` is moved into the closure and drops when the thread exits,
+                // decrementing the in-flight counter even on panic or early return.
+                let guard = IpcHandlerGuard(Arc::clone(in_flight));
+                let socket_path_owned = socket_path.to_path_buf();
+                let db_path_owned = db_path.to_owned();
+                let session_id_owned = session_id.to_owned();
+                thread::spawn(move || {
+                    let _guard = guard;
+                    if let Err(error) = handle_ipc_client(
+                        stream,
+                        &socket_path_owned,
+                        &db_path_owned,
+                        &session_id_owned,
+                    ) {
+                        eprintln!(
+                            "WARN: ipc_client_failed path={} error={}",
+                            socket_path_owned.display(),
+                            error
+                        );
+                    }
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => {
+                eprintln!(
+                    "WARN: ipc_accept_failed path={} error={}",
+                    socket_path.display(),
+                    error
+                );
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn handle_ipc_client(
+    stream: UnixStream,
+    socket_path: &Path,
+    db_path: &str,
+    session_id: &str,
+) -> Result<(), VaultSyncError> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let peer = peer_credentials_for_stream(&stream)?;
+    authorize_server_peer(socket_path, &peer)?;
+    eprintln!(
+        "INFO: ipc_peer_authenticated session_id={} peer_pid={} peer_uid={}",
+        session_id, peer.pid, peer.uid
+    );
+
+    let read_stream = stream.try_clone()?;
+    let mut reader = BufReader::new(read_stream);
+    let mut writer = BufWriter::new(stream);
+    loop {
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let request = match serde_json::from_str::<IpcRequest>(line.trim_end()) {
+            Ok(request) => request,
+            Err(error) => {
+                write_ipc_response(
+                    &mut writer,
+                    &IpcResponse::Error {
+                        error: format!("invalid ipc request: {error}"),
+                    },
+                )?;
+                break;
+            }
+        };
+        match request {
+            IpcRequest::WhoAmI => {
+                write_ipc_response(
+                    &mut writer,
+                    &IpcResponse::WhoAmI {
+                        session_id: session_id.to_owned(),
+                    },
+                )?;
+            }
+            IpcRequest::Put {
+                slug,
+                content,
+                expected_version,
+            } => {
+                let conn = Connection::open(db_path)?;
+                match put::put_from_string_status(&conn, &slug, &content, expected_version) {
+                    Ok(status) => {
+                        write_ipc_response(&mut writer, &IpcResponse::PutOk { status })?;
+                    }
+                    Err(error) => {
+                        write_ipc_response(
+                            &mut writer,
+                            &IpcResponse::Error {
+                                error: error.to_string(),
+                            },
+                        )?;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_ipc_response(
+    writer: &mut BufWriter<UnixStream>,
+    response: &IpcResponse,
+) -> Result<(), VaultSyncError> {
+    serde_json::to_writer(&mut *writer, response).map_err(|error| {
+        VaultSyncError::InvariantViolation {
+            message: format!("failed to serialize ipc response: {error}"),
+        }
+    })?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
 pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncError> {
     init_process_registries()?;
     let conn = Connection::open(&db_path)?;
     sweep_stale_sessions(&conn)?;
     let session_id = register_session(&conn)?;
-    run_startup_sequence(&conn, Path::new(&db_path), &session_id)?;
+    #[cfg(unix)]
+    let published_ipc = match publish_ipc_socket(&conn, &session_id) {
+        Ok(published) => published,
+        Err(error) => {
+            let _ = unregister_session(&conn, &session_id);
+            return Err(error);
+        }
+    };
+    if let Err(error) = run_startup_sequence(&conn, Path::new(&db_path), &session_id) {
+        #[cfg(unix)]
+        let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
+        let _ = unregister_session(&conn, &session_id);
+        return Err(error);
+    }
     #[cfg(unix)]
     let mut watchers: HashMap<i64, CollectionWatcherState> = HashMap::new();
     #[cfg(unix)]
-    sync_collection_watchers(&conn, &db_path, &mut watchers)?;
+    if let Err(error) = sync_collection_watchers(&conn, &db_path, &mut watchers) {
+        let _ = cleanup_published_ipc_socket(&conn, &session_id, &published_ipc.path);
+        let _ = unregister_session(&conn, &session_id);
+        return Err(error);
+    }
     let mut stmt = conn.prepare("SELECT id, reload_generation FROM collections")?;
     let initial_generations = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
@@ -3427,7 +4088,13 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
     let stop = Arc::new(AtomicBool::new(false));
     let stop_signal = Arc::clone(&stop);
     let session_id_for_thread = session_id.clone();
+    #[cfg(unix)]
+    let ipc_in_flight = Arc::new(AtomicUsize::new(0));
     let handle = thread::spawn(move || {
+        #[cfg(unix)]
+        let published_ipc = published_ipc;
+        #[cfg(unix)]
+        let ipc_in_flight = ipc_in_flight;
         let mut last_heartbeat = Instant::now();
         let mut last_quarantine_sweep = Instant::now();
         let mut last_generations = initial_generations;
@@ -3454,6 +4121,13 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 }
                 #[cfg(unix)]
                 {
+                    accept_ipc_clients(
+                        &published_ipc.listener,
+                        &published_ipc.path,
+                        &db_path,
+                        &session_id_for_thread,
+                        &ipc_in_flight,
+                    );
                     let _ = sync_collection_watchers(&conn, &db_path, &mut watchers);
                     for (collection_id, state) in &mut watchers {
                         if let Err(error) = poll_collection_watcher(&conn, *collection_id, state) {
@@ -3531,6 +4205,9 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
             thread::sleep(Duration::from_millis(DEFERRED_RETRY_SECS * 200));
         }
         if let Ok(conn) = Connection::open(&db_path) {
+            #[cfg(unix)]
+            let _ =
+                cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path);
             let _ = clear_supervisor_handles_for_session(&session_id_for_thread);
             let _ = unregister_session(&conn, &session_id_for_thread);
         }
@@ -4712,6 +5389,15 @@ mod tests {
         ENV_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    #[cfg(all(unix, target_os = "linux"))]
+    fn secure_runtime_root() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -4825,6 +5511,243 @@ mod tests {
         )
         .unwrap();
         page_id
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn start_serve_runtime_refuses_insecure_ipc_directory_permissions() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = secure_runtime_root();
+        let socket_dir = runtime_root.path().join("quaid");
+        fs::create_dir_all(&socket_dir).unwrap();
+        fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
+        let (_dir, db_path, _conn) = open_test_db_file();
+
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure socket directory to refuse startup"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+        assert!(error.to_string().contains("IpcDirectoryInsecureError"));
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn start_serve_runtime_refuses_insecure_xdg_runtime_root_permissions() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = tempfile::TempDir::new().unwrap();
+        fs::set_permissions(runtime_root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
+        let (_dir, db_path, _conn) = open_test_db_file();
+
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure XDG runtime root to refuse startup"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+        assert!(error.to_string().contains("IpcDirectoryInsecureError"));
+        assert!(error.to_string().contains("mode 755 is not 700"));
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn start_serve_runtime_refuses_insecure_fallback_runtime_root_permissions() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let home = tempfile::TempDir::new().unwrap();
+        let runtime_root = home.path().join(".cache").join("quaid");
+        fs::create_dir_all(&runtime_root).unwrap();
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o755)).unwrap();
+        let _xdg = EnvVarGuard::clear("XDG_RUNTIME_DIR");
+        let _home = EnvVarGuard::set("HOME", home.path().to_str().unwrap());
+        let (_dir, db_path, _conn) = open_test_db_file();
+
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure fallback runtime root to refuse startup"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
+        assert!(error.to_string().contains("IpcDirectoryInsecureError"));
+        assert!(error.to_string().contains(runtime_root.to_str().unwrap()));
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn publish_ipc_socket_unlinks_stale_socket_before_bind() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = secure_runtime_root();
+        let socket_dir = runtime_root.path().join("quaid");
+        fs::create_dir_all(&socket_dir).unwrap();
+        fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let session_id = "stale-session";
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES (?1, 42, 'host')",
+            [session_id],
+        )
+        .unwrap();
+        let socket_path = socket_dir.join(format!("{session_id}.sock"));
+        let stale_listener = UnixListener::bind(&socket_path).unwrap();
+        drop(stale_listener);
+
+        let published = publish_ipc_socket(&conn, session_id).unwrap();
+
+        assert_eq!(published.path, socket_path);
+        assert!(published.path.exists());
+        cleanup_published_ipc_socket(&conn, session_id, &published.path).unwrap();
+    }
+
+    #[cfg(all(unix, target_os = "linux"))]
+    #[test]
+    fn audit_bound_ipc_socket_rejects_mode_regression() {
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        let runtime_root = secure_runtime_root();
+        let socket_dir = runtime_root.path().join("quaid");
+        fs::create_dir_all(&socket_dir).unwrap();
+        fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
+        let socket_path = socket_dir.join("mode-regression.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let error = audit_bound_ipc_socket(&socket_path).unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::IpcSocketPermission { .. }));
+        drop(listener);
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authorize_server_peer_rejects_cross_uid_peer() {
+        let socket_path = Path::new("D:\\repos\\quaid-vault-sync-batch5-v0140\\fake.sock");
+        let peer = IpcPeerCredentials {
+            pid: 77,
+            uid: current_effective_uid() + 1,
+        };
+
+        let error = authorize_server_peer(socket_path, &peer).unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(error.to_string().contains("IpcPeerAuthFailedError"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authorize_client_peer_rejects_cross_uid_even_with_matching_whoami() {
+        let socket_path = Path::new("D:\\repos\\quaid-vault-sync-batch5-v0140\\fake.sock");
+        let peer = IpcPeerCredentials {
+            pid: 88,
+            uid: current_effective_uid() + 1,
+        };
+
+        let error = authorize_client_peer(
+            socket_path,
+            "session-a",
+            "session-a",
+            88,
+            &peer,
+            "session-a",
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, VaultSyncError::IpcPeerAuthFailed { .. }));
+        assert!(error.to_string().contains("IpcPeerAuthFailedError"));
+    }
+
+    #[test]
+    fn serve_ipc_source_publishes_after_audit_and_cleans_up_before_unregister() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("core")
+                .join("vault_sync.rs"),
+        )
+        .unwrap();
+        let publish_start = source
+            .find("fn publish_ipc_socket(")
+            .expect("publish helper present");
+        let publish_end = source[publish_start..]
+            .find("pub fn start_serve_runtime(")
+            .map(|offset| publish_start + offset)
+            .expect("publish helper boundary");
+        let publish_source = &source[publish_start..publish_end];
+        let runtime_root_idx = publish_source
+            .find("ensure_secure_ipc_directory(&location.runtime_root")
+            .expect("secure runtime root check");
+        let dir_idx = publish_source
+            .find("ensure_secure_ipc_directory(&location.socket_dir, true)")
+            .expect("secure socket directory check");
+        let stale_idx = publish_source
+            .find("clear_stale_ipc_socket(&socket_path)")
+            .expect("stale socket cleanup");
+        let set_perms_idx = publish_source
+            .find("fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))")
+            .expect("explicit socket permissions set after bind");
+        let audit_idx = publish_source
+            .find("audit_bound_ipc_socket(&socket_path)")
+            .expect("bind-time audit");
+        let publish_idx = publish_source
+            .find("UPDATE serve_sessions SET ipc_path = ?1 WHERE session_id = ?2")
+            .expect("ipc path publish");
+        assert!(
+            runtime_root_idx < dir_idx
+                && dir_idx < stale_idx
+                && stale_idx < set_perms_idx
+                && set_perms_idx < audit_idx
+                && audit_idx < publish_idx
+        );
+
+        let runtime_start = source
+            .find("pub fn start_serve_runtime(")
+            .expect("serve runtime present");
+        let runtime_end = source[runtime_start..]
+            .find("#[derive(Debug, Clone)]")
+            .map(|offset| runtime_start + offset)
+            .expect("serve runtime boundary");
+        let runtime_source = &source[runtime_start..runtime_end];
+        let cleanup_idx = runtime_source
+            .find(
+                "cleanup_published_ipc_socket(&conn, &session_id_for_thread, &published_ipc.path)",
+            )
+            .expect("ipc cleanup call");
+        let unregister_idx = runtime_source
+            .find("unregister_session(&conn, &session_id_for_thread)")
+            .expect("session unregister call");
+        assert!(cleanup_idx < unregister_idx);
+    }
+
+    #[test]
+    fn serve_ipc_source_refuses_cross_uid_peer_before_request_dispatch() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("core")
+                .join("vault_sync.rs"),
+        )
+        .unwrap();
+        let handler_start = source
+            .find("fn handle_ipc_client(")
+            .expect("ipc handler present");
+        let handler_end = source[handler_start..]
+            .find("fn write_ipc_response(")
+            .map(|offset| handler_start + offset)
+            .expect("ipc handler boundary");
+        let handler_source = &source[handler_start..handler_end];
+        let peer_idx = handler_source
+            .find("let peer = peer_credentials_for_stream(&stream)?;")
+            .expect("peer credential lookup");
+        let auth_idx = handler_source
+            .find("authorize_server_peer(socket_path, &peer)?;")
+            .expect("server peer auth");
+        let parse_idx = handler_source
+            .find("serde_json::from_str::<IpcRequest>(line.trim_end())")
+            .expect("request parse");
+        assert!(peer_idx < auth_idx && auth_idx < parse_idx);
     }
 
     #[test]
@@ -8286,6 +9209,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_bootstraps_recovery_directories_for_existing_collections() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root_a = tempfile::TempDir::new().unwrap();
         let root_b = tempfile::TempDir::new().unwrap();
@@ -8305,6 +9234,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         init_process_registries().unwrap();
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
@@ -8403,6 +9338,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_only_processes_owned_collection_sentinels() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
@@ -8470,6 +9411,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_retains_sentinel_when_startup_reconcile_fails() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
@@ -8518,6 +9465,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writer_side_foreign_rename_with_sqlite_busy_recovers_from_sentinel_alone() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         init_process_registries().unwrap();
         let root = tempfile::TempDir::new().unwrap();
@@ -8912,6 +9865,136 @@ mod tests {
         // A live CLI-type lease must not trigger a ServeOwnsCollectionError.
         ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
             .unwrap();
+    }
+
+    /// Regression: during the shutdown race window the serve session's `ipc_path`
+    /// column may be cleared (by `cleanup_published_ipc_socket`) before the session
+    /// row is unregistered.  `live_serve_endpoint_for_root_path` must treat a NULL
+    /// `ipc_path` as "no live endpoint" (`Ok(None)`) rather than panicking with an
+    /// `InvariantViolation`, so that `quaid put` falls back to the direct-write path
+    /// and is still guarded by the owner-lease checks there.
+    #[cfg(unix)]
+    #[test]
+    fn live_serve_endpoint_for_root_path_returns_ok_none_when_ipc_path_is_null() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "shutdown-race", temp.path());
+        // Insert a serve session that is still alive (fresh heartbeat) but whose
+        // ipc_path has already been cleared by cleanup_published_ipc_socket.
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, ipc_path)
+             VALUES ('race-session', 1234, 'test-host', datetime('now'), NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'race-session')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let result = live_serve_endpoint_for_root_path(&conn, &temp.path().display().to_string());
+
+        assert!(
+            matches!(result, Ok(None)),
+            "expected Ok(None) for NULL ipc_path during shutdown race, got: {result:?}"
+        );
+    }
+
+    /// Regression: `accept_ipc_clients` must offload each accepted connection to a
+    /// dedicated thread via `thread::spawn` so that blocking IPC I/O (up to 5 s per
+    /// read/write timeout) cannot stall the main serve loop and trigger a false-dead
+    /// live-owner verdict.  We verify the structural invariant via source inspection.
+    #[test]
+    fn accept_ipc_clients_offloads_each_client_to_its_own_thread() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("core")
+                .join("vault_sync.rs"),
+        )
+        .unwrap();
+        let fn_start = source
+            .find("fn accept_ipc_clients(")
+            .expect("accept_ipc_clients fn present");
+        // Boundary: the next fn after accept_ipc_clients is handle_ipc_client.
+        let fn_end = source[fn_start..]
+            .find("fn handle_ipc_client(")
+            .map(|offset| fn_start + offset)
+            .expect("handle_ipc_client fn follows accept_ipc_clients");
+        let fn_body = &source[fn_start..fn_end];
+
+        // The function must not call handle_ipc_client directly on the main loop thread.
+        assert!(
+            !fn_body.contains("handle_ipc_client(stream,"),
+            "accept_ipc_clients must not call handle_ipc_client inline on the main thread"
+        );
+        // The function must use thread::spawn to offload.
+        assert!(
+            fn_body.contains("thread::spawn("),
+            "accept_ipc_clients must offload each client via thread::spawn"
+        );
+        // The spawn closure must contain the handle_ipc_client call.
+        let spawn_idx = fn_body.find("thread::spawn(").unwrap();
+        let spawn_region = &fn_body[spawn_idx..];
+        assert!(
+            spawn_region.contains("handle_ipc_client("),
+            "handle_ipc_client must be called inside the thread::spawn closure"
+        );
+        // The function must enforce the in-flight cap before spawning.
+        assert!(
+            fn_body.contains("IPC_HANDLER_LIMIT"),
+            "accept_ipc_clients must reference IPC_HANDLER_LIMIT"
+        );
+        assert!(
+            fn_body.contains("fetch_add("),
+            "accept_ipc_clients must use fetch_add for the in-flight counter"
+        );
+        // Rollback path: fetch_sub must appear for the saturation branch.
+        assert!(
+            fn_body.contains("fetch_sub("),
+            "accept_ipc_clients must roll back via fetch_sub when saturated"
+        );
+        // Guard must be created before the spawn closure.
+        assert!(
+            fn_body.contains("IpcHandlerGuard("),
+            "accept_ipc_clients must construct an IpcHandlerGuard before spawning"
+        );
+    }
+
+    /// Unit test: `IpcHandlerGuard` must decrement the counter when dropped,
+    /// including via normal scope exit.
+    #[cfg(unix)]
+    #[test]
+    fn ipc_handler_guard_decrements_on_drop() {
+        let counter = Arc::new(AtomicUsize::new(1));
+        {
+            let _guard = IpcHandlerGuard(Arc::clone(&counter));
+            // Counter unchanged while guard is alive.
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+        }
+        // Guard dropped — counter must be back to 0.
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "IpcHandlerGuard must decrement the counter exactly once on drop"
+        );
+    }
+
+    /// Structural: `IPC_HANDLER_LIMIT` must be a small positive value so the
+    /// cap is intentional and not effectively infinite.
+    ///
+    /// These are compile-time assertions (`const _: () = assert!(...)`) rather
+    /// than runtime `assert!` calls to avoid the `clippy::assertions_on_constants`
+    /// lint — the values are constants, so the checks belong at compile time.
+    #[cfg(unix)]
+    #[test]
+    fn ipc_handler_limit_is_small_and_positive() {
+        const _: () = assert!(IPC_HANDLER_LIMIT > 0, "IPC_HANDLER_LIMIT must be > 0");
+        const _: () = assert!(
+            IPC_HANDLER_LIMIT <= 64,
+            "IPC_HANDLER_LIMIT should be small (<=64); current value looks unintentionally large",
+        );
     }
 
     #[cfg(unix)]

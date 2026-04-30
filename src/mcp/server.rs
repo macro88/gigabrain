@@ -613,7 +613,7 @@ impl QuaidServer {
             }
             _ => {}
         }
-        crate::commands::put::put_from_string(
+        crate::commands::put::put_from_string_quiet(
             &db,
             &canonical_slug(&resolved.collection_name, &resolved.slug),
             &input.content,
@@ -4719,6 +4719,44 @@ mod tests {
         assert!(
             parsed["page_id"].is_null(),
             "memory_gap without slug must return null page_id: {parsed}"
+        );
+    }
+
+    /// Regression: memory_put must not call the printing `put_from_string` variant
+    /// (which would corrupt JSON-RPC framing by writing to stdout).  It must use
+    /// `put_from_string_quiet` (suppresses printing, returns `()`) or
+    /// `put_from_string_status` (returns a status string without printing).
+    #[test]
+    fn memory_put_does_not_call_printing_put_from_string_variant() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("mcp")
+                .join("server.rs"),
+        )
+        .unwrap();
+        // Locate the memory_put function body.
+        let fn_start = source
+            .find("pub fn memory_put(")
+            .expect("memory_put fn present");
+        // Find the closing brace of memory_put by looking at the next tool-decorated fn.
+        let fn_body_end = source[fn_start..]
+            .find("\n    #[tool(")
+            .map(|offset| fn_start + offset)
+            .expect("next tool fn after memory_put");
+        let fn_body = &source[fn_start..fn_body_end];
+
+        // The body must NOT contain the bare `put_from_string(` call (the printing variant).
+        assert!(
+            !fn_body.contains("put_from_string("),
+            "memory_put must not call the printing put_from_string variant; \
+             use put_from_string_quiet or put_from_string_status instead"
+        );
+        // The body MUST use a non-printing variant.
+        assert!(
+            fn_body.contains("put_from_string_quiet(")
+                || fn_body.contains("put_from_string_status("),
+            "memory_put must call put_from_string_quiet or put_from_string_status"
         );
     }
 
