@@ -524,12 +524,9 @@ fn persist_with_vault_write(
     }
 
     if let Err(error) = vault_sync::insert_write_dedup(&dedup_key) {
-        let _ = vault_sync::forget_self_write_path(&target_path);
-        let _ = cleanup_pre_rename(
+        cleanup_pre_rename_without_dedup_clear(
             &parent_fd,
             &temp_name,
-            &target_path,
-            &dedup_key,
             &recovery_dir,
             &sentinel_name,
         );
@@ -791,6 +788,17 @@ fn cleanup_pre_rename(
     clear_failure_tracking(target_path, dedup_key);
     let _ = remove_recovery_sentinel(recovery_dir, sentinel_name);
     Ok(())
+}
+
+#[cfg(unix)]
+fn cleanup_pre_rename_without_dedup_clear(
+    parent_fd: &impl AsFd,
+    temp_name: &Path,
+    recovery_dir: &Path,
+    sentinel_name: &str,
+) {
+    let _ = fs_safety::unlinkat_parent_fd(parent_fd, temp_name);
+    let _ = remove_recovery_sentinel(recovery_dir, sentinel_name);
 }
 
 #[cfg(unix)]
@@ -1602,6 +1610,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn duplicate_dedup_entry_refuses_before_rename_without_mutating_disk_or_db() {
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        let body = "---\ntitle: Duplicate Dedup\ntype: note\n---\nBody\n";
+        let dedup_key = format!(
+            "1:{}:{}",
+            "notes/duplicate-dedup.md",
+            sha256_hex(body.as_bytes())
+        );
+        vault_sync::insert_write_dedup(&dedup_key).unwrap();
+
+        let error = put_from_string(&conn, "notes/duplicate-dedup", body, None).unwrap_err();
+
+        assert!(error.to_string().contains("DuplicateWriteDedupError"));
+        assert_eq!(page_count(&conn, "notes/duplicate-dedup"), 0);
+        assert!(!vault_root.join("notes").join("duplicate-dedup.md").exists());
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert!(vault_sync::has_write_dedup(&dedup_key).unwrap());
+        vault_sync::remove_write_dedup(&dedup_key).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn put_test_hooks_are_scoped_to_the_guarded_database() {
         let (guard, _hook_dir, _hook_db_path, hook_conn, hook_vault_root) =
             open_test_db_with_vault_guarded();
@@ -2026,6 +2056,50 @@ mod tests {
         assert!(
             !production.contains("fs::create_dir_all(parent)"),
             "rename-before-commit writer must not widen parent creation back to path-based create_dir_all"
+        );
+    }
+
+    #[test]
+    fn duplicate_dedup_source_is_fail_closed_without_clearing_preexisting_entry() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let vault_source = stdfs::read_to_string(root.join("core").join("vault_sync.rs")).unwrap();
+        let insert_start = vault_source
+            .find("pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {")
+            .expect("insert_write_dedup production function");
+        let insert_end = vault_source[insert_start..]
+            .find("pub fn remove_write_dedup")
+            .map(|offset| insert_start + offset)
+            .expect("remove_write_dedup after insert_write_dedup");
+        let insert_fn = &vault_source[insert_start..insert_end];
+        assert!(
+            insert_fn.contains("Err(VaultSyncError::DuplicateWriteDedup"),
+            "duplicate write-dedup entries must fail closed with an explicit typed error"
+        );
+        assert!(
+            insert_fn.contains("if inserted {"),
+            "insert_write_dedup must branch on the HashSet::insert result instead of silently discarding duplicates"
+        );
+
+        let put_source = stdfs::read_to_string(root.join("commands").join("put.rs")).unwrap();
+        let dedup_fail_start = put_source
+            .find("if let Err(error) = vault_sync::insert_write_dedup(&dedup_key) {")
+            .expect("writer dedup failure block");
+        let dedup_fail_end = put_source[dedup_fail_start..]
+            .find("if let Err(error) = vault_sync::remember_self_write_path(&target_path, &prepared.sha256)")
+            .map(|offset| dedup_fail_start + offset)
+            .expect("self-write remember block after dedup failure block");
+        let dedup_fail_block = &put_source[dedup_fail_start..dedup_fail_end];
+        assert!(
+            dedup_fail_block.contains("cleanup_pre_rename_without_dedup_clear("),
+            "duplicate dedup insert failures must clean tempfile/sentinel without erasing the preexisting registry entry"
+        );
+        assert!(
+            !dedup_fail_block.contains("let _ = vault_sync::forget_self_write_path(&target_path);"),
+            "dedup insert failure happens before self-write tracking and must not clear unrelated path state"
+        );
+        assert!(
+            !dedup_fail_block.contains("cleanup_pre_rename("),
+            "dedup insert failure must not run the generic cleanup path that removes the preexisting dedup entry"
         );
     }
 

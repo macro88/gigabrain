@@ -410,6 +410,10 @@ pub enum VaultSyncError {
     RegistryPoisoned { registry: &'static str },
 
     #[cfg(unix)]
+    #[error("DuplicateWriteDedupError: key={key}")]
+    DuplicateWriteDedup { key: String },
+
+    #[cfg(unix)]
     #[error(
         "RecoverySentinelError: collection_id={collection_id} relative_path={relative_path} sentinel={sentinel_path} reason={reason}"
     )]
@@ -1442,12 +1446,18 @@ pub fn mark_collection_needs_full_sync_via_fresh_connection(
 #[allow(dead_code)]
 pub fn insert_write_dedup(key: &str) -> Result<(), VaultSyncError> {
     let registries = PROCESS_REGISTRIES.get_or_init(RuntimeRegistries::new);
-    registries
+    let inserted = registries
         .dedup
         .lock()
         .map_err(|_| VaultSyncError::RegistryPoisoned { registry: "dedup" })?
         .insert(key.to_owned());
-    Ok(())
+    if inserted {
+        Ok(())
+    } else {
+        Err(VaultSyncError::DuplicateWriteDedup {
+            key: key.to_owned(),
+        })
+    }
 }
 
 #[cfg(unix)]
@@ -6252,6 +6262,30 @@ mod tests {
         assert_eq!(row.0, 0);
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn insert_write_dedup_rejects_duplicate_key() {
+        init_process_registries().unwrap();
+        let key = format!(
+            "test-duplicate-dedup-{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        insert_write_dedup(&key).unwrap();
+        let error = insert_write_dedup(&key).unwrap_err();
+
+        assert!(matches!(
+            error,
+            VaultSyncError::DuplicateWriteDedup { key: duplicate } if duplicate == key
+        ));
+        assert!(has_write_dedup(&key).unwrap());
+        remove_write_dedup(&key).unwrap();
+        assert!(!has_write_dedup(&key).unwrap());
     }
 
     #[cfg(unix)]
