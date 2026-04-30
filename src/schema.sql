@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS serve_sessions (
     host          TEXT    NOT NULL,
     started_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     heartbeat_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    ipc_path      TEXT    DEFAULT NULL
+    ipc_path      TEXT    DEFAULT NULL,
+    session_type  TEXT    NOT NULL DEFAULT 'serve'
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_serve_sessions_heartbeat

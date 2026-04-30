@@ -27,7 +27,7 @@ This document is the agent instruction guide for completing the `vault-sync-engi
 
 ## Current completion state
 
-As of 2026-04-28: **203 done / 110 open / 313 total (65%).**
+As of 2026-04-30: **227 done / 86 open / 313 total (72%).**
 
 The core sync loop is working end-to-end: serve → watcher → debounce → stat-diff reconcile → FTS/DB update → MCP query. The foundation tasks (schema v5/v6, collections model, ignore patterns, file state, reconciler, self-write dedup, collection CLI, UUID lifecycle, MCP slug routing, restore Tx-A/Tx-B, write interlocks) are all done. What remains is watcher hardening, embedding worker, UUID write-back, full rename-before-commit (steps 2–13 beyond the M1a sentinel core), IPC socket, restore/remap end-to-end, and cleanup.
 

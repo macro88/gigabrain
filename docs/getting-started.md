@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.12.0`: it keeps the 17-tool surface, carries the Batch 1/2 vault-sync follow-ons already on `main`, and adds Batch 3 UUID identity hardening for collection-backed vaults.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.13.0`: it keeps the 17-tool surface, carries Batches 1–3 vault-sync follow-ons already on `main`, and adds Batch 4 full rename-before-commit hardening for collection-backed vaults.
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the vault-sync line is in Batch 3.** This branch prepares `v0.12.0`: it preserves the current 17-tool surface, keeps the watcher / embedding-worker hardening already shipped through Batch 2, and adds opt-in `quaid_id` write-back plus offline `migrate-uuids` repair for collection-backed vaults.
+> **Phase 3 is complete, and the vault-sync line is in Batch 4.** This branch prepares `v0.13.0`: it preserves the current 17-tool surface, keeps Batches 1–3 vault-sync follow-ons already shipped, and adds Batch 4 full rename-before-commit hardening (CLI write routing, duplicate write-dedup entry detection, and complete test coverage for all rename-before-commit failure modes).
 >
-> Published GitHub Release binaries still come from the latest public tag until the `v0.12.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
+> Published GitHub Release binaries still come from the latest public tag until the `v0.13.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
 
 ---
 
@@ -26,13 +26,13 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 | Method | Status |
 | ------ | ------ |
 | Build from source (`cargo build --release`) | ✅ Available now — source builds reflect this branch, including the Batch 3 UUID write-back / `migrate-uuids` slice |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.12.0` is cut |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.13.0` is cut |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 >
-> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.12.0` Batch 3 UUID write-back / `migrate-uuids` behavior before the tag exists.
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.13.0` Batch 4 rename-before-commit hardening before the tag exists.
 
 ---
 
@@ -69,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.12.0` is published; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.13.0` is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -403,7 +403,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6`. This branch carries the `v0.12.0` follow-on: Batch 1 watcher hardening and Batch 2 embedding queue reporting stay in place, while Batch 3 adds opt-in `quaid_id` write-back during attach, offline `migrate-uuids`, and UUID-migration preflights for restore/remap.
+> These commands first shipped in `v0.9.6`. This branch carries the `v0.13.0` follow-on: Batches 1–3 vault-sync follow-ons stay in place, while Batch 4 adds CLI write routing (`quaid put` refuses while serve owns the collection), duplicate write-dedup entry detection, and complete rename-before-commit failure mode test coverage.
 
 ### Attach a vault
 

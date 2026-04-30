@@ -163,6 +163,7 @@ These are known design choices that are _not_ oversights:
 | `v0.10.0` | Batch 1 watcher reliability hardening: overflow recovery worker, native→poll fallback, crash/backoff supervisor, and CLI watcher-health reporting |
 | `v0.11.0` | Batch 2 embedding worker: background queue drain, retry/resume handling, `embedding_queue_depth` in `memory_collections`, and `failing_jobs` in `quaid collection info` |
 | `v0.12.0` | Batch 3 UUID identity hardening: opt-in `--write-quaid-id`, offline `quaid collection migrate-uuids [--dry-run]`, UUID-migration preflight before restore/remap, and `memory_put` preserving `quaid_id` |
+| `v0.13.0` | Batch 4 full rename-before-commit hardening: CLI write routing (`quaid put` refuses while serve owns the collection), `DuplicateWriteDedupError` on concurrent dedup collision, and complete test coverage for all 13-step rename-before-commit failure modes |
 
 ---
 
