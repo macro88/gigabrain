@@ -4,6 +4,8 @@
 
 ## Learnings
 
+- [2026-04-30T12:07:19.084+08:00] Batch 5 seam map: `start_serve_runtime` owns the right lifecycle hook for `serve_sessions.ipc_path`, but `commands\serve.rs` / `src\mcp\server.rs` still expose only stdio transport and a `QuaidServer` with no session context, so truthful IPC will need a shared server/session seam plus a `whoami` cross-check surface before `quaid put` can proxy safely.
+- [2026-04-30T12:07:19.084+08:00] Batch 5 seam map: `src\commands\put.rs` still has no live-owner routing at all, and `src\commands\collection.rs` still defers `--write-quaid-id` / lacks `migrate-uuids`; Batch 5 must treat bulk-refusal claims as coupled truth debt, not assume those CLI surfaces already exist.
 - [2026-04-29T20:33:01.970+08:00] Batch 3 recon: `src\commands\collection.rs` still exposes deferred `write_memory_id` on `CollectionAddArgs`; `CollectionAction` has no `migrate-uuids` variant yet, so Batch 3 must add new CLI args/dispatch and retire the defer test.
 - [2026-04-29T20:33:01.970+08:00] UUID/frontmatter naming is still `memory_id` across `src\core\page_uuid.rs`, `src\core\markdown.rs`, `src\core\reconciler.rs`, `src\core\vault_sync.rs`, `src\commands\put.rs`, and `tests\roundtrip_raw.rs`, while vault-sync OpenSpec Batch 3 language says `quaid_id`; this is the main contract seam to settle before write-back lands.
 - [2026-04-29T20:33:01.970+08:00] Rename-before-commit production logic currently lives in `src\commands\put.rs::persist_with_vault_write`, while `src\core\vault_sync.rs` only has test-only writer crash-core helpers; Batch 3 should reuse/extract that path rather than duplicate raw_import/file_state rotation logic.

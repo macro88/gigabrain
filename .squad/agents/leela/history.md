@@ -9,8 +9,12 @@
 - 2026-04-30T06:37:20.531+08:00 — The correct Batch 4 worktree setup is: `git worktree add ..\quaid-vault-sync-batch4-v0130 -b spec/vault-sync-engine-batch4-v0130 origin/main` from `D:\repos\quaid`. Starting SHA `5a8bdf0` (v0.12.0). Never branch Batch 4 from a stale release branch.
 - 2026-04-30T06:37:20.531+08:00 — `now.md` is stale (last updated 2026-04-25, references `spec/vault-sync-engine` as active branch). Scribe should refresh it after Batch 4 lands; it does not block execution.
 - [2026-04-30T06:37:20Z] Batch 4 branch routing decision merged to team ledger. Worktree setup required before Fry begins implementation.
-
-
+- 2026-04-30T12:07:19.084+08:00 — `D:\repos\quaid` is still parked on `release/v0.11.0`, sits 31 commits behind `origin/main` (`9bdb34b`, tag `v0.13.0`), and its local `tasks.md` still shows Batch 3 and Batch 4 closures as open. For Batch 5 gating, treat `origin/main` as the only task-truth source.
+- 2026-04-30T12:07:19.084+08:00 — Safe Batch 5 start lane is a fresh sibling worktree `D:\repos\quaid-vault-sync-batch5-v0140` on branch `spec/vault-sync-engine-batch5-v0140` from `origin/main`; remaining scope is `11.9`, `12.6c`–`12.6g`, and `17.5ii10`–`17.5ii12`, and release `v0.14.0` stays blocked until that batch is reviewed, merged to `main`, and coverage is revalidated above 90%.
+- 2026-04-30T19:26:58.386+08:00 — After PR `#126` merged, `origin/main` advanced to merge commit `05b8c331765f23dc65c67ca3167b7dc38256a328`; release prep must start from that exact SHA, not from the old Batch 5 implementation worktree.
+- 2026-04-30T19:26:58.386+08:00 — The safe `v0.14.0` release-prep lane is the clean sibling worktree `D:\repos\quaid-v0.14.0-release` on branch `release/v0.14.0`; the existing `D:\repos\quaid-vault-sync-batch5-v0140` branch is ahead locally and is not a trustworthy release base.
+ 
+ 
 - 2026-04-29T20:33:01.970+08:00 — Safe Batch 3 implementation lane is the clean sibling worktree `D:\repos\quaid-vault-sync-batch3-v0120` on branch `spec/vault-sync-engine-batch3-v0120`, created from `origin/main` at `fdc20a0`. Keep the dirty `D:\repos\quaid` checkout on `release/v0.11.0` untouched.
 - 2026-04-29T20:33:01.970+08:00 — Batch 3 source-of-truth artifacts are `openspec\changes\vault-sync-engine\implementation_plan.md` (Batch 3 section) and `openspec\changes\vault-sync-engine\tasks.md` items `5a.5`, `5a.5a`, `9.2a`, `5a.7`, `17.5ww`, `17.5ww2`, `17.5ww3`, `17.5ii9`.
 - 2026-04-29T20:33:01.970+08:00 — Release prep for `v0.12.0` must start from merged `main` (current main is `0.11.6`), follow `.github\workflows\release.yml` + `.github\RELEASE_CHECKLIST.md`, and manually verify the coverage report stays above 90% because CI publishes coverage evidence but does not enforce the threshold itself.
