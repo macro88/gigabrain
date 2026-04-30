@@ -3920,7 +3920,11 @@ fn accept_ipc_clients(
                         IPC_HANDLER_LIMIT,
                     );
                     // `stream` is dropped here, closing the connection immediately.
-                    continue;
+                    // Break (not continue) so a same-UID flood at saturation cannot
+                    // drain the kernel accept queue indefinitely and starve heartbeats
+                    // and watchers in the main serve loop.  At most one connection is
+                    // discarded per tick before we return control to the serve loop.
+                    break;
                 }
                 // Offload each client to its own thread so that blocking reads/writes
                 // (up to 5 s per IPC timeout) cannot stall the main serve loop and

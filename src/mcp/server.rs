@@ -4723,8 +4723,9 @@ mod tests {
     }
 
     /// Regression: memory_put must not call the printing `put_from_string` variant
-    /// (which would corrupt JSON-RPC framing by writing to stdout).  It must use the
-    /// quiet/status variant that returns the status string without printing.
+    /// (which would corrupt JSON-RPC framing by writing to stdout).  It must use
+    /// `put_from_string_quiet` (suppresses printing, returns `()`) or
+    /// `put_from_string_status` (returns a status string without printing).
     #[test]
     fn memory_put_does_not_call_printing_put_from_string_variant() {
         let source = std::fs::read_to_string(
