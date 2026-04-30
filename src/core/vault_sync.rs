@@ -9205,6 +9205,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_bootstraps_recovery_directories_for_existing_collections() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root_a = tempfile::TempDir::new().unwrap();
         let root_b = tempfile::TempDir::new().unwrap();
@@ -9224,6 +9230,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         init_process_registries().unwrap();
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
@@ -9322,6 +9334,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_only_processes_owned_collection_sentinels() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
@@ -9389,6 +9407,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn start_serve_runtime_retains_sentinel_when_startup_reconcile_fails() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
@@ -9437,6 +9461,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writer_side_foreign_rename_with_sqlite_busy_recovers_from_sentinel_alone() {
+        #[cfg(target_os = "linux")]
+        let _env_lock = env_mutation_lock().lock().unwrap();
+        #[cfg(target_os = "linux")]
+        let _runtime_root = secure_runtime_root();
+        #[cfg(target_os = "linux")]
+        let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", _runtime_root.path().to_str().unwrap());
         let (dir, db_path, conn) = open_test_db_file();
         init_process_registries().unwrap();
         let root = tempfile::TempDir::new().unwrap();
