@@ -111,12 +111,14 @@ fn put_from_cli_string(
         vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
     let collection = vault_sync::load_collection_by_id(db, resolved.collection_id)
         .map_err(anyhow::Error::new)?;
-    if let Err(err @ vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }) =
-        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
-    {
-        return Err(anyhow::anyhow!(
-            "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
-        ));
+    match vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path) {
+        Ok(()) => {}
+        Err(err @ vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }) => {
+            return Err(anyhow::anyhow!(
+                "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
+            ));
+        }
+        Err(other) => return Err(anyhow::Error::new(other)),
     }
     let _lease =
         vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
