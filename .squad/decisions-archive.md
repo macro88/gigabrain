@@ -5360,15 +5360,6 @@ Re-executed D.1 validation after HIGH defect repair. All doc surfaces now correc
 
 # Archived 2026-04-29 12:46:46Z
 
-# Decision: Quaid Hard Rename — Documentation & Skills Implementation
-
-**Date:** 2025-07-22  
-**Author:** Amy (Technical Writer)  
-**Status:** Implemented — Phases G and H complete
-
----
-
-
 # Decision: Align publish-npm.yml to "npm not yet live" contract
 
 **Date:** 2025-07-25  
@@ -5545,7 +5536,7 @@ This branch already carries the Batch 2 embedding-worker work, but a literal `v0
 
 
 
----\n
+---
 # Mom — Vault-Sync Edge Case Audit
 
 **Status:** Audit complete; no code modified  

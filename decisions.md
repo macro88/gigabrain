@@ -1,3 +1,6 @@
+> **Note:** The canonical decision ledger for this repository is `.squad/decisions.md`.
+> Treat that file as the source of truth. This top-level `decisions.md` is a summary/log for convenience only.
+
 # Decisions Log
 
 ## 2026-04-30

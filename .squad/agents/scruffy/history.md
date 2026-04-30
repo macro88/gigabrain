@@ -1,3 +1,5 @@
+# scruffy history
+
 ## 20260429T173541Z — Team sync
 
 **Scribe update:** Decisions merged (inbox → decisions.md), orchestration logs written, Batch 3 merge lane BLOCKED by codecov/patch.
