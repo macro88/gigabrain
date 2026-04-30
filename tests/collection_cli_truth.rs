@@ -512,8 +512,7 @@ fn collection_sync_finalize_pending_attaches_pending_root_and_releases_cli_lease
     assert_eq!(parsed["collection"].as_str(), Some("work"));
     assert_eq!(parsed["finalize_pending"].as_str(), Some("Attached"));
 
-    let conn = open_test_db(&db_path);
-    let row: (
+    type FinalizePendingAttachedRow = (
         String,
         String,
         i64,
@@ -522,7 +521,10 @@ fn collection_sync_finalize_pending_attaches_pending_root_and_releases_cli_lease
         Option<String>,
         Option<String>,
         String,
-    ) = conn
+    );
+
+    let conn = open_test_db(&db_path);
+    let row: FinalizePendingAttachedRow = conn
         .query_row(
             "SELECT state,
                     root_path,
@@ -656,8 +658,7 @@ fn offline_restore_completes_inline_and_releases_cli_lease() {
     assert_eq!(restore_json["status"].as_str(), Some("ok"));
     assert!(restore_json["command_identity"].as_str().is_some());
 
-    let conn = open_test_db(&db_path);
-    let row: (
+    type OfflineRestoreRow = (
         String,
         String,
         i64,
@@ -665,7 +666,10 @@ fn offline_restore_completes_inline_and_releases_cli_lease() {
         Option<String>,
         Option<String>,
         Option<String>,
-    ) = conn
+    );
+
+    let conn = open_test_db(&db_path);
+    let row: OfflineRestoreRow = conn
         .query_row(
             "SELECT state, root_path, needs_full_sync, pending_root_path, integrity_failed_at,
                     pending_manifest_incomplete_at, restore_lease_session_id
