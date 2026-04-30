@@ -10,6 +10,8 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::time::Duration;
 
 use rusqlite::Connection;
 #[cfg(unix)]

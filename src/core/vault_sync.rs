@@ -5485,7 +5485,10 @@ mod tests {
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_dir, db_path, _conn) = open_test_db_file();
 
-        let error = start_serve_runtime(db_path).unwrap_err();
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure socket directory to refuse startup"),
+            Err(error) => error,
+        };
 
         assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
         assert!(error.to_string().contains("IpcDirectoryInsecureError"));
@@ -5500,7 +5503,10 @@ mod tests {
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_dir, db_path, _conn) = open_test_db_file();
 
-        let error = start_serve_runtime(db_path).unwrap_err();
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure XDG runtime root to refuse startup"),
+            Err(error) => error,
+        };
 
         assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
         assert!(error.to_string().contains("IpcDirectoryInsecureError"));
@@ -5519,7 +5525,10 @@ mod tests {
         let _home = EnvVarGuard::set("HOME", home.path().to_str().unwrap());
         let (_dir, db_path, _conn) = open_test_db_file();
 
-        let error = start_serve_runtime(db_path).unwrap_err();
+        let error = match start_serve_runtime(db_path) {
+            Ok(_) => panic!("expected insecure fallback runtime root to refuse startup"),
+            Err(error) => error,
+        };
 
         assert!(matches!(error, VaultSyncError::IpcDirectoryInsecure { .. }));
         assert!(error.to_string().contains("IpcDirectoryInsecureError"));
