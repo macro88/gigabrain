@@ -156,22 +156,14 @@ pub fn sweep_expired_inactive_rows(conn: &Connection) -> rusqlite::Result<usize>
 
     let ttl_days = integer_env("QUAID_RAW_IMPORTS_TTL_DAYS", DEFAULT_TTL_DAYS).max(0);
     let ttl_cutoff = format!("-{ttl_days} days");
-    let mut stmt = conn.prepare(
-        "SELECT id
-         FROM raw_imports
+    let deleted = conn.execute(
+        "DELETE FROM raw_imports
          WHERE is_active = 0
-           AND julianday(created_at) < julianday('now', ?1)
-         ORDER BY created_at ASC, id ASC",
+           AND julianday(created_at) < julianday('now', ?1)",
+        [ttl_cutoff],
     )?;
-    let ids = stmt
-        .query_map([ttl_cutoff], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    for id in &ids {
-        conn.execute("DELETE FROM raw_imports WHERE id = ?1", [id])?;
-    }
-
-    Ok(ids.len())
+    Ok(deleted)
 }
 
 fn keep_all_enabled() -> bool {

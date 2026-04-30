@@ -27,13 +27,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 #[cfg(unix)]
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use crate::core::fs_safety;
 #[cfg(unix)]
 use rustix::fd::OwnedFd;
+#[cfg(unix)]
+use rustix::fs::{openat, Mode, OFlags};
 
 // ── Reconciliation Result ─────────────────────────────────────
 
@@ -440,16 +442,15 @@ pub fn scheduled_full_hash_audit_authorized(
         let stored_entries = load_stored_file_state_entries(conn, collection.id)?;
         let mut plan = FullHashPlan::default();
         let mut audited_page_ids = HashSet::new();
+        let root_fd = fs_safety::open_root_fd(root_path)?;
 
         for relative_path in due_relative_paths {
             let Some(stored) = stored_entries.get(relative_path) else {
                 continue;
             };
             audited_page_ids.insert(stored.page_id);
-            let absolute_path = root_path.join(relative_path);
-            match file_state::stat_file(&absolute_path) {
-                Ok(stat) => {
-                    let sha256 = file_state::hash_file(&absolute_path)?;
+            match stat_and_hash_audit_path(&root_fd, relative_path)? {
+                Some((stat, sha256)) => {
                     if stored.sha256 == sha256 {
                         plan.unchanged.push(FullHashUnchangedEntry {
                             relative_path: relative_path.clone(),
@@ -461,10 +462,9 @@ pub fn scheduled_full_hash_audit_authorized(
                         plan.diff.modified.insert(relative_path.clone(), stat);
                     }
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                None => {
                     plan.diff.missing.insert(relative_path.clone());
                 }
-                Err(err) => return Err(err.into()),
             }
         }
 
@@ -505,6 +505,83 @@ pub fn scheduled_full_hash_audit_authorized(
             authorization.as_str()
         )))
     }
+}
+
+#[cfg(unix)]
+fn stat_and_hash_audit_path(
+    root_fd: &OwnedFd,
+    relative_path: &Path,
+) -> Result<Option<(FileStat, String)>, ReconcileError> {
+    let parent_fd = match fs_safety::walk_to_parent(root_fd, relative_path) {
+        Ok(parent_fd) => parent_fd,
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let entry_name = relative_path.file_name().ok_or_else(|| {
+        ReconcileError::Other(format!(
+            "scheduled_full_hash_audit: missing final path component for {}",
+            relative_path.display()
+        ))
+    })?;
+    let stat = match fs_safety::stat_at_nofollow(&parent_fd, Path::new(entry_name)) {
+        Ok(stat) => stat,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    if stat.is_symlink() {
+        eprintln!(
+            "WARN: scheduled_full_hash_audit skipping symlinked tracked file {}",
+            relative_path.display()
+        );
+        return Ok(None);
+    }
+    if !stat.is_regular_file() {
+        return Ok(None);
+    }
+
+    let sha256 = hash_file_nofollow(&parent_fd, Path::new(entry_name))?;
+    Ok(Some((
+        FileStat {
+            mtime_ns: stat.mtime_ns,
+            ctime_ns: Some(stat.ctime_ns),
+            size_bytes: stat.size_bytes,
+            inode: Some(stat.inode),
+        },
+        sha256,
+    )))
+}
+
+#[cfg(unix)]
+fn hash_file_nofollow(root_fd: &OwnedFd, name: &Path) -> Result<String, ReconcileError> {
+    let file_fd = openat(
+        root_fd,
+        name,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    let mut file = fs::File::from(file_fd);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn authorize_full_hash_reconcile(
@@ -4313,6 +4390,34 @@ mod tests {
         assert!(
             phase1_idx < phase2_idx && phase2_idx < phase3_idx && phase3_idx < dirty_idx,
             "restore/remap safety must capture drift, prove stability, fence, then do the fresh dirty recheck"
+        );
+    }
+
+    #[test]
+    fn scheduled_full_hash_audit_source_uses_nofollow_fd_relative_reads() {
+        let source = production_reconciler_source();
+        let start = source
+            .find("pub fn scheduled_full_hash_audit_authorized(")
+            .expect("scheduled audit entrypoint must remain present");
+        let end = source[start..]
+            .find("fn authorize_full_hash_reconcile(")
+            .map(|offset| start + offset)
+            .expect("audit helper block must remain before authorization logic");
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("let root_fd = fs_safety::open_root_fd(root_path)?;")
+                && snippet.contains("stat_and_hash_audit_path(&root_fd, relative_path)?")
+                && snippet.contains("fs_safety::walk_to_parent(root_fd, relative_path)")
+                && snippet
+                    .contains("fs_safety::stat_at_nofollow(&parent_fd, Path::new(entry_name))")
+                && snippet.contains("OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW"),
+            "scheduled audit must stay on fd-relative NOFOLLOW reads instead of path-based hashing"
+        );
+        assert!(
+            !snippet.contains("file_state::stat_file(&absolute_path)")
+                && !snippet.contains("file_state::hash_file(&absolute_path)"),
+            "scheduled audit must not fall back to path-based stat/hash reads that follow symlinks"
         );
     }
 
