@@ -2132,9 +2132,11 @@ pub(crate) fn live_serve_endpoint_for_root_path(
             pid,
             ipc_path,
         })),
-        Some((session_id, _pid, None)) => Err(VaultSyncError::InvariantViolation {
-            message: format!("live serve session {session_id} missing ipc_path"),
-        }),
+        // ipc_path may be NULL during the shutdown race window (socket cleared before
+        // the session row is unregistered).  Treat this as "no live owner" so that the
+        // caller falls back to the direct-write path, where owner-lease checks still
+        // protect the collection.
+        Some((_session_id, _pid, None)) => Ok(None),
     }
 }
 
@@ -3908,13 +3910,26 @@ fn accept_ipc_clients(
     loop {
         match listener.accept() {
             Ok((stream, _addr)) => {
-                if let Err(error) = handle_ipc_client(stream, socket_path, db_path, session_id) {
-                    eprintln!(
-                        "WARN: ipc_client_failed path={} error={}",
-                        socket_path.display(),
-                        error
-                    );
-                }
+                // Offload each client to its own thread so that blocking reads/writes
+                // (up to 5 s per IPC timeout) cannot stall the main serve loop and
+                // cause a false-dead live-owner verdict.
+                let socket_path_owned = socket_path.to_path_buf();
+                let db_path_owned = db_path.to_owned();
+                let session_id_owned = session_id.to_owned();
+                thread::spawn(move || {
+                    if let Err(error) = handle_ipc_client(
+                        stream,
+                        &socket_path_owned,
+                        &db_path_owned,
+                        &session_id_owned,
+                    ) {
+                        eprintln!(
+                            "WARN: ipc_client_failed path={} error={}",
+                            socket_path_owned.display(),
+                            error
+                        );
+                    }
+                });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
             Err(error) => {
@@ -9791,6 +9806,83 @@ mod tests {
         // A live CLI-type lease must not trigger a ServeOwnsCollectionError.
         ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
             .unwrap();
+    }
+
+    /// Regression: during the shutdown race window the serve session's `ipc_path`
+    /// column may be cleared (by `cleanup_published_ipc_socket`) before the session
+    /// row is unregistered.  `live_serve_endpoint_for_root_path` must treat a NULL
+    /// `ipc_path` as "no live endpoint" (`Ok(None)`) rather than panicking with an
+    /// `InvariantViolation`, so that `quaid put` falls back to the direct-write path
+    /// and is still guarded by the owner-lease checks there.
+    #[cfg(unix)]
+    #[test]
+    fn live_serve_endpoint_for_root_path_returns_ok_none_when_ipc_path_is_null() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "shutdown-race", temp.path());
+        // Insert a serve session that is still alive (fresh heartbeat) but whose
+        // ipc_path has already been cleared by cleanup_published_ipc_socket.
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, ipc_path)
+             VALUES ('race-session', 1234, 'test-host', datetime('now'), NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'race-session')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let result =
+            live_serve_endpoint_for_root_path(&conn, &temp.path().display().to_string());
+
+        assert!(
+            matches!(result, Ok(None)),
+            "expected Ok(None) for NULL ipc_path during shutdown race, got: {result:?}"
+        );
+    }
+
+    /// Regression: `accept_ipc_clients` must offload each accepted connection to a
+    /// dedicated thread via `thread::spawn` so that blocking IPC I/O (up to 5 s per
+    /// read/write timeout) cannot stall the main serve loop and trigger a false-dead
+    /// live-owner verdict.  We verify the structural invariant via source inspection.
+    #[test]
+    fn accept_ipc_clients_offloads_each_client_to_its_own_thread() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("core")
+                .join("vault_sync.rs"),
+        )
+        .unwrap();
+        let fn_start = source
+            .find("fn accept_ipc_clients(")
+            .expect("accept_ipc_clients fn present");
+        // Boundary: the next fn after accept_ipc_clients is handle_ipc_client.
+        let fn_end = source[fn_start..]
+            .find("fn handle_ipc_client(")
+            .map(|offset| fn_start + offset)
+            .expect("handle_ipc_client fn follows accept_ipc_clients");
+        let fn_body = &source[fn_start..fn_end];
+
+        // The function must not call handle_ipc_client directly on the main loop thread.
+        assert!(
+            !fn_body.contains("handle_ipc_client(stream,"),
+            "accept_ipc_clients must not call handle_ipc_client inline on the main thread"
+        );
+        // The function must use thread::spawn to offload.
+        assert!(
+            fn_body.contains("thread::spawn("),
+            "accept_ipc_clients must offload each client via thread::spawn"
+        );
+        // The spawn closure must contain the handle_ipc_client call.
+        let spawn_idx = fn_body.find("thread::spawn(").unwrap();
+        let spawn_region = &fn_body[spawn_idx..];
+        assert!(
+            spawn_region.contains("handle_ipc_client("),
+            "handle_ipc_client must be called inside the thread::spawn closure"
+        );
     }
 
     #[cfg(unix)]
