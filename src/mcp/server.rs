@@ -1672,6 +1672,45 @@ mod tests {
         assert_eq!(error.data, Some(json!({ "current_version": 1 })));
     }
 
+    #[test]
+    fn memory_put_update_with_expected_version_returns_updated_status_and_persists_body() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let created = server
+            .memory_put(MemoryPutInput {
+                slug: "notes/occ-happy".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nInitial body\n".to_string(),
+                expected_version: None,
+            })
+            .unwrap();
+        assert!(extract_text(&created).contains("Created"));
+
+        let updated = server
+            .memory_put(MemoryPutInput {
+                slug: "notes/occ-happy".to_string(),
+                content: "---\ntitle: Test\ntype: note\n---\nUpdated body\n".to_string(),
+                expected_version: Some(1),
+            })
+            .unwrap();
+
+        let text = extract_text(&updated);
+        assert!(text.contains("Updated"));
+        assert!(text.contains("notes/occ-happy"));
+        assert!(text.contains("(version 2)"));
+
+        let db = server.db.lock().unwrap();
+        let row: (i64, String) = db
+            .query_row(
+                "SELECT version, compiled_truth FROM pages WHERE slug = ?1",
+                ["notes/occ-happy"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 2);
+        assert_eq!(row.1, "Updated body");
+    }
+
     #[cfg(unix)]
     #[test]
     fn memory_put_existing_page_without_expected_version_conflicts_before_vault_mutation() {

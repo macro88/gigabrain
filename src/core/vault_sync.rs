@@ -22,6 +22,8 @@ use notify::{
     event::ModifyKind, Config as NotifyConfig, Event as NotifyEvent, EventKind as NotifyEventKind,
     PollWatcher, RecommendedWatcher, RecursiveMode, Watcher,
 };
+#[cfg(unix)]
+use rustix::fd::AsFd;
 #[cfg(all(test, unix))]
 use rustix::fs::fsync;
 #[cfg(all(test, unix))]
@@ -606,6 +608,32 @@ fn inspect_fs_precondition(
     let relative_path_str = relative_path.to_string_lossy().into_owned();
     let stored_row = file_state::get_file_state(conn, collection_id, &relative_path_str)?;
     let root_fd = fs_safety::open_root_fd(root_path)?;
+    let parent_fd = match fs_safety::walk_to_parent(&root_fd, relative_path) {
+        Ok(parent_fd) => Some(parent_fd),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    inspect_fs_precondition_with_parent_fd(
+        conn,
+        collection_id,
+        root_path,
+        relative_path,
+        parent_fd.as_ref(),
+        stored_row,
+    )
+}
+
+#[cfg(unix)]
+fn inspect_fs_precondition_with_parent_fd<Fd: AsFd>(
+    _conn: &Connection,
+    collection_id: i64,
+    root_path: &Path,
+    relative_path: &Path,
+    parent_fd: Option<&Fd>,
+    stored_row: Option<file_state::FileStateRow>,
+) -> Result<FsPreconditionInspection, VaultSyncError> {
+    let relative_path_str = relative_path.to_string_lossy().into_owned();
     let target_name =
         relative_path
             .file_name()
@@ -615,13 +643,8 @@ fn inspect_fs_precondition(
                     relative_path.display()
                 ),
             })?;
-    let parent_fd = match fs_safety::walk_to_parent(&root_fd, relative_path) {
-        Ok(parent_fd) => Some(parent_fd),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
 
-    let current_stat = match parent_fd.as_ref() {
+    let current_stat = match parent_fd {
         Some(parent_fd) => match fs_safety::stat_at_nofollow(parent_fd, Path::new(target_name)) {
             Ok(stat) => {
                 if stat.is_symlink() {
@@ -690,6 +713,27 @@ pub(crate) fn check_fs_precondition_before_sentinel(
     relative_path: &Path,
 ) -> Result<FsPreconditionOutcome, VaultSyncError> {
     Ok(inspect_fs_precondition(conn, collection_id, root_path, relative_path)?.outcome)
+}
+
+#[cfg(unix)]
+pub(crate) fn check_fs_precondition_with_parent_fd<Fd: AsFd>(
+    conn: &Connection,
+    collection_id: i64,
+    root_path: &Path,
+    relative_path: &Path,
+    parent_fd: &Fd,
+) -> Result<FsPreconditionOutcome, VaultSyncError> {
+    let stored_row =
+        file_state::get_file_state(conn, collection_id, &relative_path.to_string_lossy())?;
+    Ok(inspect_fs_precondition_with_parent_fd(
+        conn,
+        collection_id,
+        root_path,
+        relative_path,
+        Some(parent_fd),
+        stored_row,
+    )?
+    .outcome)
 }
 
 #[cfg(all(test, unix))]
@@ -1821,6 +1865,15 @@ pub fn register_session(conn: &Connection) -> Result<String, VaultSyncError> {
     Ok(session_id)
 }
 
+pub fn register_cli_session(conn: &Connection) -> Result<String, VaultSyncError> {
+    let session_id = Uuid::now_v7().to_string();
+    conn.execute(
+        "INSERT INTO serve_sessions (session_id, pid, host, session_type) VALUES (?1, ?2, ?3, 'cli')",
+        params![session_id, std::process::id() as i64, current_host()],
+    )?;
+    Ok(session_id)
+}
+
 pub fn unregister_session(conn: &Connection, session_id: &str) -> Result<(), VaultSyncError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute(
@@ -1890,7 +1943,8 @@ pub fn live_collection_owner(
          FROM collection_owners o
          JOIN serve_sessions s ON s.session_id = o.session_id
          WHERE o.collection_id = ?1
-           AND s.heartbeat_at >= datetime('now', ?2)",
+           AND s.heartbeat_at >= datetime('now', ?2)
+           AND s.session_type = 'serve'",
         params![collection_id, format!("-{SESSION_LIVENESS_SECS} seconds")],
         |row| {
             Ok(LiveCollectionOwner {
@@ -1929,6 +1983,7 @@ fn live_collection_owner_for_root_path(
          JOIN serve_sessions s ON s.session_id = o.session_id
          WHERE c.root_path = ?1
            AND s.heartbeat_at >= datetime('now', ?2)
+           AND s.session_type = 'serve'
          ORDER BY c.id
          LIMIT 1",
         params![root_path, format!("-{SESSION_LIVENESS_SECS} seconds")],
@@ -4071,7 +4126,7 @@ fn start_short_lived_owner_leases_with_interval(
     heartbeat_interval: Duration,
 ) -> Result<ShortLivedLease, VaultSyncError> {
     let db_path = database_path(conn)?;
-    let session_id = register_session(conn)?;
+    let session_id = register_cli_session(conn)?;
     for collection_id in collection_ids {
         if let Err(err) = acquire_owner_lease(conn, *collection_id, &session_id) {
             let _ = unregister_session(conn, &session_id);
@@ -7066,6 +7121,40 @@ mod tests {
     }
 
     #[test]
+    fn acquire_owner_lease_allows_same_session_reentrant_claim_and_keeps_single_row() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('cli-owner', 2, 'host')",
+            [],
+        )
+        .unwrap();
+
+        acquire_owner_lease(&conn, collection_id, "cli-owner").unwrap();
+        acquire_owner_lease(&conn, collection_id, "cli-owner").unwrap();
+
+        let row: (Option<String>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT active_lease_session_id,
+                        (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1),
+                        (SELECT session_id FROM collection_owners WHERE collection_id = ?1)
+                 FROM collections
+                 WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0.as_deref(), Some("cli-owner"));
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2.as_deref(), Some("cli-owner"));
+        assert_eq!(
+            owner_session_id(&conn, collection_id).unwrap().as_deref(),
+            Some("cli-owner")
+        );
+    }
+
+    #[test]
     fn acquire_owner_lease_reclaims_stale_owner_residue_and_updates_mirror_column() {
         let conn = open_test_db();
         let temp = tempfile::TempDir::new().unwrap();
@@ -8610,21 +8699,13 @@ mod tests {
             ]
         );
 
-        conn.execute(
-            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-live', 2, 'host')",
-            [],
-        )
-        .unwrap();
-        let error = acquire_owner_lease(&conn, alias_id, "serve-live").unwrap_err();
-        assert!(error.to_string().contains("ServeOwnsCollectionError"));
-
         drop(lease);
 
         let row: (i64, i64, i64) = conn
             .query_row(
                 "SELECT
                      (SELECT COUNT(*) FROM collection_owners),
-                     (SELECT COUNT(*) FROM serve_sessions WHERE session_id != 'serve-live'),
+                     (SELECT COUNT(*) FROM serve_sessions),
                      (SELECT COUNT(*) FROM collections
                       WHERE root_path = ?1 AND active_lease_session_id IS NULL)",
                 [root_path.as_str()],
@@ -8634,6 +8715,39 @@ mod tests {
         assert_eq!(row.0, 0);
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 2);
+    }
+
+    #[test]
+    fn serve_session_can_steal_cli_short_lived_lease() {
+        let (_dir, _db_path, conn) = open_test_db_file();
+        let temp = tempfile::TempDir::new().unwrap();
+        let root_path = temp.path().display().to_string();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+
+        // CLI offline lease takes ownership.
+        let _lease = start_short_lived_owner_lease_for_root_path(&conn, &root_path).unwrap();
+        let cli_session_id = owner_session_id(&conn, collection_id).unwrap().unwrap();
+        let cli_type: String = conn
+            .query_row(
+                "SELECT session_type FROM serve_sessions WHERE session_id = ?1",
+                [cli_session_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cli_type, "cli");
+
+        // A serve-type session can steal ownership; CLI sessions do not block serves.
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host) VALUES ('serve-take', 2, 'host')",
+            [],
+        )
+        .unwrap();
+        acquire_owner_lease(&conn, collection_id, "serve-take").unwrap();
+
+        assert_eq!(
+            owner_session_id(&conn, collection_id).unwrap().as_deref(),
+            Some("serve-take")
+        );
     }
 
     #[test]
@@ -8662,6 +8776,50 @@ mod tests {
         assert!(text.contains("collection=work"));
         assert!(text.contains("owner_pid=77"));
         assert!(text.contains("owner_host=batch3-host"));
+    }
+
+    #[test]
+    fn ensure_no_live_serve_owner_for_root_path_allows_stale_same_root_owner_residue() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", temp.path());
+        let alias_id = insert_collection(&conn, "alias", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-stale', 77, 'batch3-host', datetime('now', '-120 seconds'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-stale')",
+            [alias_id],
+        )
+        .unwrap();
+
+        ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
+            .unwrap();
+    }
+
+    #[test]
+    fn ensure_no_live_serve_owner_for_root_path_ignores_cli_session() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, session_type)
+             VALUES ('cli-lease', 99, 'cli-host', datetime('now'), 'cli')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'cli-lease')",
+            [collection_id],
+        )
+        .unwrap();
+
+        // A live CLI-type lease must not trigger a ServeOwnsCollectionError.
+        ensure_no_live_serve_owner_for_root_path(&conn, &temp.path().display().to_string())
+            .unwrap();
     }
 
     #[cfg(unix)]

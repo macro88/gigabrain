@@ -91,8 +91,57 @@ pub fn run(db: &Connection, slug: &str, expected_version: Option<i64>) -> anyhow
     vault_sync::ensure_unix_platform("quaid put").map_err(anyhow::Error::new)?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
-    put_from_string(db, slug, &input, expected_version)?;
+    put_from_cli_string(db, slug, &input, expected_version)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn put_from_cli_string(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    let op_kind = if expected_version.is_some() {
+        crate::core::collections::OpKind::WriteUpdate
+    } else {
+        crate::core::collections::OpKind::WriteCreate
+    };
+    let resolved =
+        vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
+    let collection = vault_sync::load_collection_by_id(db, resolved.collection_id)
+        .map_err(anyhow::Error::new)?;
+    if let Err(err @ vault_sync::VaultSyncError::ServeOwnsCollectionError { .. }) =
+        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
+    {
+        return Err(anyhow::anyhow!(
+            "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
+        ));
+    }
+    let _lease =
+        vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
+            .map_err(|err| match err {
+                vault_sync::VaultSyncError::ServeOwnsCollectionError { .. } => anyhow::anyhow!(
+                    "{err}. use MCP while serve is running, or stop serve and run `quaid put` directly."
+                ),
+                other => anyhow::Error::new(other),
+            })?;
+    put_from_string(
+        db,
+        &format!("{}::{}", resolved.collection_name, resolved.slug),
+        content,
+        expected_version,
+    )
+}
+
+#[cfg(not(unix))]
+fn put_from_cli_string(
+    db: &Connection,
+    slug_input: &str,
+    content: &str,
+    expected_version: Option<i64>,
+) -> anyhow::Result<()> {
+    put_from_string(db, slug_input, content, expected_version)
 }
 
 /// Apply page content supplied by the caller.
@@ -399,37 +448,27 @@ fn persist_with_vault_write(
         prepared.current_version,
         expected_version,
     )?;
-    let _fs_precondition = vault_sync::check_fs_precondition_before_sentinel(
+    let hooks = test_hooks_snapshot(db);
+    let root_fd = match fs_safety::open_root_fd(Path::new(&collection.root_path)) {
+        Ok(root_fd) => root_fd,
+        Err(error) => {
+            return Err(error.into());
+        }
+    };
+    let parent_fd = match fs_safety::walk_to_parent_create_dirs(&root_fd, &relative_path_buf) {
+        Ok(parent_fd) => parent_fd,
+        Err(error) => {
+            return Err(error.into());
+        }
+    };
+    vault_sync::check_fs_precondition_with_parent_fd(
         db,
         prepared.collection_id,
         Path::new(&collection.root_path),
         &relative_path_buf,
+        &parent_fd,
     )?;
-    let hooks = test_hooks_snapshot(db);
-
     create_recovery_sentinel(prepared, &recovery_dir, &sentinel_name, hooks.as_ref())?;
-
-    if let Some(parent) = target_path.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);
-            return Err(error.into());
-        }
-    }
-
-    let root_fd = match fs_safety::open_root_fd(Path::new(&collection.root_path)) {
-        Ok(root_fd) => root_fd,
-        Err(error) => {
-            let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);
-            return Err(error.into());
-        }
-    };
-    let parent_fd = match fs_safety::walk_to_parent(&root_fd, &relative_path_buf) {
-        Ok(parent_fd) => parent_fd,
-        Err(error) => {
-            let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);
-            return Err(error.into());
-        }
-    };
     let target_name_os = match relative_path_buf.file_name() {
         Some(name) => name,
         None => {
@@ -878,8 +917,12 @@ mod tests {
     use crate::core::db;
     use crate::core::markdown;
     use std::collections::HashMap;
+    use std::fs as stdfs;
+    use std::path::Path;
     #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::thread;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
@@ -1793,6 +1836,197 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         false
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_put_does_not_refuse_cli_session_as_serve_owner() {
+        let (_guard, _dir, _db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        // A live CLI-type session in collection_owners (e.g. a concurrent offline put) must NOT
+        // cause put_from_cli_string to return ServeOwnsCollectionError.
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at, session_type)
+             VALUES ('cli-offline', 9999, 'cli-host', datetime('now'), 'cli')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (1, 'cli-offline')",
+            [],
+        )
+        .unwrap();
+
+        // The write should proceed despite the live CLI lease.
+        put_from_cli_string(
+            &conn,
+            "notes/cli-owned",
+            "---\ntitle: CLI owned\ntype: note\n---\nOK\n",
+            None,
+        )
+        .unwrap();
+
+        assert!(vault_root.join("notes").join("cli-owned.md").exists());
+        assert_eq!(page_count(&conn, "notes/cli-owned"), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_put_refuses_live_owner_and_instructs_operator() {
+        let (_guard, _dir, _db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 4321, 'serve-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (1, 'serve-live')",
+            [],
+        )
+        .unwrap();
+
+        let error = put_from_cli_string(
+            &conn,
+            "notes/live-owner",
+            "---\ntitle: Live owner\ntype: note\n---\nBlocked\n",
+            None,
+        )
+        .unwrap_err();
+
+        let text = error.to_string();
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=4321"));
+        assert!(text.contains("owner_host=serve-host"));
+        assert!(text.contains("use MCP while serve is running"));
+        assert!(!vault_root.join("notes").join("live-owner.md").exists());
+        assert_eq!(page_count(&conn, "notes/live-owner"), 0);
+        let owner_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM collection_owners", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(owner_count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_put_holds_short_lived_owner_lease_for_direct_write() {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        reset_write_lock_blocker();
+        guard.set(PutTestHooks {
+            block_inside_slug_lock: true,
+            ..PutTestHooks::default()
+        });
+
+        let worker_db_path = db_path.clone();
+        let handle = thread::spawn(move || {
+            let worker_conn = Connection::open(worker_db_path).unwrap();
+            worker_conn.busy_timeout(Duration::from_millis(0)).unwrap();
+            put_from_cli_string(
+                &worker_conn,
+                "notes/offline-lease",
+                "---\ntitle: Lease\ntype: note\n---\nHeld\n",
+                None,
+            )
+        });
+
+        wait_for_write_lock_entry();
+
+        let lease_snapshot: (i64, i64, Option<String>) = conn
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM collection_owners),
+                     (SELECT COUNT(*) FROM serve_sessions),
+                     active_lease_session_id
+                 FROM collections
+                 WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(lease_snapshot.0, 1);
+        assert_eq!(lease_snapshot.1, 1);
+        assert!(lease_snapshot.2.is_some());
+
+        release_write_lock_blocker();
+        handle.join().unwrap().unwrap();
+
+        let released_snapshot: (i64, i64, Option<String>) = conn
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM collection_owners),
+                     (SELECT COUNT(*) FROM serve_sessions),
+                     active_lease_session_id
+                 FROM collections
+                 WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(released_snapshot.0, 0);
+        assert_eq!(released_snapshot.1, 0);
+        assert!(released_snapshot.2.is_none());
+        assert_eq!(
+            stdfs::read_to_string(vault_root.join("notes").join("offline-lease.md")).unwrap(),
+            "---\ntitle: Lease\ntype: note\n---\nHeld\n"
+        );
+    }
+
+    #[test]
+    fn rename_before_commit_source_keeps_fd_relative_ordering() {
+        let source = stdfs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("commands")
+                .join("put.rs"),
+        )
+        .unwrap();
+        let writer_start = source
+            .match_indices("fn persist_with_vault_write(")
+            .nth(1)
+            .map(|(index, _)| index)
+            .expect("unix writer function in production source");
+        let production = &source[writer_start
+            ..source
+                .find("fn slug_to_relative_path(")
+                .expect("helper boundary after writer function")];
+        let required_sequence = [
+            "vault_sync::check_update_expected_version(",
+            "fs_safety::open_root_fd(Path::new(&collection.root_path))",
+            "fs_safety::walk_to_parent_create_dirs(&root_fd, &relative_path_buf)",
+            "vault_sync::check_fs_precondition_with_parent_fd(",
+            "create_recovery_sentinel(",
+            "create_tempfile(&parent_fd, &temp_name, raw_bytes)",
+            "fs_safety::stat_at_nofollow(&parent_fd, target_name)",
+            "vault_sync::insert_write_dedup(&dedup_key)",
+            "fs_safety::renameat_parent_fd(&parent_fd, &temp_name, target_name)",
+            "sync_fd(&parent_fd)",
+            "file_state::stat_file_fd(&parent_fd, target_name)",
+            "let outcome = match persist_page_record(",
+            "let _ = vault_sync::remove_write_dedup(&dedup_key);",
+        ];
+        let mut last_index = 0;
+        for snippet in required_sequence {
+            let index = production
+                .find(snippet)
+                .unwrap_or_else(|| panic!("missing production seam snippet: {snippet}"));
+            assert!(
+                index >= last_index,
+                "rename-before-commit seam reordered: `{snippet}` moved before an earlier step"
+            );
+            last_index = index;
+        }
+        let sentinel_cleanup = production
+            .rfind("let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);")
+            .expect("final sentinel cleanup after commit");
+        assert!(
+            sentinel_cleanup >= last_index,
+            "rename-before-commit seam reordered: final sentinel cleanup moved before the SQLite commit"
+        );
+        assert!(
+            !production.contains("fs::create_dir_all(parent)"),
+            "rename-before-commit writer must not widen parent creation back to path-based create_dir_all"
+        );
     }
 
     // ── unconditional upsert ──────────────────────────────────

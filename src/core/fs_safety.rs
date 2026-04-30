@@ -72,7 +72,12 @@ pub fn open_root_fd(_path: &Path) -> io::Result<std::fs::File> {
 /// # Windows behavior
 /// Returns `UnsupportedPlatformError`.
 #[cfg(unix)]
-pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Result<OwnedFd> {
+fn walk_to_parent_impl<Fd: AsFd>(
+    parent_fd: Fd,
+    relative_path: &Path,
+    create_dirs: bool,
+) -> io::Result<OwnedFd> {
+    use rustix::fs::mkdirat;
     use rustix::fs::openat;
 
     // Validate path
@@ -123,12 +128,41 @@ pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Resu
     let flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::RDONLY;
 
     for component in &components[..components.len().saturating_sub(1)] {
-        let next_fd = openat(&current_fd, Path::new(*component), flags, Mode::empty())
-            .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
+        let component_path = Path::new(*component);
+        let next_fd = match openat(&current_fd, component_path, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(error) if create_dirs && error.kind() == io::ErrorKind::NotFound => {
+                match mkdirat(&current_fd, component_path, Mode::from_raw_mode(0o755)) {
+                    Ok(()) => {}
+                    Err(mkdir_err) => {
+                        let mkdir_io = io::Error::from_raw_os_error(mkdir_err.raw_os_error());
+                        if mkdir_io.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(mkdir_io);
+                        }
+                    }
+                }
+                openat(&current_fd, component_path, flags, Mode::empty())
+                    .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?
+            }
+            Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
+        };
         current_fd = next_fd;
     }
 
     Ok(current_fd)
+}
+
+#[cfg(unix)]
+pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Result<OwnedFd> {
+    walk_to_parent_impl(parent_fd, relative_path, false)
+}
+
+#[cfg(unix)]
+pub fn walk_to_parent_create_dirs<Fd: AsFd>(
+    parent_fd: Fd,
+    relative_path: &Path,
+) -> io::Result<OwnedFd> {
+    walk_to_parent_impl(parent_fd, relative_path, true)
 }
 
 #[cfg(not(unix))]
@@ -136,6 +170,17 @@ pub fn walk_to_parent<Fd>(_parent_fd: Fd, _relative_path: &Path) -> io::Result<s
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "walk_to_parent: fd-relative operations not supported on Windows",
+    ))
+}
+
+#[cfg(not(unix))]
+pub fn walk_to_parent_create_dirs<Fd>(
+    _parent_fd: Fd,
+    _relative_path: &Path,
+) -> io::Result<std::fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "walk_to_parent_create_dirs: fd-relative operations not supported on Windows",
     ))
 }
 
@@ -443,6 +488,26 @@ mod tests {
     }
 
     #[test]
+    fn test_walk_to_parent_create_dirs_creates_missing_ancestors() {
+        let dir = TempDir::new().unwrap();
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let parent_fd =
+            walk_to_parent_create_dirs(root_fd, Path::new("nested/deep/file.txt")).unwrap();
+
+        let created = std::fs::File::from(
+            openat_create_excl(&parent_fd, Path::new("file.txt")).expect("create final file"),
+        );
+        drop(created);
+
+        assert!(dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("file.txt")
+            .exists());
+    }
+
+    #[test]
     fn test_stat_at_nofollow_success() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("file.txt");
@@ -705,6 +770,13 @@ mod windows_fallback_tests {
         // The Windows stub ignores the fd parameter (generic, unconstrained), so
         // we can pass any value — using a plain integer here avoids any file I/O.
         let result = walk_to_parent(0u32, Path::new("sub/file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn walk_to_parent_create_dirs_returns_unsupported_on_windows() {
+        let result = walk_to_parent_create_dirs(0u32, Path::new("sub/file.txt"));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
     }
