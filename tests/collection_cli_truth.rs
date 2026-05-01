@@ -1,6 +1,7 @@
 mod common;
 
 use quaid::core::db;
+use quaid::core::markdown::{extract_summary, parse_frontmatter, split_content};
 use quaid::core::vault_sync;
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -179,11 +180,34 @@ fn insert_page_with_raw_import(
     raw_bytes: &[u8],
     relative_path: &str,
 ) {
+    let raw = String::from_utf8_lossy(raw_bytes);
+    let (frontmatter, body) = parse_frontmatter(&raw);
+    let (compiled_truth, timeline) = split_content(&body);
+    let title = frontmatter
+        .get("title")
+        .cloned()
+        .unwrap_or_else(|| slug.to_string());
+    let page_type = frontmatter
+        .get("type")
+        .cloned()
+        .unwrap_or_else(|| "concept".to_string());
+    let summary = extract_summary(&compiled_truth);
+    let frontmatter_json = serde_json::to_string(&frontmatter).expect("serialize frontmatter");
     conn.execute(
         "INSERT INTO pages
-             (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
-         VALUES (?1, ?2, ?3, 'concept', ?2, '', ?2, '', '{}', 'notes', '', 1)",
-        params![collection_id, slug, uuid],
+              (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'notes', '', 1)",
+        params![
+            collection_id,
+            slug,
+            uuid,
+            page_type,
+            title,
+            summary,
+            compiled_truth,
+            timeline,
+            frontmatter_json
+        ],
     )
     .expect("insert page with uuid");
     let page_id = conn.last_insert_rowid();
