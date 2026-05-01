@@ -625,10 +625,10 @@ fn offline_restore_completes_inline_and_releases_cli_lease() {
     let conn = open_test_db(&db_path);
     let source_root = dir.path().join("source");
     let target_root = dir.path().join("restored");
-    std::fs::create_dir_all(&source_root).expect("create source root");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     let raw_bytes =
-        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nquaid_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -637,6 +637,7 @@ fn offline_restore_completes_inline_and_releases_cli_lease() {
         raw_bytes,
         "notes/a.md",
     );
+    std::fs::write(source_root.join("notes").join("a.md"), raw_bytes).expect("seed source note");
     drop(conn);
 
     let restore_output = run_quaid(
@@ -715,7 +716,7 @@ fn offline_restore_captures_source_drift_and_added_pages_before_inline_attach() 
 
     let collection_id = insert_collection(&conn, "work", &source_root);
     let stale_bytes =
-        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Restored Note\ntype: concept\n---\nstale restore body\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nquaid_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Restored Note\ntype: concept\n---\nstale restore body\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -727,11 +728,11 @@ fn offline_restore_captures_source_drift_and_added_pages_before_inline_attach() 
     drop(conn);
 
     let refreshed_bytes =
-        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Restored Note\ntype: concept\n---\nrefreshed restore body captured from the live source root before restore completes\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nquaid_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Restored Note\ntype: concept\n---\nrefreshed restore body captured from the live source root before restore completes\n";
     std::fs::write(source_root.join("notes").join("a.md"), refreshed_bytes)
         .expect("write refreshed source note");
     let added_bytes =
-        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\ntitle: Added During Drift Capture\ntype: concept\n---\nthis note only existed on disk when restore began, so phase 1 must ingest it before materialization\n";
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nquaid_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\ntitle: Added During Drift Capture\ntype: concept\n---\nthis note only existed on disk when restore began, so phase 1 must ingest it before materialization\n";
     std::fs::write(source_root.join("notes").join("b.md"), added_bytes)
         .expect("write added source note");
 
@@ -820,12 +821,12 @@ fn offline_remap_completes_inline_and_preserves_page_identity() {
     let conn = open_test_db(&db_path);
     let source_root = dir.path().join("source");
     let target_root = dir.path().join("remapped");
-    std::fs::create_dir_all(&source_root).expect("create source root");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     let raw_bytes =
-        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Remapped Note\ntype: concept\n---\nhello from remap\n";
+        b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nquaid_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Remapped Note\ntype: concept\n---\nhello from remap\n";
     let sibling_bytes =
-        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nquaid_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -845,6 +846,10 @@ fn offline_remap_completes_inline_and_preserves_page_identity() {
     let page_a = page_id(&conn, collection_id, "notes/a");
     let page_b = page_id(&conn, collection_id, "notes/b");
     insert_programmatic_link(&conn, page_a, page_b);
+    std::fs::write(source_root.join("notes").join("old-a.md"), raw_bytes)
+        .expect("seed source note");
+    std::fs::write(source_root.join("notes").join("b.md"), sibling_bytes)
+        .expect("seed source sibling");
     drop(conn);
 
     std::fs::create_dir_all(target_root.join("nested")).expect("create nested dir");
@@ -909,12 +914,12 @@ fn offline_remap_uses_hash_fallback_and_ignores_new_root_extras() {
     let conn = open_test_db(&db_path);
     let source_root = dir.path().join("source");
     let target_root = dir.path().join("remapped");
-    std::fs::create_dir_all(&source_root).expect("create source root");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
     let collection_id = insert_collection(&conn, "work", &source_root);
     let hash_fallback_bytes =
-        b"---\ntitle: Hash Fallback\ntype: concept\n---\nthis body is intentionally long enough to cross the remap hash fallback threshold while still exercising the real CLI remap path end to end\n";
+        b"---\nquaid_id: 11111111-1111-7111-8111-111111111111\nslug: notes/hash-fallback\ntitle: Hash Fallback\ntype: concept\n---\nthis body is intentionally long enough to cross the remap hash fallback threshold while still exercising the real CLI remap path end to end\n";
     let sibling_bytes =
-        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
+        b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\nquaid_id: 22222222-2222-7222-8222-222222222222\nslug: notes/b\ntitle: Sibling Note\ntype: concept\n---\nhello from sibling\n";
     insert_page_with_raw_import(
         &conn,
         collection_id,
@@ -934,6 +939,13 @@ fn offline_remap_uses_hash_fallback_and_ignores_new_root_extras() {
     let fallback_page = page_id(&conn, collection_id, "notes/hash-fallback");
     let sibling_page = page_id(&conn, collection_id, "notes/b");
     insert_programmatic_link(&conn, fallback_page, sibling_page);
+    std::fs::write(
+        source_root.join("notes").join("hash-fallback.md"),
+        hash_fallback_bytes,
+    )
+    .expect("seed source fallback note");
+    std::fs::write(source_root.join("notes").join("b.md"), sibling_bytes)
+        .expect("seed source sibling note");
     drop(conn);
 
     std::fs::create_dir_all(target_root.join("nested")).expect("create nested dir");
