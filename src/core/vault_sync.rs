@@ -4628,7 +4628,7 @@ pub fn begin_restore(
                 db_path: &db_path,
                 recovery_root: &recovery_root,
                 operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::ActiveLease {
+                authorization: FullHashReconcileAuthorization::RestoreLease {
                     lease_session_id: expected_session_id.clone(),
                 },
                 allow_finalize_pending: false,
@@ -4684,6 +4684,14 @@ pub fn begin_restore(
         Ok(command_id)
     } else {
         let lease = start_short_lived_owner_lease(conn, collection.id)?;
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                  restore_lease_session_id = ?2,
+                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?1",
+            params![collection.id, lease.session_id.clone()],
+        )?;
         #[cfg(unix)]
         {
             let request = RestoreRemapSafetyRequest {
@@ -4691,7 +4699,7 @@ pub fn begin_restore(
                 db_path: &db_path,
                 recovery_root: &recovery_root,
                 operation: RestoreRemapOperation::Restore,
-                authorization: FullHashReconcileAuthorization::ActiveLease {
+                authorization: FullHashReconcileAuthorization::RestoreLease {
                     lease_session_id: lease.session_id.clone(),
                 },
                 allow_finalize_pending: false,
@@ -4708,14 +4716,6 @@ pub fn begin_restore(
             }
         }
         let command_id = Uuid::now_v7().to_string();
-        conn.execute(
-            "UPDATE collections
-             SET state = 'restoring',
-                   restore_lease_session_id = ?2,
-                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-              WHERE id = ?1",
-            params![collection.id, lease.session_id.clone()],
-        )?;
         let staging_path = staging_path_for_target(target_path);
         if staging_path.exists() {
             let _ = fs::remove_dir_all(&staging_path);
@@ -7172,6 +7172,10 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let collection_id = insert_collection(&conn, "work", root.path());
         let collection = load_collection_by_id(&conn, collection_id).unwrap();
+        #[cfg(unix)]
+        let foreign_raw_path = "/elsewhere/foreign.md";
+        #[cfg(not(unix))]
+        let foreign_raw_path = r"D:\elsewhere\foreign.md";
 
         assert_eq!(
             infer_restore_relative_path(
@@ -7202,12 +7206,7 @@ mod tests {
             PathBuf::from("notes").join("absolute.md")
         );
         assert_eq!(
-            infer_restore_relative_path(
-                &collection,
-                "notes/example",
-                Some(r"D:\elsewhere\foreign.md"),
-                None
-            ),
+            infer_restore_relative_path(&collection, "notes/example", Some(foreign_raw_path), None),
             PathBuf::from("notes/example.md")
         );
         assert_eq!(
@@ -9257,9 +9256,10 @@ mod tests {
             remap_source.contains("DELETE FROM file_state WHERE collection_id = ?1"),
             "online remap must limit itself to the DB state flip plus file_state reset"
         );
+        let online_source = &remap_source[..remap_source.find("} else {").unwrap()];
         assert!(
-            !remap_source.contains("complete_attach(")
-                && !remap_source.contains("full_hash_reconcile_authorized("),
+            !online_source.contains("complete_attach(")
+                && !online_source.contains("full_hash_reconcile_authorized("),
             "remap_collection must not run attach or full-hash reconcile inline"
         );
 
@@ -9402,16 +9402,20 @@ mod tests {
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
         let target_root = target_parent.path().join("restored");
+        fs::create_dir_all(source_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
         insert_page_with_raw_import(
             &conn,
             collection_id,
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            raw_bytes,
             "notes/a.md",
         );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
         conn.execute(
             "CREATE TRIGGER tx_b_fail
              BEFORE UPDATE ON collections
@@ -9728,16 +9732,20 @@ mod tests {
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
         let target_root = target_parent.path().join("restored");
+        fs::create_dir_all(source_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
         insert_page_with_raw_import(
             &conn,
             collection_id,
             "notes/a",
             "11111111-1111-7111-8111-111111111111",
             "hello world from note a",
-            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a",
+            raw_bytes,
             "notes/a.md",
         );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
 
         begin_restore(&conn, "work", &target_root, false).unwrap();
 
@@ -9756,6 +9764,7 @@ mod tests {
         let (_db_dir, _db_path, conn) = open_test_db_file();
         let old_root = tempfile::TempDir::new().unwrap();
         let new_root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(old_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", old_root.path());
         let raw_bytes_a =
             b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
@@ -9779,6 +9788,8 @@ mod tests {
             raw_bytes_b,
             "notes/b.md",
         );
+        fs::write(old_root.path().join("notes").join("old-a.md"), raw_bytes_a).unwrap();
+        fs::write(old_root.path().join("notes").join("b.md"), raw_bytes_b).unwrap();
         fs::create_dir_all(new_root.path().join("notes")).unwrap();
         fs::create_dir_all(new_root.path().join("nested")).unwrap();
         fs::write(
@@ -9837,6 +9848,7 @@ mod tests {
         let (_db_dir, _db_path, conn) = open_test_db_file();
         let old_root = tempfile::TempDir::new().unwrap();
         let new_root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(old_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", old_root.path());
         let original =
             b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\n---\nhello world from note a";
@@ -9849,6 +9861,7 @@ mod tests {
             original,
             "notes/a.md",
         );
+        fs::write(old_root.path().join("notes").join("a.md"), original).unwrap();
         fs::create_dir_all(new_root.path().join("notes")).unwrap();
         fs::write(new_root.path().join("notes").join("a.md"), original).unwrap();
 

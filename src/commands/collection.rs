@@ -3748,6 +3748,7 @@ mod tests {
         let (_db_dir, conn) = open_test_db_file_any();
         let source_root = tempfile::TempDir::new().unwrap();
         let remapped_root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
         std::fs::create_dir_all(remapped_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
         let raw_bytes =
@@ -3760,6 +3761,7 @@ mod tests {
             raw_bytes,
             "notes/a.md",
         );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
         fs::write(remapped_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
 
         sync(
@@ -3792,6 +3794,7 @@ mod tests {
         let (_db_dir, conn) = open_test_db_file_any();
         let source_root = tempfile::TempDir::new().unwrap();
         let remapped_root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
         std::fs::create_dir_all(remapped_root.path().join("nested")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
         let raw_bytes =
@@ -3804,6 +3807,7 @@ mod tests {
             raw_bytes,
             "notes/old-a.md",
         );
+        fs::write(source_root.path().join("notes").join("old-a.md"), raw_bytes).unwrap();
         fs::write(
             remapped_root.path().join("nested").join("renamed-a.md"),
             raw_bytes,
@@ -3880,6 +3884,7 @@ mod tests {
         let source_root = tempfile::TempDir::new().unwrap();
         let target_parent = tempfile::TempDir::new().unwrap();
         let target_root = target_parent.path().join("restored");
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
         let collection_id = insert_collection(&conn, "work", source_root.path());
         let raw_bytes =
             b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
@@ -3891,6 +3896,7 @@ mod tests {
             raw_bytes,
             "notes/a.md",
         );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
 
         restore(
             &conn,
