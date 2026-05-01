@@ -474,10 +474,22 @@ pub fn scheduled_full_hash_audit_authorized(
             "scheduled_full_hash_audit",
         )?;
         apply_full_hash_metadata_self_heal(conn, collection.id, &plan.unchanged)?;
-        let rename_resolution = RenameResolution {
-            remaining_missing: plan.diff.missing.clone(),
-            ..RenameResolution::default()
-        };
+        if !plan.diff.missing.is_empty() {
+            conn.execute(
+                "UPDATE collections
+                 SET needs_full_sync = 1,
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1",
+                [collection.id],
+            )?;
+            eprintln!(
+                "WARN: scheduled_full_hash_audit_missing_paths_marked_dirty collection={} collection_id={} missing_count={}",
+                collection.name,
+                collection.id,
+                plan.diff.missing.len()
+            );
+        }
+        let rename_resolution = RenameResolution::default();
         let apply_summary =
             apply_reconciliation(conn, &collection, &plan.diff, &rename_resolution, root_path)?;
 
@@ -4419,6 +4431,91 @@ mod tests {
                 && !snippet.contains("file_state::hash_file(&absolute_path)"),
             "scheduled audit must not fall back to path-based stat/hash reads that follow symlinks"
         );
+        assert!(
+            snippet.contains("scheduled_full_hash_audit_missing_paths_marked_dirty")
+                && snippet.contains("SET needs_full_sync = 1")
+                && !snippet.contains("remaining_missing: plan.diff.missing.clone()"),
+            "scheduled audit must mark the collection dirty on missing paths instead of deleting pages inline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scheduled_full_hash_audit_marks_collection_dirty_without_deleting_missing_pages() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("notes")).unwrap();
+        let note_path = root.path().join("notes").join("note.md");
+        let note_bytes = b"---\nslug: notes/note\ntitle: Note\ntype: concept\n---\naudit me\n";
+        fs::write(&note_path, note_bytes).unwrap();
+
+        let collection = insert_collection(&conn, root.path());
+        let stat = stat_for(root.path(), "notes/note.md");
+        let sha256 = format!("{:x}", sha2::Sha256::digest(note_bytes));
+        let page_id = seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/note",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54768888",
+                relative_path: "notes/note.md",
+                stat: &stat,
+                sha256: &sha256,
+                compiled_truth: "audit me",
+                timeline: "",
+            },
+        );
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
+             VALUES (?1, ?2, 1, ?3, ?4)",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                note_bytes.as_slice(),
+                "notes/note.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = '2000-01-01T00:00:00Z'
+             WHERE collection_id = ?1 AND relative_path = 'notes/note.md'",
+            [collection.id],
+        )
+        .unwrap();
+        fs::remove_file(&note_path).unwrap();
+
+        let stats = scheduled_full_hash_audit_authorized(
+            &conn,
+            collection.id,
+            &[PathBuf::from("notes/note.md")],
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(stats.missing, 1);
+        assert_eq!(stats.hard_deleted, 0);
+        assert_eq!(stats.quarantined_db_state, 0);
+        let needs_full_sync: bool = conn
+            .query_row(
+                "SELECT needs_full_sync FROM collections WHERE id = ?1",
+                [collection.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .unwrap();
+        assert!(needs_full_sync);
+        let existing_page_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM pages WHERE id = ?1 AND quarantined_at IS NULL",
+                [page_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(existing_page_id, Some(page_id));
     }
 
     #[test]

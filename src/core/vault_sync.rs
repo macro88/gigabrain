@@ -4332,13 +4332,23 @@ pub fn start_serve_runtime(db_path: String) -> Result<ServeRuntime, VaultSyncErr
                 if last_full_hash_audit.elapsed()
                     >= Duration::from_secs(FULL_HASH_AUDIT_SWEEP_INTERVAL_SECS)
                 {
-                    let _ = run_full_hash_audit_pass(&conn, &session_id_for_thread);
+                    if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread) {
+                        eprintln!(
+                            "WARN: scheduled_full_hash_audit_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
                     last_full_hash_audit = Instant::now();
                 }
                 if last_raw_import_ttl_sweep.elapsed()
                     >= Duration::from_secs(RAW_IMPORT_TTL_SWEEP_INTERVAL_SECS)
                 {
-                    let _ = sweep_raw_import_ttl(&conn);
+                    if let Err(error) = sweep_raw_import_ttl(&conn) {
+                        eprintln!(
+                            "WARN: raw_import_ttl_sweep_failed session_id={} error={}",
+                            session_id_for_thread, error
+                        );
+                    }
                     last_raw_import_ttl_sweep = Instant::now();
                 }
                 let _ = run_rcrt_pass(&conn, &session_id_for_thread);
@@ -8173,6 +8183,25 @@ mod tests {
         assert!(
             snippet.contains("overflow_recovery_skipped_lease_mismatch"),
             "overflow recovery must warn on lease mismatch rather than bypassing ownership: {snippet}"
+        );
+    }
+
+    #[test]
+    fn start_serve_runtime_logs_scheduled_maintenance_failures() {
+        let source = production_vault_sync_source();
+        let start = source.find("pub fn start_serve_runtime(").unwrap();
+        let end = source[start..]
+            .find("pub fn begin_restore(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("WARN: scheduled_full_hash_audit_failed")
+                && snippet.contains("if let Err(error) = run_full_hash_audit_pass(&conn, &session_id_for_thread)")
+                && snippet.contains("WARN: raw_import_ttl_sweep_failed")
+                && snippet.contains("if let Err(error) = sweep_raw_import_ttl(&conn)"),
+            "serve loop must log scheduled audit and TTL sweep failures instead of discarding them silently"
         );
     }
 

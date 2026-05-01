@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/subprocess.rs"]
+mod common_subprocess;
 
 use quaid::{
     commands::{link, put},
@@ -14,7 +16,7 @@ use std::process::{Command, Output, Stdio};
 fn init_db(dir: &tempfile::TempDir) -> PathBuf {
     let db_path = dir.path().join("memory.db");
     let mut command = Command::new(common::quaid_bin());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     let output = command
         .arg("init")
         .arg(&db_path)
@@ -30,7 +32,7 @@ fn init_db(dir: &tempfile::TempDir) -> PathBuf {
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(common::quaid_bin());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     command
         .arg("--db")
         .arg(db_path)
@@ -41,7 +43,7 @@ fn run_quaid(db_path: &Path, args: &[&str]) -> Output {
 
 fn run_quaid_in_dir(db_path: &Path, dir: &Path, args: &[&str], home_dir: &Path) -> Output {
     let mut command = Command::new(common::quaid_bin());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     command
         .current_dir(dir)
         .env("HOME", home_dir)
@@ -78,7 +80,7 @@ fn provision_vault(dir: &tempfile::TempDir, conn: &Connection) {
 
 fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
     let mut command = Command::new(common::quaid_bin());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     let mut child = command
         .arg("--db")
         .arg(db_path)
@@ -100,7 +102,7 @@ fn run_quaid_with_input(db_path: &Path, args: &[&str], input: &str) -> Output {
 #[test]
 fn version_command_runs_without_opening_a_database() {
     let mut command = Command::new(common::quaid_bin());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     let output = command.arg("version").output().expect("run quaid version");
 
     assert!(output.status.success());

@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/subprocess.rs"]
+mod common_subprocess;
 
 use quaid::core::db;
 use quaid::core::markdown::{extract_summary, parse_frontmatter, split_content};
@@ -20,14 +22,14 @@ fn bin_path() -> &'static Path {
 
 fn run_quaid(db_path: &Path, args: &[&str]) -> std::process::Output {
     let mut command = Command::new(bin_path());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     command.arg("--db").arg(db_path).args(args);
     command.output().expect("run quaid")
 }
 
 fn run_quaid_with_stdin(db_path: &Path, args: &[&str], stdin: &str) -> std::process::Output {
     let mut command = Command::new(bin_path());
-    common::configure_test_command(&mut command);
+    common_subprocess::configure_test_command(&mut command);
     command
         .arg("--db")
         .arg(db_path)
