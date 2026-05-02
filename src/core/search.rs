@@ -22,10 +22,11 @@ pub fn hybrid_search(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, collection_filter, None, conn, limit, false)
+    hybrid_search_with_namespace(query, wing, collection_filter, None, conn, limit)
 }
 
 /// Namespace-aware variant of [`hybrid_search`].
+#[allow(dead_code)]
 pub fn hybrid_search_with_namespace(
     query: &str,
     wing: Option<&str>,
@@ -46,6 +47,7 @@ pub fn hybrid_search_with_namespace(
 }
 
 /// Hybrid search returning canonical `<collection>::<slug>` identifiers.
+#[allow(dead_code)]
 pub fn hybrid_search_canonical(
     query: &str,
     wing: Option<&str>,
@@ -53,7 +55,7 @@ pub fn hybrid_search_canonical(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_impl(query, wing, collection_filter, None, conn, limit, true)
+    hybrid_search_canonical_with_namespace(query, wing, collection_filter, None, conn, limit)
 }
 
 /// Namespace-aware canonical-slug variant of [`hybrid_search`].

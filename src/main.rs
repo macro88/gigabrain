@@ -1,9 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod commands;
-mod core;
-mod mcp;
+use quaid::{commands, core};
 
 #[derive(Parser)]
 #[command(

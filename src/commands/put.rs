@@ -151,15 +151,14 @@ fn put_from_cli_string(
 }
 
 /// Apply page content supplied by the caller.
+#[allow(dead_code)]
 pub fn put_from_string(
     db: &Connection,
     slug_input: &str,
     content: &str,
     expected_version: Option<i64>,
 ) -> anyhow::Result<()> {
-    let status = put_from_string_status(db, slug_input, content, expected_version)?;
-    println!("{status}");
-    Ok(())
+    put_from_string_with_namespace(db, slug_input, content, None, expected_version)
 }
 
 /// Apply page content supplied by the caller into a namespace.

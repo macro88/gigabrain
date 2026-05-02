@@ -1061,6 +1061,7 @@ pub fn embed(text: &str) -> Result<Vec<f32>, InferenceError> {
         .embed(trimmed)
 }
 
+#[allow(dead_code)]
 pub fn search_vec(
     query: &str,
     k: usize,
@@ -1068,7 +1069,7 @@ pub fn search_vec(
     collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, collection_filter, None, conn, false)
+    search_vec_with_namespace(query, k, wing_filter, collection_filter, None, conn)
 }
 
 /// Namespace-aware variant of [`search_vec`].
@@ -1091,6 +1092,7 @@ pub fn search_vec_with_namespace(
     )
 }
 
+#[allow(dead_code)]
 pub fn search_vec_canonical(
     query: &str,
     k: usize,
@@ -1098,7 +1100,7 @@ pub fn search_vec_canonical(
     collection_filter: Option<i64>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_vec_internal(query, k, wing_filter, collection_filter, None, conn, true)
+    search_vec_canonical_with_namespace(query, k, wing_filter, collection_filter, None, conn)
 }
 
 /// Namespace-aware canonical-slug variant of [`search_vec`].

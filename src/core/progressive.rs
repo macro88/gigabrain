@@ -17,6 +17,7 @@ const MAX_DEPTH: u32 = 3;
 ///
 /// `collection_filter` restricts expansion to pages belonging to the given
 /// collection ID. Pass `None` to allow cross-collection expansion (CLI path).
+#[allow(dead_code)]
 pub fn progressive_retrieve(
     initial: Vec<SearchResult>,
     budget: usize,

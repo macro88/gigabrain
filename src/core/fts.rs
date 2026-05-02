@@ -91,18 +91,11 @@ pub fn search_fts(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(
-        query,
-        wing_filter,
-        collection_filter,
-        None,
-        conn,
-        limit,
-        false,
-    )
+    search_fts_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
 }
 
 /// Namespace-aware variant of [`search_fts`].
+#[allow(dead_code)]
 pub fn search_fts_with_namespace(
     query: &str,
     wing_filter: Option<&str>,
@@ -122,6 +115,7 @@ pub fn search_fts_with_namespace(
     )
 }
 
+#[allow(dead_code)]
 pub fn search_fts_canonical(
     query: &str,
     wing_filter: Option<&str>,
@@ -129,15 +123,7 @@ pub fn search_fts_canonical(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_internal(
-        query,
-        wing_filter,
-        collection_filter,
-        None,
-        conn,
-        limit,
-        true,
-    )
+    search_fts_canonical_with_namespace(query, wing_filter, collection_filter, None, conn, limit)
 }
 
 /// Namespace-aware canonical-slug variant of [`search_fts`].
@@ -180,6 +166,7 @@ pub fn expand_fts_query_or(sanitized: &str) -> String {
 /// chain so documents matching any individual term are surfaced.
 ///
 /// Callers must pass a **sanitized** query from [`sanitize_fts_query`].
+#[allow(dead_code)]
 pub fn search_fts_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -187,14 +174,13 @@ pub fn search_fts_tiered(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_tiered_internal(
+    search_fts_tiered_with_namespace(
         sanitized_query,
         wing_filter,
         collection_filter,
         None,
         conn,
         limit,
-        false,
     )
 }
 
@@ -220,6 +206,7 @@ pub fn search_fts_tiered_with_namespace(
 
 /// Canonical-slug variant of [`search_fts_tiered`].
 /// Returns slugs in `<collection>::<slug>` format.
+#[allow(dead_code)]
 pub fn search_fts_canonical_tiered(
     sanitized_query: &str,
     wing_filter: Option<&str>,
@@ -227,14 +214,13 @@ pub fn search_fts_canonical_tiered(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    search_fts_tiered_internal(
+    search_fts_canonical_tiered_with_namespace(
         sanitized_query,
         wing_filter,
         collection_filter,
         None,
         conn,
         limit,
-        true,
     )
 }
 
