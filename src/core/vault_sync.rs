@@ -11782,7 +11782,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(live_collection_owner(&conn, collection_id).unwrap().is_none());
+        assert!(live_collection_owner(&conn, collection_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

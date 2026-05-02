@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use quaid::commands::ingest;
 use quaid::commands::embed;
+use quaid::commands::ingest;
 use quaid::core::db;
 use quaid::core::search::hybrid_search;
 

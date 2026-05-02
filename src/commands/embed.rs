@@ -640,7 +640,11 @@ mod tests {
         )
         .expect("insert page");
         let page_id: i64 = conn
-            .query_row("SELECT id FROM pages WHERE slug = 'people/alice'", [], |row| row.get(0))
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
             .expect("page id");
         conn.execute(
             "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)

@@ -211,7 +211,10 @@ fn duplicate_ingest_produces_no_additional_pages() {
         page_count_after_first, page_count_after_second,
         "page count should not change on second import"
     );
-    assert_eq!(imported_second, 0, "second ingest pass should import 0 files");
+    assert_eq!(
+        imported_second, 0,
+        "second ingest pass should import 0 files"
+    );
 }
 
 // ── 5. Conflicting ingest → contradiction detected ────────────────────────────
@@ -323,7 +326,10 @@ fn idempotent_roundtrip_export_reimport_export_is_zero_diff() {
     // Re-import into a fresh DB
     let (conn2, _dir2) = open_disk_db();
     let imported = ingest_markdown_tree(&conn2, export_dir1.path());
-    assert_eq!(imported, count1, "reimport should import all exported files");
+    assert_eq!(
+        imported, count1,
+        "reimport should import all exported files"
+    );
 
     // Export again
     let export_dir2 = tempfile::TempDir::new().expect("export dir 2");

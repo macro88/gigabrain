@@ -243,7 +243,9 @@ mod watcher_core {
                     |row| row.get::<_, String>(0),
                 )
                 .ok()
-                .and_then(|compiled_truth| compiled_truth.contains("warm watcher body").then_some(()))
+                .and_then(|compiled_truth| {
+                    compiled_truth.contains("warm watcher body").then_some(())
+                })
         });
         assert!(
             warmed.is_some(),
@@ -352,7 +354,9 @@ mod watcher_core {
                     |row| row.get(0),
                 )
                 .ok()?;
-            (fts_results.iter().any(|result| result.slug == "work::notes/search-lag")
+            (fts_results
+                .iter()
+                .any(|result| result.slug == "work::notes/search-lag")
                 && embedding_jobs > 0
                 && !chunk_text.contains("orbital rendezvous burn window"))
             .then_some(())

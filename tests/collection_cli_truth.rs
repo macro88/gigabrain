@@ -5,9 +5,9 @@ mod common_subprocess;
 use quaid::core::db;
 use quaid::core::markdown::{extract_summary, parse_frontmatter, split_content};
 use quaid::core::vault_sync;
-use rusqlite::{params, Connection};
 #[cfg(unix)]
 use rusqlite::OpenFlags;
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::Digest;
 use std::io::Write;
@@ -2935,7 +2935,15 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
     assert_eq!(parsed["status"].as_str(), Some("ok"));
     assert!(parsed["command_identity"].as_str().is_some());
 
-    type OnlineRestoreRow = (String, String, i64, Option<String>, Option<String>, i64, i64);
+    type OnlineRestoreRow = (
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+    );
     let final_row: OnlineRestoreRow =
         wait_for_db_value(&db_path, Duration::from_secs(15), |verify| {
             verify
@@ -2993,7 +3001,10 @@ fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("load watcher release audit");
-    assert_eq!(release_audit.0, 1, "handshake should release the watcher exactly once");
+    assert_eq!(
+        release_audit.0, 1,
+        "handshake should release the watcher exactly once"
+    );
     assert_eq!(
         release_audit.1.as_deref(),
         Some(runtime.session_id.as_str()),

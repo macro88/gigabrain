@@ -448,25 +448,49 @@ fn read_graph_and_namespace_commands_run_through_main_dispatch() {
     drop(conn);
 
     let get = run_quaid(&db_path, &["get", "notes/alpha"]);
-    assert!(get.status.success(), "get stderr: {}", String::from_utf8_lossy(&get.stderr));
+    assert!(
+        get.status.success(),
+        "get stderr: {}",
+        String::from_utf8_lossy(&get.stderr)
+    );
     assert!(String::from_utf8_lossy(&get.stdout).contains("Alpha body"));
 
     let list = run_quaid(&db_path, &["list", "--limit", "10"]);
-    assert!(list.status.success(), "list stderr: {}", String::from_utf8_lossy(&list.stderr));
+    assert!(
+        list.status.success(),
+        "list stderr: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
     assert!(String::from_utf8_lossy(&list.stdout).contains("notes/alpha"));
 
     let search = run_quaid(&db_path, &["search", "rivers"]);
-    assert!(search.status.success(), "search stderr: {}", String::from_utf8_lossy(&search.stderr));
+    assert!(
+        search.status.success(),
+        "search stderr: {}",
+        String::from_utf8_lossy(&search.stderr)
+    );
     assert!(String::from_utf8_lossy(&search.stdout).contains("notes/alpha"));
 
     let embed = run_quaid(&db_path, &["embed", "--all"]);
-    assert!(embed.status.success(), "embed stderr: {}", String::from_utf8_lossy(&embed.stderr));
+    assert!(
+        embed.status.success(),
+        "embed stderr: {}",
+        String::from_utf8_lossy(&embed.stderr)
+    );
 
     let query = run_quaid(&db_path, &["query", "alpha river"]);
-    assert!(query.status.success(), "query stderr: {}", String::from_utf8_lossy(&query.stderr));
+    assert!(
+        query.status.success(),
+        "query stderr: {}",
+        String::from_utf8_lossy(&query.stderr)
+    );
 
     let links = run_quaid(&db_path, &["links", "notes/alpha"]);
-    assert!(links.status.success(), "links stderr: {}", String::from_utf8_lossy(&links.stderr));
+    assert!(
+        links.status.success(),
+        "links stderr: {}",
+        String::from_utf8_lossy(&links.stderr)
+    );
     assert!(String::from_utf8_lossy(&links.stdout).contains("notes/beta"));
 
     let backlinks = run_quaid(&db_path, &["backlinks", "notes/beta"]);
@@ -477,22 +501,47 @@ fn read_graph_and_namespace_commands_run_through_main_dispatch() {
     );
     assert!(String::from_utf8_lossy(&backlinks.stdout).contains("notes/alpha"));
 
-    let graph = run_quaid(&db_path, &["graph", "notes/alpha", "--depth", "1", "--json"]);
-    assert!(graph.status.success(), "graph stderr: {}", String::from_utf8_lossy(&graph.stderr));
+    let graph = run_quaid(
+        &db_path,
+        &["graph", "notes/alpha", "--depth", "1", "--json"],
+    );
+    assert!(
+        graph.status.success(),
+        "graph stderr: {}",
+        String::from_utf8_lossy(&graph.stderr)
+    );
     let graph_json: Value = serde_json::from_slice(&graph.stdout).unwrap();
     assert!(graph_json["nodes"].as_array().is_some());
 
     let check = run_quaid(&db_path, &["check", "notes/alpha"]);
-    assert!(check.status.success(), "check stderr: {}", String::from_utf8_lossy(&check.stderr));
+    assert!(
+        check.status.success(),
+        "check stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
 
     let unlink = run_quaid(
         &db_path,
-        &["unlink", "notes/alpha", "notes/beta", "--relationship", "related"],
+        &[
+            "unlink",
+            "notes/alpha",
+            "notes/beta",
+            "--relationship",
+            "related",
+        ],
     );
-    assert!(unlink.status.success(), "unlink stderr: {}", String::from_utf8_lossy(&unlink.stderr));
+    assert!(
+        unlink.status.success(),
+        "unlink stderr: {}",
+        String::from_utf8_lossy(&unlink.stderr)
+    );
 
     let call = run_quaid(&db_path, &["call", "memory_list", "{\"limit\":5}"]);
-    assert!(call.status.success(), "call stderr: {}", String::from_utf8_lossy(&call.stderr));
+    assert!(
+        call.status.success(),
+        "call stderr: {}",
+        String::from_utf8_lossy(&call.stderr)
+    );
 
     let namespace_create = run_quaid(&db_path, &["namespace", "create", "scratch"]);
     assert!(

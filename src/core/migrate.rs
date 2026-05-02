@@ -44,12 +44,24 @@ fn validate_roundtrip(db: &Connection, output_path: &Path) -> Result<()> {
         let (frontmatter, body) = markdown::parse_frontmatter(&raw);
         let (truth, timeline) = markdown::split_content(&body);
 
-        assert_eq!(truth, page.compiled_truth, "truth mismatch for {}", page.slug);
-        assert_eq!(timeline, page.timeline, "timeline mismatch for {}", page.slug);
+        assert_eq!(
+            truth, page.compiled_truth,
+            "truth mismatch for {}",
+            page.slug
+        );
+        assert_eq!(
+            timeline, page.timeline,
+            "timeline mismatch for {}",
+            page.slug
+        );
 
         for (key, value) in &frontmatter {
             if let Some(original) = page.frontmatter.get(key) {
-                assert_eq!(value, original, "frontmatter key '{key}' mismatch for {}", page.slug);
+                assert_eq!(
+                    value, original,
+                    "frontmatter key '{key}' mismatch for {}",
+                    page.slug
+                );
             }
         }
     }
