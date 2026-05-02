@@ -239,11 +239,12 @@ fn insert_page_with_raw_import(
     .expect("insert page with uuid");
     let page_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-         VALUES (?1, ?2, 1, ?3, ?4)",
+        "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+         VALUES (?1, ?2, 1, ?3, ?4, ?5)",
         params![
             page_id,
             uuid::Uuid::now_v7().to_string(),
+            format!("{:x}", sha2::Sha256::digest(raw_bytes)),
             raw_bytes,
             relative_path
         ],

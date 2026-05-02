@@ -267,6 +267,7 @@ mod watcher_core {
             "watcher never observed the warm-up edit before the latency assertion"
         );
 
+        thread::sleep(Duration::from_millis(1100));
         std::fs::write(
             &note_path,
             b"---\ntitle: Latency\ntype: note\n---\nupdated within two seconds\n",
@@ -382,6 +383,7 @@ mod watcher_core {
             "FTS never became fresh ahead of the embedding lane"
         );
 
+        drop(runtime);
         let conn = open_test_db(&db_path);
         vault_sync::drain_embedding_queue(&conn).expect("drain embedding queue");
         drop(conn);
@@ -413,7 +415,5 @@ mod watcher_core {
 
         let updated_chunk = phase_two.expect("embedding lane never caught up");
         assert!(updated_chunk.contains("orbital rendezvous burn window"));
-
-        drop(runtime);
     }
 }
