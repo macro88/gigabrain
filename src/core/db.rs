@@ -516,17 +516,25 @@ fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<HashSet<_>, _>>()?;
 
+    let mut added_content_hash = false;
     if !existing_columns.contains("content_hash") {
         conn.execute_batch(
             "ALTER TABLE raw_imports ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';",
         )?;
+        added_content_hash = true;
     }
 
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_raw_imports_content_hash
-         ON raw_imports(content_hash)
-         WHERE content_hash != '';",
-    )?;
+    if !index_exists(conn, "idx_raw_imports_content_hash")? {
+        conn.execute_batch(
+            "CREATE INDEX idx_raw_imports_content_hash
+             ON raw_imports(content_hash)
+             WHERE content_hash != '';",
+        )?;
+    }
+
+    if !added_content_hash {
+        return Ok(());
+    }
 
     let rows_to_backfill: Vec<(i64, Vec<u8>)> = conn
         .prepare(
@@ -848,6 +856,17 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     let exists: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(exists.is_some())
+}
+
+fn index_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
+    let exists: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
             [name],
             |row| row.get(0),
         )

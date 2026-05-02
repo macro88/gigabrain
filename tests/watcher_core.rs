@@ -25,7 +25,21 @@ mod watcher_core {
     }
 
     fn open_test_db(path: &Path) -> Connection {
-        db::open(path.to_str().expect("utf-8 db path")).expect("open test db")
+        let started = Instant::now();
+        loop {
+            match db::open(path.to_str().expect("utf-8 db path")) {
+                Ok(conn) => return conn,
+                Err(quaid::core::types::DbError::Sqlite(rusqlite::Error::SqliteFailure(
+                    err,
+                    _,
+                ))) if err.code == rusqlite::ErrorCode::DatabaseBusy
+                    && started.elapsed() < Duration::from_secs(5) =>
+                {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(err) => panic!("open test db: {err:?}"),
+            }
+        }
     }
 
     fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
@@ -56,11 +70,12 @@ mod watcher_core {
         .expect("insert page");
         let page_id = conn.last_insert_rowid();
         conn.execute(
-            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-             VALUES (?1, ?2, 1, ?3, ?4)",
+            "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+             VALUES (?1, ?2, 1, ?3, ?4, ?5)",
             params![
                 page_id,
                 uuid::Uuid::now_v7().to_string(),
+                format!("{:x}", sha2::Sha256::digest(raw_bytes)),
                 raw_bytes,
                 relative_path
             ],
