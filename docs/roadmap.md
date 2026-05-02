@@ -51,7 +51,7 @@ The smallest complete slice that proves Quaid's value proposition. When Phase 1 
 
 **Workstream 3 — Ingest and MCP (Week 3):**
 - Novelty checking — Jaccard + cosine dedup (`src/core/novelty.rs`)
-- `import` / `export` with normalized markdown round-trip (`src/core/migrate.rs`)
+- vault-backed collection sync plus `export` round-trip (`src/core/migrate.rs`, `src/core/reconciler.rs`)
 - MCP stdio server with 5 core tools: `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 - CLI command: `serve`
 
@@ -63,7 +63,7 @@ The smallest complete slice that proves Quaid's value proposition. When Phase 1 
 
 **Ship gate (all passed — Phase 2 unblocked):**
 1. `cargo test` passes
-2. `quaid import <corpus>` → `quaid export` → semantic diff = 0
+2. `quaid collection add corpus <vault>` → `quaid export` → semantic diff = 0
 3. `quaid serve` connects to Claude Code with all 5 MCP tools responding correctly
 4. Static binary: `ldd` confirms no dynamic dependencies on Linux musl build
 5. BEIR nDCG@10 baseline established
@@ -204,4 +204,4 @@ Adds vault-as-collection attachment, a file watcher, a stat-diff reconciler, qua
 | `quaid collection remove` | Detach + optional purge not yet implemented |
 | `quaid stats` per-collection augmentation | Per-collection row + aggregate totals pending |
 | Online restore handshake (`17.5pp/qq*`) | Live-serve ack protocol not yet implemented |
-| Legacy `quaid import` removal (`15.*`) | Import path remains until reconciler covers all ingest use cases |
+| Legacy ingest removal (`15.*`) | Shipped: `quaid import` and `ingest_log` are gone; collections + `quaid ingest` are the supported paths |

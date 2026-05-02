@@ -49,8 +49,8 @@ Partiful provides event attendance, RSVPs, and social network data for community
 knowledge graphs.
 
 **Usage:** Partiful does not have a public REST API; extract structured data from event
-export files or invitation CSVs. Import as pages via `quaid import`, then enrich with
-the flow below.
+export files or invitation CSVs. Ingest each markdown page with `quaid ingest` (or attach
+the export directory as a collection), then enrich with the flow below.
 
 ---
 

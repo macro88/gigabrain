@@ -292,9 +292,13 @@ Add `QUAID_FULL_HASH_AUDIT_DAYS` polling (default 7 days) to the serve loop. Add
 
 ---
 
-## Batch 7 — Cleanup + docs (target release: 0.16)
+## Batch 7 — Cleanup + docs (target release: 0.17.0)
 
-**Tasks:** 9.6, 10.1–10.3, 14.1–14.2, 15.1–15.4, 16.1–16.8, 17.1, 17.4, 17.5 (integration group), 17.6–17.10, 17.14–17.15, 17.17a/c, 18.1–18.2
+**Open tasks now:** none on branch. Batch 7's in-scope work is closed; the stale scenario rows `17.6` and `17.14` are explicitly deferred out of this batch by ledger repair.
+
+**Already satisfied before Batch 7 start:** 10.1–10.3 (`quaid init` already writes the current schema version + model metadata and no longer bootstraps vault import or vault-path prompts), 17.17a (closed in the Batch 6 resolver-unification revision).
+
+**Release status:** Batch 7 can be complete on branch without authorizing release work. `v0.17.0` remains the truthful target release only after PR review, merge to `main`, and post-merge coverage revalidation.
 
 **Note on §15:** `src/commands/import.rs` MUST NOT be deleted until the documentation tasks (§16) are complete in the same batch. The §15.4 constraint is self-enforcing — do not merge import.rs removal before the README and getting-started.md changes are ready.
 
@@ -306,7 +310,7 @@ Add `Remove { name: String, #[arg(long)] purge: bool }` to `CollectionAction`. W
 
 ### Tasks 10.1–10.3 — `quaid init` cleanup
 
-Verify `quaid init` correctly writes `schema_version=<current>` and removes any import-related bootstrap logic. Document that vault paths are attached via `quaid collection add` post-init.
+These are already satisfied on trunk and should be treated as regression guards, not new implementation work. `quaid init` already writes `schema_version=<current>`, has no import-related bootstrap logic, and leaves vault attachment to `quaid collection add`.
 
 ### Tasks 14.1–14.2 — `quaid stats` update
 
@@ -315,8 +319,8 @@ Augment `quaid stats` output with per-collection rows (name, page_count, queue_d
 ### Tasks 15.1–15.4 — Remove legacy ingest
 
 1. Delete `src/commands/import.rs`
-2. Delete `import_dir()` from `src/core/migrate.rs`; split remaining logic between `reconciler.rs` and `vault_sync.rs` as needed
-3. Drop `ingest_log` table from schema (bump schema version)
+2. Delete `import_dir()` from `src/core/migrate.rs`; split remaining logic between `reconciler.rs` and `vault_sync.rs` as needed ✅
+3. Drop `ingest_log` table from schema (bump schema version) ✅
 4. **Only merge after §16 docs are complete**
 
 ### Tasks 16.1–16.8 — Documentation
@@ -325,7 +329,7 @@ Update `README.md`, `docs/getting-started.md`, `docs/spec.md`, `AGENTS.md`, all 
 
 ### Remaining tests (17.x)
 
-Fill in the integration test gaps: schema table/index audit (17.1), `.quaidignore` atomic parse (17.4), full collection lifecycle (17.5), performance budget (17.6), watcher 2s latency (17.7), embedding eventual consistency (17.8), restore round-trip bytes (17.9), online restore with live serve (17.10), git checkout overflow (17.14), multi-collection slug collisions (17.15), resolver unification unit proof (17.17a), `raw_imports_active_singular` invariant (17.17c).
+Batch 7 closed the in-scope remaining test gaps: serve heartbeat cadence/liveness (17.5gg), collection-name DB enforcement (17.5vv2), the `needs_full_sync` WriteAdmin gate (17.5vv5b), watcher 2s latency (17.7), embedding eventual consistency (17.8), restore round-trip bytes (17.9), online restore with live serve (17.10), and multi-collection slug collisions (17.15). Row `17.6` is deferred because the authoritative change artifacts do not document any 1000-file reconciliation budget/SLA, and row `17.14` is deferred because the change's accepted overflow contract is the generic `needs_full_sync=1` + recovery-within-~1s behavior already closed by `6.7a`, `17.5w`, `17.5x`, and `17.5aaa2`, not a literal `git checkout` harness.
 
 ### Tasks 18.1–18.2 — Follow-up stubs
 

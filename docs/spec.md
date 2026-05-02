@@ -162,7 +162,7 @@ One `cargo build --release --target x86_64-unknown-linux-musl`. One truly static
 ║              │  │  tags                         │ │           ║
 ║              │  │  raw_data                     │ │           ║
 ║              │  │  timeline_entries             │ │           ║
-║              │  │  ingest_log                   │ │           ║
+║              │  │  raw_imports                  │ │           ║
 ║              │  │  config                       │ │           ║
 ║              │  └──────────────────────────────┘ │           ║
 ║              └───────────────────────────────────┘          ║
@@ -495,27 +495,13 @@ CREATE TABLE IF NOT EXISTS import_manifest (
 );
 
 -- ============================================================
--- ingest_log: audit trail for all ingest operations
+-- raw_imports: byte-exact source storage for restore + duplicate checks
 -- ============================================================
-CREATE TABLE IF NOT EXISTS ingest_log (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ingest_key    TEXT NOT NULL UNIQUE,              -- SHA-256 of source content; idempotency key
-    source_type   TEXT NOT NULL,                     -- "meeting", "article", "doc", "conversation", "import"
-    source_ref    TEXT NOT NULL,                     -- meeting ID, URL, file path, etc.
-    pages_updated TEXT NOT NULL DEFAULT '[]',        -- JSON array of page slugs
-    summary       TEXT NOT NULL DEFAULT '',
-    completed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
--- Fully transactional idempotency protocol:
---   1. BEGIN TRANSACTION
---   2. SELECT ingest_key WHERE ingest_key = ? → if row exists, ROLLBACK and skip (already done)
---   3. Run all mutations (page puts, links, timeline, assertions, embeddings)
---   4. INSERT ingest_log row (inside the same transaction)
---   5. COMMIT
--- The ingest_log row is written atomically with all mutations. If the process
--- crashes before COMMIT, the entire transaction rolls back — including the
--- ingest_log row — so the key never appears and the retry starts clean.
--- No stale-row reclamation needed. No two-phase protocol. Just SQLite ACID.
+-- Single-file ingest treats an exact `raw_imports.raw_bytes` match as already
+-- ingested unless `--force` is used. Content-changing writes rotate the active
+-- `raw_imports` row in the same transaction, preserving exactly one active
+-- source snapshot per page for restore/export while bounded retention keeps
+-- older inactive rows available for forensics.
 
 -- ============================================================
 -- config: brain-level settings
@@ -709,9 +695,9 @@ COMMANDS:
 # Create a new memory store
 $ quaid init ~/.quaid/memory.db
 
-# Import existing markdown directory
-$ quaid import /data/brain/ --db ~/.quaid/memory.db
-Importing 7,471 files...
+# Attach and sync an existing markdown directory
+$ quaid collection add brain /data/brain/ --db ~/.quaid/memory.db
+Initial sync walking 7,471 files...
   people:    1,222 pages
   companies:   847 pages
   deals:       234 pages
@@ -1082,13 +1068,13 @@ Source document (meeting notes, article, transcript)
     quaid ingest <file> --type meeting
             │
             ├─→ Begin ingest transaction
-            │     - Compute stable ingest key: SHA-256(source file content)
-            │     - BEGIN TRANSACTION
-            │     - SELECT from ingest_log WHERE ingest_key = ? → if exists, ROLLBACK + skip
+            │     - Compute exact-byte duplicate check from `raw_imports.raw_bytes`
+            │     - BEGIN IMMEDIATE TRANSACTION
+            │     - SELECT from raw_imports WHERE raw_bytes = ? → if exists, refresh source path + COMMIT
             │     - All writes below happen inside this transaction
-            │     - ingest_log row is INSERT'd at the end, inside the same transaction
-            │     - COMMIT writes everything atomically (mutations + log row)
-            │     - Crash before COMMIT → full rollback, key never persists, retry starts clean
+            │     - `rotate_active_raw_import()` writes the active source row before COMMIT
+            │     - COMMIT writes everything atomically (page mutation + active source row)
+            │     - Crash before COMMIT → full rollback, retry starts clean
             │
             ├─→ Parse source (Claude Code reads ingest/SKILL.md, follows workflow)
             │     - Identify: participants, companies, topics, decisions, action items
@@ -1125,7 +1111,7 @@ Source document (meeting notes, article, transcript)
             ├─→ Update embeddings for modified pages
             │     quaid embed <slug>   (or --stale to batch)
             │
-            ├─→ Auto-log to ingest_log table (keyed by ingest SHA)
+            ├─→ Rotate active `raw_imports` row (exact bytes + source path)
             │
             └─→ Commit transaction
 ```
@@ -1165,7 +1151,7 @@ Importing an existing markdown brain (7,471 files at `/data/brain/`):
 
 ### Type mapping
 
-`quaid import` resolves page types in three tiers:
+Markdown ingest resolves page types in three tiers:
 
 1. **Frontmatter `type:` wins** when present and non-blank.
 2. **Top-level folder inference** applies when `type:` is absent, blank, or null.
@@ -1275,13 +1261,13 @@ Chunks `timeline` at individual entries — each `- **YYYY-MM-DD**` line becomes
 # Count links vs parsed wiki links — must match
 # Spot-check 10 random pages: export → diff against original
 # Report any discrepancies
-$ quaid import /data/brain/ --validate-only   # dry-run validation without writing
+$ quaid collection add brain /data/brain/ --db ~/.quaid/memory.db   # attach + initial sync in a scratch DB
 ```
 
 ### Special files
 
 - `index.md` → stored in `config` table as `original_index`
-- `log.md` → parsed and inserted into `ingest_log` table
+- `log.md` → imported as a normal page if present
 - `schema.md` → stored in `config` table as `original_schema`
 - `README.md` → ignored during import
 
@@ -1418,7 +1404,7 @@ description: |
      `quaid timeline-add <slug> --date YYYY-MM-DD --summary "..." --source "meeting/123"`
 
 6. **Log the ingest.**
-   - The system auto-logs to ingest_log. Verify with `quaid stats`.
+   - The system rotates `raw_imports` for the active source. Verify with `quaid stats` and `quaid export`.
 
 7. **Refresh embeddings.**
    - After all puts: `quaid embed --stale`
@@ -2081,7 +2067,7 @@ description: |
    in the working directory override embedded defaults.
    `quaid skills doctor` — verify resolution order and content hashes.
 
-7. **Verify round-trip:** `quaid import --validate-only` if upgrading from a version
+7. **Verify round-trip:** re-attach the exported markdown in a scratch DB if upgrading from a version
    with schema changes. Confirms no data loss.
 
 8. **Clean up:** Remove staging file and rollback binary if everything passed.
@@ -2196,7 +2182,7 @@ quaid/
 │   │   ├── palace.rs       # derive_wing(slug), derive_room(content), classify_intent(query)
 │   │   ├── markdown.rs     # parse_frontmatter(), split_content(), extract_summary(), render_page()
 │   │   ├── links.rs        # extract_links(), resolve_slug(), temporal validity
-│   │   ├── migrate.rs      # import_dir(), export_dir(), validate_roundtrip()
+│   │   ├── migrate.rs      # export_dir() + round-trip export helpers
 │   │   └── types.rs        # Page, Link, Tag, TimelineEntry, SearchResult, Contradiction, KnowledgeGap, etc.
 │   ├── mcp/
 │   │   ├── mod.rs
@@ -2445,7 +2431,7 @@ The smallest thing that proves the value proposition:
 - Candle embeddings + sqlite-vec (`quaid embed`, `quaid query`)
 - SMS exact-match short-circuit
 - Basic set-union hybrid search (no palace filtering yet)
-- `quaid import` / `quaid export` (normalized only)
+- `quaid collection add` / `quaid export` (normalized round-trip)
 - `quaid compact` (WAL checkpoint)
 - MCP server with `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 - Transactional ingest with idempotency
@@ -2531,8 +2517,8 @@ The smallest thing that proves the value proposition:
 
 - [ ] `src/core/links.rs` — extract wiki-links from markdown, resolve slugs, temporal validity management
 - [ ] `src/core/novelty.rs` — `check_novelty()`: Jaccard similarity + cosine similarity dedup
-- [ ] `src/core/migrate.rs` — `import_dir()`: recursive scan, parse, transaction insert, validate (populate wing/room/summary during import)
-- [ ] `src/commands/import.rs` — full migration command (derive palace metadata for all imported pages)
+- [ ] `src/core/reconciler.rs` + `src/commands/collection.rs` — recursive walk, attach/sync, and transactional page upsert
+- [ ] `src/commands/collection.rs` — collection add/sync surface (derive metadata during reconcile)
 - [ ] `src/commands/export.rs` — reconstruct markdown directory
 - [ ] `tests/roundtrip_semantic.rs` — import → normalized export → semantic validate (primary correctness test)
 - [ ] `tests/roundtrip_raw.rs` — import → `export --raw --import-id` → byte-exact diff
@@ -2547,7 +2533,7 @@ The smallest thing that proves the value proposition:
 - [ ] `src/mcp/server.rs` — MCP stdio server with all tools (including `memory_graph`, `memory_gap`, `memory_gaps`, `memory_check`, progressive `memory_query`, temporal `memory_backlinks`)
 - [ ] `src/commands/serve.rs` — start MCP server
 
-**Checkpoint:** `quaid import /data/brain/` completes with zero diff (palace metadata populated). `quaid ingest` rejects duplicates (Jaccard > 0.85). `quaid check --all` detects temporal contradictions. `quaid graph people/pedro-franceschi --depth 2` returns the 2-hop neighborhood as JSON. `quaid serve` connects to Claude Code with all 20 MCP tools.
+**Checkpoint:** `quaid collection add brain /data/brain/` completes the initial sync with zero page loss. `quaid ingest` rejects duplicate exact-byte replays. `quaid check --all` detects temporal contradictions. `quaid graph people/pedro-franceschi --depth 2` returns the 2-hop neighborhood as JSON. `quaid serve` connects to Claude Code with all 20 MCP tools.
 
 ### Week 4 - Polish + Release
 
@@ -2561,7 +2547,7 @@ The smallest thing that proves the value proposition:
 - [ ] `skills/` markdown files finalized (four-tier consolidation + source attribution + filing disambiguation in ingest, palace-aware query, contradiction-aware maintain/briefing, alerts, research, upgrade)
 - [ ] `CLAUDE.md`, `AGENTS.md`, `README.md`
 - [ ] CI/CD: `cargo test` + cross-compile matrix → GitHub Releases
-- [ ] `quaid import --validate-only` dry-run mode
+- [ ] richer `quaid collection sync` validation / reporting output
 - [ ] `quaid embed --stale` incremental re-embedding
 
 **Checkpoint:** Full test suite passes. Cross-compiled binaries on GitHub Releases. Round-trip validated against production brain. Contradiction detection runs clean on imported data.
@@ -2604,8 +2590,8 @@ The smallest thing that proves the value proposition:
   - Run 100 queries against imported corpus → measure p50/p95 latency (target: p95 < 250ms)
 - [ ] **Concurrency and crash-safety stress tests** — CI gate for safety invariants.
   - Parallel writers: 4 threads calling `memory_put` on the same slug with stale `expected_version` → all but one must get ConflictError, zero data corruption
-  - Overlapping ingest: 2 threads ingesting the same source simultaneously → exactly one succeeds (idempotency key), zero duplicate timeline/assertion rows
-  - Kill-before-commit: start ingest, `kill -9` before COMMIT, retry → clean state, no partial mutations, ingest_log has no stale rows
+  - Overlapping ingest: 2 threads ingesting the same source simultaneously → one write, one exact-byte short-circuit, zero duplicate timeline/assertion rows
+  - Kill-before-commit: start ingest, `kill -9` before COMMIT, retry → clean state, no partial mutations, `raw_imports` never ends with multiple active rows
   - WAL compact under load: run `quaid compact` while a reader holds an open query → compact succeeds, reader gets consistent snapshot
   - Invariants: monotonic `pages.version`, no lost timeline rows, no duplicate side-table rows across all stress scenarios
 - [ ] **Embedding model migration correctness** — CI gate for vec search contract.
@@ -2747,7 +2733,7 @@ This is worth calling out because the "separate graph + vector store" problem is
 
 ### No file watcher (v1)
 
-The brain is written by AI agents using the CLI or MCP. There's no "file on disk changed" event to watch for. `quaid import` and `quaid put` are explicit writes. A `quaid watch` command that syncs a markdown directory to the DB is a v2 feature.
+The brain is written by AI agents using the CLI or MCP. Vault-backed workflows now attach directories with `quaid collection add` and stay fresh through `quaid serve` on Unix platforms, while `quaid ingest` and `quaid put` remain the explicit single-file write surfaces.
 
 ---
 
@@ -2972,4 +2958,3 @@ LLM-assisted cross-page checks happen via the maintain skill. Binary stays dumb.
 ---
 
 *This spec is designed to stand alone. Everything needed to build Quaid is above — no prior context required. It is explicitly inspired by Garry Tan's compiled-knowledge model work while pursuing a Rust + SQLite implementation with different deployment trade-offs. v4 integrates memory research from MemPalace, OMNIMEM, and agentmemory, plus community research and Garry Tan's v0.8.0 skillpack analysis. Architecture additions: knowledge gap detection, graph traversal, source attribution standards, filing disambiguation, and three new skills (alerts, research, upgrade).*
-

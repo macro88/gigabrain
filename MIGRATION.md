@@ -124,9 +124,12 @@ The internal configuration table was renamed and `SCHEMA_VERSION` was bumped to 
    ```bash
    quaid init ~/.quaid/memory.db
    ```
-4. Import the exported pages:
+4. Re-ingest the exported pages with the current workflow:
    ```bash
-   quaid import <backup-directory>/ --db ~/.quaid/memory.db
+   # Unix/macOS/Linux: attach the exported tree as a collection
+   quaid collection add migrated <backup-directory> --db ~/.quaid/memory.db
+
+   # Any platform: or loop over files with `quaid ingest`
    ```
 
 > **What survives the round-trip:** page content, links, tags, and timeline entries.

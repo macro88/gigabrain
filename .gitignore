@@ -35,3 +35,5 @@ packages/quaid-npm/bin/quaid.bin
 packages/quaid-npm/bin/quaid.download
 
 .pnpm-store/
+
+*.profraw

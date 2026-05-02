@@ -38,9 +38,10 @@ memory.db                  — SQLite: pages + FTS5 + vec0 + links + assertions
 | `src/core/gaps.rs` | `log_gap()`, `list_gaps()`, `resolve_gap()` |
 | `src/core/chunking.rs` | temporal sub-chunking: truth sections + individual timeline entries |
 | `src/core/links.rs` | `extract_links()`, `resolve_slug()`, temporal validity |
-| `src/core/migrate.rs` | `import_dir()`, `export_dir()`, `validate_roundtrip()` |
+| `src/core/migrate.rs` | `export_dir()` plus round-trip export helpers |
+| `src/core/raw_imports.rs` | Active-source rotation, retention, and byte-exact restore support |
 | `src/mcp/server.rs` | MCP stdio server with all tools |
-| `src/schema.sql` | v4 DDL — embedded via `include_str!()` |
+| `src/schema.sql` | Current DDL — embedded via `include_str!()` |
 
 ## Build
 
@@ -94,7 +95,7 @@ Drop a custom `SKILL.md` in your working directory to override any default.
 
 ## Database schema
 
-See `src/schema.sql` for the full v4 DDL. Key tables:
+See `src/schema.sql` for the current DDL. Key tables:
 - `pages` — core content (compiled_truth + timeline markdown)
 - `page_fts` — FTS5 virtual table (content-rowid, porter tokenizer)
 - `quaid_config` — persisted `model_id`, `model_alias`, `embedding_dim`, `schema_version`
@@ -103,7 +104,7 @@ See `src/schema.sql` for the full v4 DDL. Key tables:
 - `links` — typed temporal cross-references
 - `assertions` — heuristic contradiction detection
 - `knowledge_gaps` — queries the brain couldn't answer
-- `ingest_log` — SHA-256 idempotency audit trail
+- `raw_imports` — active source bytes plus bounded inactive history for byte-exact restore
 
 ## MCP tools
 

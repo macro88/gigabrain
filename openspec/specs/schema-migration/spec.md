@@ -34,9 +34,9 @@ The `dirs::home_dir()` lookup in `src/core/db.rs` (or wherever the default path 
 ```
 Error: database schema version mismatch.
   Found version N, expected M.
-  To migrate: export your data with the previous binary version, then run:
+  To migrate: export your data with the previous binary version, then re-ingest it with the current workflow:
     quaid init ~/.quaid/memory.db
-    quaid import <export-directory>
+    quaid collection add migrated <export-directory>
 ```
 
 No fallback, no silent upgrade, no legacy configuration table alias reading.

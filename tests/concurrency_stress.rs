@@ -15,8 +15,8 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use quaid::commands::ingest;
 use quaid::core::db;
-use quaid::core::migrate::import_dir;
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -151,17 +151,18 @@ fn duplicate_ingest_from_two_threads_produces_one_row() {
     let (db_path, _guard) = temp_db_path();
     let db_path = Arc::new(db_path);
 
-    // Prepare a single-file fixture dir
+    // Prepare a single-file fixture
     let fixture_dir = tempfile::TempDir::new().expect("fixture dir");
+    let fixture_path = fixture_dir.path().join("alice.md");
     fs::write(
-        fixture_dir.path().join("alice.md"),
+        &fixture_path,
         "---\nslug: people/alice\ntitle: Alice\ntype: person\n---\n# Alice\n\nAlice is an operator.\n",
     )
     .expect("write fixture");
-    let fixture_dir = Arc::new(fixture_dir);
+    let fixture_path = Arc::new(fixture_path);
+    let _fixture_dir = fixture_dir;
 
     let barrier = Arc::new(Barrier::new(2));
-    let import_counts = Arc::new(Mutex::new(Vec::<usize>::new()));
 
     // Pre-open connections before barrier to avoid simultaneous schema writes
     let conn_a = open_conn(&db_path);
@@ -169,40 +170,30 @@ fn duplicate_ingest_from_two_threads_produces_one_row() {
 
     let handle_a = {
         let barrier = Arc::clone(&barrier);
-        let fixture_dir = Arc::clone(&fixture_dir);
-        let import_counts = Arc::clone(&import_counts);
+        let fixture_path = Arc::clone(&fixture_path);
         thread::spawn(move || {
             barrier.wait();
-            match import_dir(&conn_a, fixture_dir.path(), false) {
-                Ok(stats) => import_counts.lock().unwrap().push(stats.imported),
-                Err(_) => import_counts.lock().unwrap().push(0),
-            }
+            ingest::run(&conn_a, fixture_path.to_str().unwrap(), false)
         })
     };
 
     let handle_b = {
         let barrier = Arc::clone(&barrier);
-        let fixture_dir = Arc::clone(&fixture_dir);
-        let import_counts = Arc::clone(&import_counts);
+        let fixture_path = Arc::clone(&fixture_path);
         thread::spawn(move || {
             barrier.wait();
-            match import_dir(&conn_b, fixture_dir.path(), false) {
-                Ok(stats) => import_counts.lock().unwrap().push(stats.imported),
-                Err(_) => import_counts.lock().unwrap().push(0),
-            }
+            ingest::run(&conn_b, fixture_path.to_str().unwrap(), false)
         })
     };
 
-    handle_a.join().expect("thread A panicked");
-    handle_b.join().expect("thread B panicked");
-
-    // Verify: total imported across both threads ≤ 1 (idempotency + lock serialisation)
-    let counts = import_counts.lock().unwrap().clone();
-    let total_imported: usize = counts.iter().sum();
-    assert!(
-        total_imported <= 1,
-        "total imported across 2 threads should be ≤1 (idempotency prevents duplicate): got {counts:?}"
-    );
+    handle_a
+        .join()
+        .expect("thread A panicked")
+        .expect("thread A ingest should succeed");
+    handle_b
+        .join()
+        .expect("thread B panicked")
+        .expect("thread B ingest should succeed");
 
     // DB should have exactly 1 page regardless of which thread won
     let verify_conn = open_conn(&db_path);
@@ -211,13 +202,12 @@ fn duplicate_ingest_from_two_threads_produces_one_row() {
         .expect("count pages");
     assert_eq!(page_count, 1, "DB should have exactly 1 page");
 
-    // ingest_log should have at most 1 record
-    let log_count: i64 = verify_conn
-        .query_row("SELECT COUNT(*) FROM ingest_log", [], |row| row.get(0))
-        .expect("count ingest_log");
+    let raw_import_count: i64 = verify_conn
+        .query_row("SELECT COUNT(*) FROM raw_imports", [], |row| row.get(0))
+        .expect("count raw_imports");
     assert!(
-        log_count <= 1,
-        "ingest_log should have at most 1 record, got {log_count}"
+        raw_import_count <= 1,
+        "raw_imports should have at most 1 record, got {raw_import_count}"
     );
 }
 
