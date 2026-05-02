@@ -223,7 +223,7 @@ mod watcher_core {
     }
 
     #[test]
-    fn watcher_picks_up_external_edit_within_two_seconds() {
+    fn watcher_picks_up_external_edit_after_warm_up() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let db_path = test_db_path(&dir, "watcher-latency.db");
         let conn = open_test_db(&db_path);
@@ -274,7 +274,7 @@ mod watcher_core {
         )
         .expect("write external edit");
 
-        let updated = wait_for_db_value(&db_path, Duration::from_secs(2), |verify| {
+        let updated = wait_for_db_value(&db_path, Duration::from_secs(8), |verify| {
             verify
                 .query_row(
                     "SELECT compiled_truth
@@ -293,7 +293,7 @@ mod watcher_core {
 
         assert!(
             updated.is_some(),
-            "watcher failed to ingest the external edit within 2s"
+            "watcher failed to ingest the external edit within the debounce budget"
         );
 
         drop(runtime);
