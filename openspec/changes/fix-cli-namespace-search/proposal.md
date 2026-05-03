@@ -72,3 +72,12 @@ but it is not the CLI read default or explicit CLI namespace behavior.
 - No release-channel-specific behavior: airgapped and online binaries compile the same
   CLI and FTS5 namespace filtering code. The model feature flags only affect embedding
   loading and vector search, not `quaid search`.
+
+## Related
+
+- GitHub issue #145 (the bug this fixes)
+- GitHub issue #146 (closed: `quaid import --namespace` missing flag) — **moot** as of
+  vault-sync Batch 7 (PR #144), which removed `src/commands/import.rs`. Pages are now
+  added via `quaid collection add`, which already has `--namespace` support.
+  The removal of `quaid import` is a breaking CLI change that should be retroactively
+  specced under the vault-sync-engine change or a new standalone spec.
