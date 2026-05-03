@@ -77,7 +77,6 @@ but it is not the CLI read default or explicit CLI namespace behavior.
 
 - GitHub issue #145 (the bug this fixes)
 - GitHub issue #146 (closed: `quaid import --namespace` missing flag) — **moot** as of
-  vault-sync Batch 7 (PR #144), which removed `src/commands/import.rs`. Pages are now
-  added via `quaid collection add`, which already has `--namespace` support.
-  The removal of `quaid import` is a breaking CLI change that should be retroactively
-  specced under the vault-sync-engine change or a new standalone spec.
+  vault-sync Batch 7 (PR #144), which removed `src/commands/import.rs`. This removal is
+  covered by the `vault-sync-engine` OpenSpec (§15 / end-state: `quaid import` is removed,
+  `quaid collection add` is the supported ingest surface). No retroactive spec needed.
