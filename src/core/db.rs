@@ -330,6 +330,7 @@ fn rebuild_pages_with_namespace_unique(conn: &Connection) -> Result<(), DbError>
              frontmatter     TEXT    NOT NULL DEFAULT '{}',
              wing            TEXT    NOT NULL DEFAULT '',
              room            TEXT    NOT NULL DEFAULT '',
+             superseded_by   INTEGER DEFAULT NULL REFERENCES pages(id),
              version         INTEGER NOT NULL DEFAULT 1,
              quarantined_at  TEXT    DEFAULT NULL,
              created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -340,13 +341,13 @@ fn rebuild_pages_with_namespace_unique(conn: &Connection) -> Result<(), DbError>
          );
          INSERT INTO pages_new (
              id, collection_id, namespace, slug, uuid, type, title, summary,
-             compiled_truth, timeline, frontmatter, wing, room, version,
+             compiled_truth, timeline, frontmatter, wing, room, superseded_by, version,
              quarantined_at, created_at, updated_at, truth_updated_at,
              timeline_updated_at
          )
          SELECT
              id, collection_id, namespace, slug, uuid, type, title, summary,
-             compiled_truth, timeline, frontmatter, wing, room, version,
+             compiled_truth, timeline, frontmatter, wing, room, superseded_by, version,
              quarantined_at, created_at, updated_at, truth_updated_at,
              timeline_updated_at
          FROM pages;
@@ -1009,6 +1010,7 @@ mod tests {
             "contradictions",
             "embedding_jobs",
             "embedding_models",
+            "extraction_queue",
             "file_state",
             "import_manifest",
             "knowledge_gaps",
@@ -1042,6 +1044,139 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 8);
+    }
+
+    #[test]
+    fn fresh_v8_schema_includes_conversation_memory_artifacts_and_defaults() {
+        let conn = open(":memory:").unwrap();
+
+        let page_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(pages)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(page_columns.contains(&"superseded_by".to_string()));
+
+        let page_foreign_keys: Vec<(String, String)> = conn
+            .prepare("PRAGMA foreign_key_list(pages)")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(2)?, row.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(page_foreign_keys.contains(&("pages".to_string(), "superseded_by".to_string())));
+
+        let supersede_index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_pages_supersede_head'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(supersede_index_sql.contains("WHERE superseded_by IS NULL"));
+
+        let session_index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_pages_session'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(session_index_sql.contains("json_valid(frontmatter)"));
+        assert!(session_index_sql.contains("$.session_id"));
+
+        let queue_table_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'extraction_queue'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(queue_table_sql.contains("trigger_kind IN ('debounce', 'session_close', 'manual')"));
+        assert!(queue_table_sql.contains("status IN ('pending', 'running', 'done', 'failed')"));
+
+        let pending_index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_extraction_queue_pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(pending_index_sql.contains("WHERE status = 'pending'"));
+
+        let config_rows: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT key, value FROM config
+                 WHERE key IN ('version', 'memory.location', 'corrections.history_on_disk', 'extraction.max_retries')
+                 ORDER BY key",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            config_rows,
+            vec![
+                (
+                    "corrections.history_on_disk".to_string(),
+                    "false".to_string()
+                ),
+                ("extraction.max_retries".to_string(), "3".to_string()),
+                ("memory.location".to_string(), "vault-subdir".to_string()),
+                ("version".to_string(), "8".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fresh_v8_schema_enforces_superseded_by_foreign_key() {
+        let conn = open(":memory:").unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO pages
+                     (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, superseded_by, version)
+                 VALUES ('notes/invalid-supersede', ?1, 'concept', 'Invalid', '', '', '', '{}', 'notes', '', 9999, 1)",
+                [uuid::Uuid::now_v7().to_string()],
+            )
+            .expect_err("invalid superseded_by should fail");
+
+        assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
+    }
+
+    #[test]
+    fn fresh_v8_schema_rejects_invalid_extraction_queue_trigger_kind() {
+        let conn = open(":memory:").unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO extraction_queue
+                     (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, status)
+                 VALUES ('s1', 'conversations/2026-05-04/s1.md', 'arbitrary', '2026-05-04T00:00:00Z', '2026-05-04T00:00:05Z', 'pending')",
+                [],
+            )
+            .expect_err("invalid trigger_kind should fail");
+
+        assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
+    }
+
+    #[test]
+    fn fresh_v8_schema_rejects_invalid_extraction_queue_status() {
+        let conn = open(":memory:").unwrap();
+
+        let err = conn
+            .execute(
+                "INSERT INTO extraction_queue
+                     (session_id, conversation_path, trigger_kind, enqueued_at, scheduled_for, status)
+                 VALUES ('s1', 'conversations/2026-05-04/s1.md', 'debounce', '2026-05-04T00:00:00Z', '2026-05-04T00:00:05Z', 'queued')",
+                [],
+            )
+            .expect_err("invalid status should fail");
+
+        assert!(matches!(err, rusqlite::Error::SqliteFailure(_, _)));
     }
 
     #[test]
@@ -1251,6 +1386,7 @@ mod tests {
                  frontmatter     TEXT    NOT NULL DEFAULT '{}',
                  wing            TEXT    NOT NULL DEFAULT '',
                  room            TEXT    NOT NULL DEFAULT '',
+                 superseded_by   INTEGER DEFAULT NULL REFERENCES pages(id),
                  version         INTEGER NOT NULL DEFAULT 1,
                  quarantined_at  TEXT    DEFAULT NULL,
                  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -1304,16 +1440,16 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_legacy_database_before_creating_v8_tables() {
+    fn open_with_model_rejects_v7_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 5);
+        seed_existing_db(&db_path, 7);
 
         let err = open_with_model(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 5, expected 8"));
+        assert!(err.to_string().contains("Found version 7, expected 8"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -1324,14 +1460,14 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(stored_version, "5");
+        assert_eq!(stored_version, "7");
     }
 
     #[test]
-    fn init_rejects_legacy_database_before_creating_v8_tables() {
+    fn init_rejects_v7_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
-        seed_existing_db(&db_path, 5);
+        seed_existing_db(&db_path, 7);
 
         let err = init(db_path.to_str().unwrap(), &default_model())
             .expect_err("legacy database should be refused");
@@ -1347,7 +1483,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(config_version, "5");
+        assert_eq!(config_version, "7");
     }
 
     #[test]

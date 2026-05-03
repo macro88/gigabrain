@@ -1,17 +1,17 @@
 ## 1. Pre-release schema reset to v8
 
-- [ ] 1.1 Update `src/schema.sql`: add `pages.superseded_by INTEGER REFERENCES pages(id)` (nullable)
-- [ ] 1.2 Add partial index `idx_pages_supersede_head ON pages(kind, superseded_by) WHERE superseded_by IS NULL`
-- [ ] 1.3 Add partial index `idx_pages_session ON pages(json_extract(frontmatter, '$.session_id')) WHERE json_extract(frontmatter, '$.session_id') IS NOT NULL`
-- [ ] 1.4 Add `extraction_queue` table with columns and CHECK constraints per spec, plus `idx_extraction_queue_pending ON (status, scheduled_for) WHERE status = 'pending'`
-- [ ] 1.5 Seed config defaults in the existing `config` table: `memory.location='vault-subdir'`, `corrections.history_on_disk='false'`, `extraction.max_retries='3'`
-- [ ] 1.6 Bump `SCHEMA_VERSION`, `quaid_config.schema_version`, and schema-version tests to `8`
-- [ ] 1.7 Verify no v7 → v8 migration or rollback path is added; existing v7 DBs continue to fail with the schema-mismatch/re-init message
-- [ ] 1.8 Unit tests: fresh v8 schema accepts all four new artefacts; v7 DB rejected at open; foreign-key reference on `superseded_by` enforced; CHECK constraints on `extraction_queue.trigger_kind` and `.status` enforced
+- [x] 1.1 Update `src/schema.sql`: add `pages.superseded_by INTEGER REFERENCES pages(id)` (nullable)
+- [x] 1.2 Add partial index `idx_pages_supersede_head ON pages(kind, superseded_by) WHERE superseded_by IS NULL`
+- [x] 1.3 Add partial index `idx_pages_session ON pages(json_extract(frontmatter, '$.session_id')) WHERE json_extract(frontmatter, '$.session_id') IS NOT NULL`
+- [x] 1.4 Add `extraction_queue` table with columns and CHECK constraints per spec, plus `idx_extraction_queue_pending ON (status, scheduled_for) WHERE status = 'pending'`
+- [x] 1.5 Seed config defaults in the existing `config` table: `memory.location='vault-subdir'`, `corrections.history_on_disk='false'`, `extraction.max_retries='3'`
+- [x] 1.6 Bump `SCHEMA_VERSION`, `quaid_config.schema_version`, and schema-version tests to `8`
+- [x] 1.7 Verify no v7 → v8 migration or rollback path is added; existing v7 DBs continue to fail with the schema-mismatch/re-init message
+- [x] 1.8 Unit tests: fresh v8 schema accepts all four new artefacts; v7 DB rejected at open; foreign-key reference on `superseded_by` enforced; CHECK constraints on `extraction_queue.trigger_kind` and `.status` enforced
 
 ## 2. ADD-only supersede chain — page-level support
 
-- [ ] 2.1 Add `superseded_by: Option<i64>` to `Page` (or equivalent) in `src/core/types.rs`
+- [x] 2.1 Add `superseded_by: Option<i64>` to `Page` (or equivalent) in `src/core/types.rs`
 - [ ] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)
 - [ ] 2.3 Reject writes that attempt to supersede an already-superseded (non-head) page; return a typed error to the caller
 - [ ] 2.4 Update `src/core/migrate.rs` import path to round-trip `superseded_by` correctly via frontmatter `supersedes`

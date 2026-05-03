@@ -59,7 +59,7 @@ pub fn get_page_by_key_with_namespace(
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let mut sql = String::from(
         "SELECT slug, uuid, type, title, summary, compiled_truth, timeline, \
-                frontmatter, wing, room, version, created_at, updated_at, \
+                frontmatter, wing, room, superseded_by, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
            FROM pages WHERE collection_id = ?1 AND slug = ?2",
     );
@@ -104,6 +104,7 @@ pub fn get_page_by_key_with_namespace(
                 )
             })?,
             page_type: row.get(2)?,
+            superseded_by: row.get(10)?,
             title: row.get(3)?,
             summary: row.get(4)?,
             compiled_truth: row.get(5)?,
@@ -111,11 +112,11 @@ pub fn get_page_by_key_with_namespace(
             frontmatter,
             wing: row.get(8)?,
             room: row.get(9)?,
-            version: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
-            truth_updated_at: row.get(13)?,
-            timeline_updated_at: row.get(14)?,
+            version: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
+            truth_updated_at: row.get(14)?,
+            timeline_updated_at: row.get(15)?,
         })
     });
 

@@ -15,6 +15,7 @@ pub struct Page {
     pub uuid: String,
     #[serde(rename = "type")]
     pub page_type: String,
+    pub superseded_by: Option<i64>,
     pub title: String,
     pub summary: String,
     pub compiled_truth: String,
@@ -211,6 +212,7 @@ mod tests {
             slug: "people/alice".to_string(),
             uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
             page_type: "person".to_string(),
+            superseded_by: Some(42),
             title: "Alice".to_string(),
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
@@ -239,12 +241,14 @@ mod tests {
                 round_trip.slug,
                 round_trip.title,
                 round_trip.version,
+                round_trip.superseded_by,
                 round_trip.frontmatter.get("tags").cloned(),
             ),
             (
                 "people/alice".to_string(),
                 "Alice".to_string(),
                 7,
+                Some(42),
                 Some("operator, founder".to_string()),
             )
         );
@@ -256,6 +260,7 @@ mod tests {
             slug: "people/alice".to_string(),
             uuid: "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
             page_type: "person".to_string(),
+            superseded_by: None,
             title: "Alice".to_string(),
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
@@ -283,5 +288,33 @@ mod tests {
             round_trip.frontmatter.get("quaid_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
+    }
+
+    #[test]
+    fn page_serde_defaults_missing_superseded_by_for_legacy_payloads() {
+        let page: Page = serde_json::from_str(
+            r#"{
+                "slug":"people/alice",
+                "uuid":"0195c7c0-2d06-7df0-bf59-acde48001122",
+                "type":"person",
+                "title":"Alice",
+                "summary":"Operator",
+                "compiled_truth":"Alice runs ops.",
+                "timeline":"",
+                "frontmatter":{"title":"Alice"},
+                "wing":"people",
+                "room":"",
+                "version":7,
+                "created_at":"2026-04-15T00:00:00Z",
+                "updated_at":"2026-04-15T00:00:00Z",
+                "truth_updated_at":"2026-04-15T00:00:00Z",
+                "timeline_updated_at":"2026-04-15T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(page.superseded_by, None);
+        assert_eq!(page.slug, "people/alice");
+        assert_eq!(page.page_type, "person");
     }
 }

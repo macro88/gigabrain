@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS pages (
     frontmatter     TEXT    NOT NULL DEFAULT '{}',
     wing            TEXT    NOT NULL DEFAULT '',
     room            TEXT    NOT NULL DEFAULT '',
+    superseded_by   INTEGER DEFAULT NULL REFERENCES pages(id),
     version         INTEGER NOT NULL DEFAULT 1,
     quarantined_at  TEXT    DEFAULT NULL,
     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -120,6 +121,12 @@ CREATE INDEX IF NOT EXISTS idx_pages_updated  ON pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_pages_wing     ON pages(wing);
 CREATE INDEX IF NOT EXISTS idx_pages_wing_room ON pages(wing, room);
 CREATE INDEX IF NOT EXISTS idx_pages_quarantined ON pages(quarantined_at) WHERE quarantined_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pages_supersede_head
+    ON pages(type, superseded_by) WHERE superseded_by IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pages_session
+    ON pages(json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id'))
+    WHERE json_valid(frontmatter)
+      AND json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id') IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS namespaces (
     id         TEXT PRIMARY KEY,
@@ -376,6 +383,25 @@ CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue
     ON embedding_jobs(job_state, priority DESC, enqueued_at);
 
 -- ============================================================
+-- extraction_queue: queued conversation extraction jobs
+-- ============================================================
+CREATE TABLE IF NOT EXISTS extraction_queue (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id        TEXT    NOT NULL,
+    conversation_path TEXT    NOT NULL,
+    trigger_kind      TEXT    NOT NULL CHECK(trigger_kind IN ('debounce', 'session_close', 'manual')),
+    enqueued_at       TEXT    NOT NULL,
+    scheduled_for     TEXT    NOT NULL,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT    DEFAULT NULL,
+    status            TEXT    NOT NULL DEFAULT 'pending'
+                            CHECK(status IN ('pending', 'running', 'done', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_queue_pending
+    ON extraction_queue(status, scheduled_for) WHERE status = 'pending';
+
+-- ============================================================
 -- config: mutable runtime defaults
 -- ============================================================
 CREATE TABLE IF NOT EXISTS config (
@@ -389,7 +415,10 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),
     ('search_merge_strategy', 'set-union'),
-    ('default_token_budget',  '4000');
+    ('default_token_budget',  '4000'),
+    ('memory.location',       'vault-subdir'),
+    ('corrections.history_on_disk', 'false'),
+    ('extraction.max_retries', '3');
 
 -- ============================================================
 -- contradictions: detected inconsistencies

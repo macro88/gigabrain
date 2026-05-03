@@ -72,7 +72,7 @@ fn validate_roundtrip(db: &Connection, output_path: &Path) -> Result<()> {
 fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
     let mut stmt = db.prepare(
         "SELECT slug, type, title, summary, compiled_truth, timeline, \
-                uuid, frontmatter, wing, room, version, created_at, updated_at, \
+                uuid, frontmatter, wing, room, superseded_by, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
          FROM pages ORDER BY slug",
     )?;
@@ -92,6 +92,7 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
                 )
             })?,
             page_type: row.get(1)?,
+            superseded_by: row.get(10)?,
             title: row.get(2)?,
             summary: row.get(3)?,
             compiled_truth: row.get(4)?,
@@ -99,11 +100,11 @@ fn all_pages(db: &Connection) -> Result<Vec<crate::core::types::Page>> {
             frontmatter,
             wing: row.get(8)?,
             room: row.get(9)?,
-            version: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
-            truth_updated_at: row.get(13)?,
-            timeline_updated_at: row.get(14)?,
+            version: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
+            truth_updated_at: row.get(14)?,
+            timeline_updated_at: row.get(15)?,
         })
     })?;
 

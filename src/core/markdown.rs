@@ -440,6 +440,7 @@ mod tests {
                 slug: String::new(),
                 uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
                 page_type: String::new(),
+                superseded_by: None,
                 title: String::new(),
                 summary: String::new(),
                 compiled_truth: compiled_truth.to_string(),
