@@ -2,7 +2,7 @@
 name: quaid-ingest
 description: |
   Ingest meeting notes, articles, documents, and conversations into Quaid.
-  Handles idempotent ingestion with SHA-256 deduplication.
+  Handles idempotent ingestion for exact-byte duplicates and vault-backed sync.
 ---
 
 # Ingest Skill
@@ -10,8 +10,7 @@ description: |
 ## Overview
 
 The ingest skill processes raw source documents into structured brain pages.
-Each file is SHA-256 hashed for idempotent ingestion — re-ingesting the same
-file is a no-op unless `--force` is used.
+Re-ingesting the same exact bytes is a no-op unless `--force` is used.
 
 ## Commands
 
@@ -26,16 +25,15 @@ The file must be valid markdown with optional YAML frontmatter. Frontmatter
 fields `title`, `type`, `slug`, and `wing` are used if present; otherwise
 defaults are derived from the file name and content.
 
-### Batch import
+### Vault-backed batch ingest
 
 ```bash
-quaid import /path/to/directory/          # import all .md files
-quaid import /path/to/directory/ --validate-only  # parse-only, no writes
+quaid collection add notes /path/to/directory/
+quaid serve
 ```
 
-Walks the directory recursively for `.md` files. SHA-256 hashes are checked
-against the `import_hashes` table; already-imported files are skipped.
-After import, embeddings are automatically refreshed.
+`quaid collection add` performs the initial scan and attaches the directory as a
+live-sync collection. `quaid serve` keeps the index fresh on Unix platforms.
 
 ### Export
 
@@ -48,8 +46,8 @@ Files are written to `<output>/<slug>.md`, creating parent directories as needed
 
 ## Idempotency
 
-- SHA-256 of raw file bytes is the idempotency key
-- Stored in `import_hashes` table (source_hash, source_path, ingested_at)
+- Exact raw file bytes are the idempotency key for duplicate single-file ingest
+- Active source bytes and paths are stored in `raw_imports`
 - `--force` bypasses the hash check and re-ingests
 
 ## Frontmatter Handling

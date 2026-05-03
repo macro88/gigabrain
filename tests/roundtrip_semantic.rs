@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use quaid::commands::ingest;
 use quaid::core::db;
-use quaid::core::migrate::{export_dir, import_dir};
+use quaid::core::migrate::export_dir;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
@@ -14,6 +15,38 @@ fn open_test_db(path: &Path) -> Connection {
 fn page_count(conn: &Connection) -> usize {
     conn.query_row("SELECT COUNT(*) FROM pages", [], |row| row.get::<_, i64>(0))
         .unwrap() as usize
+}
+
+fn collect_markdown_files(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    files
+}
+
+fn ingest_markdown_tree(conn: &Connection, root: &Path) -> usize {
+    let mut imported = 0usize;
+    for file in collect_markdown_files(root) {
+        let before = page_count(conn);
+        ingest::run(conn, file.to_str().unwrap(), false).unwrap();
+        let after = page_count(conn);
+        imported += after.saturating_sub(before);
+    }
+    imported
 }
 
 fn exported_file_hashes(root: &Path) -> BTreeMap<String, String> {
@@ -51,10 +84,10 @@ fn import_export_reimport_preserves_page_count_and_rendered_content_hashes() {
 
     let source_db_dir = tempfile::TempDir::new().unwrap();
     let source_conn = open_test_db(&source_db_dir.path().join("source.db"));
-    let initial_stats = import_dir(&source_conn, &fixtures_dir, false).unwrap();
+    let initial_imported = ingest_markdown_tree(&source_conn, &fixtures_dir);
     let original_page_count = page_count(&source_conn);
 
-    assert_eq!(initial_stats.imported, original_page_count);
+    assert_eq!(initial_imported, original_page_count);
 
     let first_export_root = tempfile::TempDir::new().unwrap();
     let exported_count = export_dir(&source_conn, first_export_root.path()).unwrap();
@@ -63,7 +96,7 @@ fn import_export_reimport_preserves_page_count_and_rendered_content_hashes() {
 
     let roundtrip_db_dir = tempfile::TempDir::new().unwrap();
     let roundtrip_conn = open_test_db(&roundtrip_db_dir.path().join("roundtrip.db"));
-    import_dir(&roundtrip_conn, first_export_root.path(), false).unwrap();
+    ingest_markdown_tree(&roundtrip_conn, first_export_root.path());
     assert_eq!(page_count(&roundtrip_conn), original_page_count);
 
     let second_export_root = tempfile::TempDir::new().unwrap();

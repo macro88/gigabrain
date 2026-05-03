@@ -101,7 +101,8 @@ upgrade guide before shipping:
 - [ ] Env var prefix change documented: all environment variables are now `QUAID_*`. Any shell
   profile lines, CI secrets, or dotenv files using the old prefix must be updated manually.
 - [ ] DB migration path documented: existing databases are incompatible. Users must export with
-  the old binary, run `quaid init ~/.quaid/memory.db`, then `quaid import <backup/>`.
+  the old binary, run `quaid init ~/.quaid/memory.db`, then re-ingest the exported markdown
+  with the current workflow (`quaid collection add` on Unix/macOS/Linux, or `quaid ingest` per file).
   No automatic migration is provided.
 - [ ] npm package name change noted: `quaid` on npm is staged but **not yet in the public registry**. If a user previously installed under the pre-rename name, they should uninstall that package using npm, then install via the shell installer or GitHub Releases binary until npm is live. No `packages/quaid-npm/` gate applies to this release — npm publishing is a follow-on.
 
@@ -120,7 +121,7 @@ upgrade guide before shipping:
 
 | Role | Owner | Status |
 | ---- | ----- | ------ |
-| Launch wording and release copy | Zapp | ✅ Signed off |
+| Launch wording and release copy | Zapp | Pending current release review |
 | Hard-breaking rename migration gate | Zapp | N/A unless the current release carries `quaid-hard-rename` |
 | Release workflow assets and checksums | Fry | Pending workflow run + artifact verification |
-| Scope confirmed against approved proposal | Leela | Pending E.1 cargo test + E.4 DAB rerun |
+| Scope confirmed against approved proposal | Leela | Pending implementation, review, and coverage gate sign-off |

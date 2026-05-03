@@ -607,6 +607,20 @@ mod tests {
     }
 
     #[test]
+    fn schema_rejects_collection_name_with_double_colon() {
+        let conn = db::open(":memory:").unwrap();
+        let error = conn
+            .execute(
+                "INSERT INTO collections (name, root_path, state, writable, is_write_target)
+                 VALUES (?1, ?2, 'active', 1, 0)",
+                params!["work::notes", r"C:\vaults\work"],
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("cannot contain ::"));
+    }
+
+    #[test]
     fn validate_relative_path_rejects_traversal() {
         assert!(validate_relative_path("../etc/passwd").is_err());
         assert!(validate_relative_path("notes/../secrets").is_err());
@@ -800,6 +814,25 @@ mod tests {
         }
 
         #[test]
+        fn write_create_resolves_existing_owner_when_owner_is_write_target() {
+            let conn = open_resolution_db();
+            insert_collection(&conn, 10, "work", true);
+            insert_collection(&conn, 20, "memory", false);
+            insert_page(&conn, "work", "people/alice");
+
+            let resolution = parse_slug(&conn, "people/alice", OpKind::WriteCreate).unwrap();
+
+            assert_eq!(
+                resolution,
+                SlugResolution::Resolved {
+                    collection_id: 10,
+                    collection_name: "work".to_owned(),
+                    slug: "people/alice".to_owned(),
+                }
+            );
+        }
+
+        #[test]
         fn write_update_returns_not_found_when_bare_slug_has_no_owner() {
             let conn = open_resolution_db();
             insert_collection(&conn, 10, "work", true);
@@ -850,6 +883,25 @@ mod tests {
         }
 
         #[test]
+        fn write_update_resolves_unique_owner_even_when_it_is_not_write_target() {
+            let conn = open_resolution_db();
+            insert_collection(&conn, 10, "work", false);
+            insert_collection(&conn, 20, "memory", true);
+            insert_page(&conn, "work", "projects/vault-sync");
+
+            let resolution = parse_slug(&conn, "projects/vault-sync", OpKind::WriteUpdate).unwrap();
+
+            assert_eq!(
+                resolution,
+                SlugResolution::Resolved {
+                    collection_id: 10,
+                    collection_name: "work".to_owned(),
+                    slug: "projects/vault-sync".to_owned(),
+                }
+            );
+        }
+
+        #[test]
         fn write_admin_resolves_single_owner_without_using_write_target_rules() {
             let conn = open_resolution_db();
             insert_collection(&conn, 10, "work", false);
@@ -863,6 +915,22 @@ mod tests {
                 SlugResolution::Resolved {
                     collection_id: 10,
                     collection_name: "work".to_owned(),
+                    slug: "projects/vault-sync".to_owned(),
+                }
+            );
+        }
+
+        #[test]
+        fn write_admin_returns_not_found_when_bare_slug_has_no_owner() {
+            let conn = open_resolution_db();
+            insert_collection(&conn, 10, "work", false);
+            insert_collection(&conn, 20, "memory", true);
+
+            let resolution = parse_slug(&conn, "projects/vault-sync", OpKind::WriteAdmin).unwrap();
+
+            assert_eq!(
+                resolution,
+                SlugResolution::NotFound {
                     slug: "projects/vault-sync".to_owned(),
                 }
             );

@@ -12,7 +12,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 8;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -114,9 +114,7 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
     if !existed_before || path == ":memory:" {
         let effective_model = hydrate_model_config(&requested_model)
             .map_err(|message| DbError::Schema { message })?;
-        ensure_embedding_model_registry(&conn, &effective_model)?;
-        write_quaid_config(&conn, &QuaidConfig::from_model(&effective_model))?;
-        sync_legacy_config(&conn, &effective_model)?;
+        persist_model_metadata(&conn, &effective_model)?;
         configure_runtime_model(effective_model.clone());
         return Ok(OpenDb {
             conn,
@@ -140,9 +138,11 @@ pub fn open_with_model(path: &str, requested_model: &ModelConfig) -> Result<Open
             stored.to_model_config()
         }
         None => {
-            return Err(DbError::Schema {
-                message: format_schema_reinit_message(0, path),
-            })
+            recover_crash_partial_fresh_db(&conn, &requested_model, path)?.ok_or_else(|| {
+                DbError::Schema {
+                    message: format_schema_reinit_message(0, path),
+                }
+            })?
         }
     };
 
@@ -171,6 +171,15 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     }
 
     if existed_before {
+        if let Some(recovered_model) =
+            recover_crash_partial_fresh_db(&conn, &requested_model, path)?
+        {
+            configure_runtime_model(recovered_model);
+            return Ok(conn);
+        }
+    }
+
+    if existed_before {
         return Err(DbError::Schema {
             message: format_schema_reinit_message(0, path),
         });
@@ -179,9 +188,7 @@ pub fn init(path: &str, requested_model: &ModelConfig) -> Result<Connection, DbE
     let selected_model =
         hydrate_model_config(&requested_model).map_err(|message| DbError::Schema { message })?;
 
-    ensure_embedding_model_registry(&conn, &selected_model)?;
-    write_quaid_config(&conn, &QuaidConfig::from_model(&selected_model))?;
-    sync_legacy_config(&conn, &selected_model)?;
+    persist_model_metadata(&conn, &selected_model)?;
     configure_runtime_model(selected_model);
     Ok(conn)
 }
@@ -221,13 +228,139 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     // Set busy timeout *before* schema DDL so concurrent opens don't race on the
     // write lock required by the initial PRAGMA + CREATE TABLE IF NOT EXISTS batch.
     conn.busy_timeout(Duration::from_secs(5))?;
+    ensure_namespace_schema(&conn)?;
     conn.execute_batch(include_str!("../schema.sql"))?;
     ensure_pages_update_trigger_handles_quarantine(&conn)?;
+    ensure_namespace_schema(&conn)?;
     ensure_collection_owner_columns(&conn)?;
+    ensure_serve_session_columns(&conn)?;
+    ensure_collection_name_guards(&conn)?;
+    ensure_raw_import_hash_schema(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
     Ok(conn)
+}
+
+fn ensure_namespace_schema(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "pages")? {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(pages)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    if !existing_columns.contains("namespace") {
+        conn.execute_batch("ALTER TABLE pages ADD COLUMN namespace TEXT NOT NULL DEFAULT '';")?;
+    }
+
+    if pages_needs_namespace_unique_rebuild(conn)? {
+        rebuild_pages_with_namespace_unique(conn)?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS namespaces (
+             id         TEXT PRIMARY KEY,
+             ttl_hours  REAL DEFAULT NULL,
+             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ) STRICT;
+         CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
+         DROP INDEX IF EXISTS idx_pages_collection_namespace_slug;",
+    )?;
+
+    Ok(())
+}
+
+fn pages_needs_namespace_unique_rebuild(conn: &Connection) -> Result<bool, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT name, origin
+         FROM pragma_index_list('pages')
+         WHERE \"unique\" = 1",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut has_namespace_table_constraint = false;
+    let mut has_legacy_slug_constraint = false;
+    for row in rows {
+        let (name, origin) = row?;
+        let columns = index_columns(conn, &name)?;
+        if columns == ["collection_id", "namespace", "slug"] && origin == "u" {
+            has_namespace_table_constraint = true;
+        }
+        if columns == ["collection_id", "slug"] {
+            has_legacy_slug_constraint = true;
+        }
+    }
+
+    Ok(has_legacy_slug_constraint || !has_namespace_table_constraint)
+}
+
+fn index_columns(conn: &Connection, index_name: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+    let columns = stmt
+        .query_map([index_name], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns)
+}
+
+fn rebuild_pages_with_namespace_unique(conn: &Connection) -> Result<(), DbError> {
+    let foreign_keys_enabled: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN;
+         DROP TRIGGER IF EXISTS pages_ai;
+         DROP TRIGGER IF EXISTS pages_ad;
+         DROP TRIGGER IF EXISTS pages_au;
+         CREATE TABLE pages_new (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+             namespace       TEXT    NOT NULL DEFAULT '',
+             slug            TEXT    NOT NULL,
+             uuid            TEXT    DEFAULT NULL,
+             type            TEXT    NOT NULL,
+             title           TEXT    NOT NULL,
+             summary         TEXT    NOT NULL DEFAULT '',
+             compiled_truth  TEXT    NOT NULL DEFAULT '',
+             timeline        TEXT    NOT NULL DEFAULT '',
+             frontmatter     TEXT    NOT NULL DEFAULT '{}',
+             wing            TEXT    NOT NULL DEFAULT '',
+             room            TEXT    NOT NULL DEFAULT '',
+             version         INTEGER NOT NULL DEFAULT 1,
+             quarantined_at  TEXT    DEFAULT NULL,
+             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+             UNIQUE(collection_id, namespace, slug)
+         );
+         INSERT INTO pages_new (
+             id, collection_id, namespace, slug, uuid, type, title, summary,
+             compiled_truth, timeline, frontmatter, wing, room, version,
+             quarantined_at, created_at, updated_at, truth_updated_at,
+             timeline_updated_at
+         )
+         SELECT
+             id, collection_id, namespace, slug, uuid, type, title, summary,
+             compiled_truth, timeline, frontmatter, wing, room, version,
+             quarantined_at, created_at, updated_at, truth_updated_at,
+             timeline_updated_at
+         FROM pages;
+         DROP TABLE pages;
+         ALTER TABLE pages_new RENAME TO pages;
+         COMMIT;",
+    )?;
+
+    if foreign_keys_enabled != 0 {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    conn.execute_batch("PRAGMA foreign_key_check;")?;
+
+    Ok(())
 }
 
 fn ensure_pages_update_trigger_handles_quarantine(conn: &Connection) -> Result<(), DbError> {
@@ -336,6 +469,105 @@ fn ensure_collection_owner_columns(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+fn ensure_serve_session_columns(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(serve_sessions)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    for (column_name, column_sql) in [(
+        "session_type",
+        "ALTER TABLE serve_sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'serve'",
+    )] {
+        if !existing_columns.contains(column_name) {
+            conn.execute_batch(column_sql)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_collection_name_guards(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS collections_name_reject_double_colon_insert
+         BEFORE INSERT ON collections
+         WHEN instr(NEW.name, '::') > 0
+         BEGIN
+             SELECT RAISE(ABORT, 'collections.name cannot contain ::');
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS collections_name_reject_double_colon_update
+         BEFORE UPDATE OF name ON collections
+         WHEN instr(NEW.name, '::') > 0
+         BEGIN
+             SELECT RAISE(ABORT, 'collections.name cannot contain ::');
+         END;",
+    )?;
+    Ok(())
+}
+
+fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "raw_imports")? {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(raw_imports)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    let mut added_content_hash = false;
+    if !existing_columns.contains("content_hash") {
+        conn.execute_batch(
+            "ALTER TABLE raw_imports ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';",
+        )?;
+        added_content_hash = true;
+    }
+
+    if !index_exists(conn, "idx_raw_imports_content_hash")? {
+        conn.execute_batch(
+            "CREATE INDEX idx_raw_imports_content_hash
+             ON raw_imports(content_hash)
+             WHERE content_hash != '';",
+        )?;
+    }
+
+    if !added_content_hash {
+        return Ok(());
+    }
+
+    const BACKFILL_BATCH_SIZE: i64 = 128;
+    loop {
+        let rows_to_backfill: Vec<(i64, Vec<u8>)> = conn
+            .prepare(
+                "SELECT id, raw_bytes
+                 FROM raw_imports
+                 WHERE content_hash = ''
+                 ORDER BY id
+                 LIMIT ?1",
+            )?
+            .query_map([BACKFILL_BATCH_SIZE], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+
+        if rows_to_backfill.is_empty() {
+            break;
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        for (id, raw_bytes) in rows_to_backfill {
+            tx.execute(
+                "UPDATE raw_imports
+                 SET content_hash = ?1
+                 WHERE id = ?2",
+                params![crate::core::raw_imports::content_hash_hex(&raw_bytes), id],
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    Ok(())
+}
+
 /// Ensure a collection with id=1 exists in the database.
 ///
 /// All legacy INSERT INTO pages statements that omit collection_id rely on
@@ -377,6 +609,147 @@ fn ensure_embedding_model_registry(conn: &Connection, model: &ModelConfig) -> Re
     tx.commit()?;
 
     Ok(())
+}
+
+fn persist_model_metadata(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
+    ensure_embedding_model_registry(conn, model)?;
+    write_quaid_config(conn, &QuaidConfig::from_model(model))?;
+    sync_legacy_config(conn, model)?;
+    Ok(())
+}
+
+fn recover_crash_partial_fresh_db(
+    conn: &Connection,
+    requested_model: &ModelConfig,
+    db_path: &str,
+) -> Result<Option<ModelConfig>, DbError> {
+    if !is_bootstrap_fresh_db(conn)? {
+        return Ok(None);
+    }
+
+    let effective_model = match read_bootstrap_registry_model(conn)? {
+        Some(stored) => {
+            if stored.model_id != requested_model.model_id {
+                return Err(DbError::ModelMismatch {
+                    message: format_model_mismatch(&stored, requested_model, db_path),
+                });
+            }
+            stored.to_model_config()
+        }
+        None => {
+            hydrate_model_config(requested_model).map_err(|message| DbError::Schema { message })?
+        }
+    };
+
+    persist_model_metadata(conn, &effective_model)?;
+    Ok(Some(effective_model))
+}
+
+fn is_bootstrap_fresh_db(conn: &Connection) -> Result<bool, DbError> {
+    let default_collection_count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM collections
+         WHERE id = 1
+           AND name = 'default'
+           AND root_path = ''
+           AND state = 'detached'
+           AND writable = 1
+           AND is_write_target = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if default_collection_count != 1 {
+        return Ok(false);
+    }
+
+    let collection_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM collections", [], |row| row.get(0))?;
+    if collection_count != 1 {
+        return Ok(false);
+    }
+
+    let embedding_model_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM embedding_models", [], |row| {
+            row.get(0)
+        })?;
+    if embedding_model_count > 1 {
+        return Ok(false);
+    }
+
+    let inactive_embedding_model_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM embedding_models WHERE active != 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if inactive_embedding_model_count != 0 {
+        return Ok(false);
+    }
+
+    for table in [
+        "assertions",
+        "collection_owners",
+        "contradictions",
+        "embedding_jobs",
+        "file_state",
+        "import_manifest",
+        "knowledge_gaps",
+        "links",
+        "page_embeddings",
+        "pages",
+        "quarantine_exports",
+        "raw_data",
+        "raw_imports",
+        "serve_sessions",
+        "tags",
+        "timeline_entries",
+    ] {
+        if table_has_rows(conn, table)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn table_has_rows(conn: &Connection, table: &str) -> Result<bool, DbError> {
+    let exists: Option<i64> = conn
+        .query_row(&format!("SELECT 1 FROM {table} LIMIT 1"), [], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(exists.is_some())
+}
+
+fn read_bootstrap_registry_model(conn: &Connection) -> Result<Option<QuaidConfig>, DbError> {
+    conn.query_row(
+        "SELECT name, dimensions
+         FROM embedding_models
+         WHERE active = 1
+         LIMIT 1",
+        [],
+        |row| {
+            let model_id: String = row.get(0)?;
+            let embedding_dim: i64 = row.get(1)?;
+            Ok(QuaidConfig {
+                model_alias: model_alias_for_model_id(&model_id).to_owned(),
+                model_id,
+                embedding_dim: embedding_dim as usize,
+                schema_version: SCHEMA_VERSION,
+            })
+        },
+    )
+    .optional()
+    .map_err(DbError::from)
+}
+
+fn model_alias_for_model_id(model_id: &str) -> &'static str {
+    match model_id.trim().to_ascii_lowercase().as_str() {
+        "baai/bge-small-en-v1.5" => "small",
+        "baai/bge-base-en-v1.5" => "base",
+        "baai/bge-large-en-v1.5" => "large",
+        "baai/bge-m3" => "m3",
+        _ => "custom",
+    }
 }
 
 fn sync_legacy_config(conn: &Connection, model: &ModelConfig) -> Result<(), DbError> {
@@ -436,7 +809,7 @@ pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbErr
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<_, _>>()?;
 
-    // Table exists but is completely empty → legacy / pre-migration DB.
+    // Table exists but is completely empty → bootstrap-partial or legacy state.
     if rows.is_empty() {
         return Ok(None);
     }
@@ -495,6 +868,17 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     Ok(exists.is_some())
 }
 
+fn index_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
+    let exists: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(exists.is_some())
+}
+
 fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbError> {
     for (table, key) in [("quaid_config", "schema_version"), ("config", "version")] {
         if !table_exists(conn, table)? {
@@ -525,7 +909,7 @@ fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbErro
 fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
     let default_path = default_db_path_string();
     format!(
-        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then run:\n    quaid init {}\n    quaid import <export-directory>\n  Original database: {}",
+        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then re-ingest the exported markdown with the current workflow.\n    quaid init {}\n    quaid collection add migrated <export-directory>\n    # or ingest files individually with `quaid ingest`\n  Original database: {}",
         schema_version, SCHEMA_VERSION, default_path, path
     )
 }
@@ -627,9 +1011,9 @@ mod tests {
             "embedding_models",
             "file_state",
             "import_manifest",
-            "ingest_log",
             "knowledge_gaps",
             "links",
+            "namespaces",
             "page_embeddings",
             "page_fts",
             "pages",
@@ -649,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_6() {
+    fn open_sets_user_version_to_8() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -657,7 +1041,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -699,7 +1083,7 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -771,7 +1155,156 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_legacy_database_before_creating_v6_tables() {
+    fn open_backfills_raw_import_content_hash_for_existing_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test_memory.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let conn = open(path_str).unwrap();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title)
+             VALUES ('notes/hash-test', ?1, 'concept', 'notes/hash-test')",
+            [crate::core::page_uuid::generate_uuid_v7()],
+        )
+        .unwrap();
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/hash-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+             VALUES (?1, 'import-1', 1, ?2, ?3, 'notes/hash-test.md')",
+            params![
+                page_id,
+                crate::core::raw_imports::content_hash_hex(b"hello"),
+                b"hello"
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = Connection::open(path_str).unwrap();
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_raw_imports_content_hash;
+             ALTER TABLE raw_imports RENAME TO raw_imports_old;
+             CREATE TABLE raw_imports (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                 import_id  TEXT    NOT NULL,
+                 is_active  INTEGER NOT NULL DEFAULT 1,
+                 raw_bytes  BLOB    NOT NULL,
+                 file_path  TEXT    NOT NULL,
+                 created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 UNIQUE(page_id, import_id)
+             );
+             INSERT INTO raw_imports (id, page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             SELECT id, page_id, import_id, is_active, raw_bytes, file_path, created_at
+             FROM raw_imports_old;
+             DROP TABLE raw_imports_old;
+             CREATE INDEX idx_raw_imports_page ON raw_imports(page_id);
+             CREATE INDEX idx_raw_imports_active ON raw_imports(page_id, is_active)
+                 WHERE is_active = 1;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        let content_hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM raw_imports WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            content_hash,
+            crate::core::raw_imports::content_hash_hex(b"hello")
+        );
+    }
+
+    #[test]
+    fn open_rebuilds_legacy_pages_unique_constraint_for_namespaces() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test_memory.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let conn = open(path_str).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TRIGGER IF EXISTS pages_ai;
+             DROP TRIGGER IF EXISTS pages_ad;
+             DROP TRIGGER IF EXISTS pages_au;
+             DROP TABLE pages;
+             CREATE TABLE pages (
+                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                 collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+                 slug            TEXT    NOT NULL,
+                 uuid            TEXT    DEFAULT NULL,
+                 type            TEXT    NOT NULL,
+                 title           TEXT    NOT NULL,
+                 summary         TEXT    NOT NULL DEFAULT '',
+                 compiled_truth  TEXT    NOT NULL DEFAULT '',
+                 timeline        TEXT    NOT NULL DEFAULT '',
+                 frontmatter     TEXT    NOT NULL DEFAULT '{}',
+                 wing            TEXT    NOT NULL DEFAULT '',
+                 room            TEXT    NOT NULL DEFAULT '',
+                 version         INTEGER NOT NULL DEFAULT 1,
+                 quarantined_at  TEXT    DEFAULT NULL,
+                 created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 UNIQUE(collection_id, slug)
+             );
+             INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES
+                 (1, 'notes/same-slug', '018f0000-0000-7000-8000-000000000001', 'concept', 'Global', '', '', '', '{}', 'notes', '', 1);
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, namespace, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES
+                 (1, 'session-a', 'notes/same-slug', ?1, 'concept', 'Namespaced', '', '', '', '{}', 'notes', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE collection_id = 1 AND slug = 'notes/same-slug'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(!pages_needs_namespace_unique_rebuild(&conn).unwrap());
+
+        let duplicate_index_exists = conn
+            .query_row(
+                "SELECT 1
+                 FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name = 'idx_pages_collection_namespace_slug'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(!duplicate_index_exists);
+    }
+
+    #[test]
+    fn open_with_model_rejects_legacy_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -780,7 +1313,7 @@ mod tests {
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 5, expected 6"));
+        assert!(err.to_string().contains("Found version 5, expected 8"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -795,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn init_rejects_legacy_database_before_creating_v6_tables() {
+    fn init_rejects_legacy_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -815,6 +1348,120 @@ mod tests {
             )
             .unwrap();
         assert_eq!(config_version, "5");
+    }
+
+    #[test]
+    fn open_connection_seeds_config_version_to_8_for_partial_v8_databases() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v8.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        let config_version: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(config_version, "8");
+        drop(conn);
+
+        assert!(
+            preflight_existing_schema(db_path.to_str().unwrap()).is_ok(),
+            "freshly seeded v8 DDL should not be misclassified as legacy before quaid_config is written"
+        );
+    }
+
+    #[test]
+    fn open_with_model_recovers_crash_partial_v8_bootstrap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v8.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        drop(conn);
+
+        let opened = open_with_model(db_path.to_str().unwrap(), &default_model())
+            .expect("crash-partial fresh db should reopen cleanly");
+        let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
+
+        assert_eq!(stored.model_alias, "small");
+        assert_eq!(stored.schema_version, 8);
+    }
+
+    #[cfg(feature = "online-model")]
+    #[test]
+    fn open_with_model_recovers_crash_partial_v8_bootstrap_from_registry_model() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v8-registry.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        let large_model = hydrate_model_config(&resolve_model("large")).unwrap();
+        ensure_embedding_model_registry(&conn, &large_model).unwrap();
+        drop(conn);
+
+        let opened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large"))
+            .expect("registry-seeded crash-partial db should reopen with the registered model");
+
+        assert_eq!(opened.effective_model.model_id, "BAAI/bge-large-en-v1.5");
+        assert_eq!(opened.effective_model.embedding_dim, 1024);
+        let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
+        assert_eq!(stored.model_alias, "large");
+    }
+
+    #[test]
+    fn init_recovers_crash_partial_v8_bootstrap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("partial-v8-init.db");
+        let conn = open_connection(db_path.to_str().unwrap()).unwrap();
+        drop(conn);
+
+        let conn = init(db_path.to_str().unwrap(), &default_model())
+            .expect("init should complete a crash-partial fresh bootstrap");
+        let stored = read_quaid_config(&conn).unwrap().unwrap();
+
+        assert_eq!(stored.model_alias, "small");
+        assert_eq!(stored.schema_version, 8);
+    }
+
+    #[test]
+    fn recover_crash_partial_fresh_db_returns_none_after_pages_exist() {
+        let conn = open_connection(":memory:").unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES ('notes/live', ?1, 'concept', 'Live', '', 'truth', '', '{}', 'notes', '', 1)",
+            [uuid::Uuid::now_v7().to_string()],
+        )
+        .unwrap();
+
+        let recovered =
+            recover_crash_partial_fresh_db(&conn, &default_model(), "memory.db").unwrap();
+
+        assert!(recovered.is_none());
+    }
+
+    #[test]
+    fn recover_crash_partial_fresh_db_rejects_registry_model_mismatches() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &resolve_model("base")).unwrap();
+
+        let err = recover_crash_partial_fresh_db(&conn, &default_model(), "memory.db").unwrap_err();
+
+        assert!(matches!(err, DbError::ModelMismatch { .. }));
+    }
+
+    #[test]
+    fn read_bootstrap_registry_model_maps_standard_aliases() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &resolve_model("m3")).unwrap();
+
+        let config = read_bootstrap_registry_model(&conn).unwrap().unwrap();
+
+        assert_eq!(config.model_alias, "m3");
+        assert_eq!(config.model_id, "BAAI/bge-m3");
+        assert_eq!(config.embedding_dim, 1024);
+    }
+
+    #[test]
+    fn model_alias_for_model_id_returns_custom_for_unknown_models() {
+        assert_eq!(model_alias_for_model_id("org/custom-model"), "custom");
     }
 
     #[test]
@@ -843,6 +1490,51 @@ mod tests {
         assert_eq!(name, "BAAI/bge-small-en-v1.5");
         assert_eq!(dims, 384);
         assert_eq!(active, 1);
+    }
+
+    #[test]
+    fn persist_model_metadata_writes_registry_quaid_config_and_legacy_config() {
+        let conn = open_connection(":memory:").unwrap();
+
+        persist_model_metadata(&conn, &resolve_model("base")).unwrap();
+
+        let stored = read_quaid_config(&conn).unwrap().unwrap();
+        let active_model: String = conn
+            .query_row(
+                "SELECT name FROM embedding_models WHERE active = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let legacy_model: String = conn
+            .query_row(
+                "SELECT value FROM config WHERE key = 'embedding_model'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(stored.model_alias, "base");
+        assert_eq!(stored.embedding_dim, 768);
+        assert_eq!(active_model, "BAAI/bge-base-en-v1.5");
+        assert_eq!(legacy_model, "BAAI/bge-base-en-v1.5");
+    }
+
+    #[test]
+    fn is_bootstrap_fresh_db_returns_false_when_inactive_embedding_model_exists() {
+        let conn = open_connection(":memory:").unwrap();
+        ensure_embedding_model_registry(&conn, &default_model()).unwrap();
+        conn.execute("UPDATE embedding_models SET active = 0", [])
+            .unwrap();
+
+        assert!(!is_bootstrap_fresh_db(&conn).unwrap());
+    }
+
+    #[test]
+    fn model_alias_for_model_id_maps_standard_ids() {
+        assert_eq!(model_alias_for_model_id("BAAI/bge-small-en-v1.5"), "small");
+        assert_eq!(model_alias_for_model_id("BAAI/bge-base-en-v1.5"), "base");
+        assert_eq!(model_alias_for_model_id("BAAI/bge-large-en-v1.5"), "large");
     }
 
     #[test]
@@ -886,7 +1578,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 6);
+        assert_eq!(config.schema_version, 8);
     }
 
     #[test]
@@ -902,7 +1594,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 6,
+                schema_version: 8,
             }
         );
     }
@@ -979,14 +1671,31 @@ mod tests {
     }
 
     #[test]
-    fn missing_quaid_config_requires_reinit() {
+    fn missing_quaid_config_requires_reinit_once_pages_exist() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let opened = open_with_model(db_path.to_str().unwrap(), &default_model()).unwrap();
+        let collection_id: i64 = opened
+            .conn
+            .query_row(
+                "SELECT id FROM collections WHERE name = 'default'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        opened
+            .conn
+            .execute(
+                "INSERT INTO pages
+                     (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+                 VALUES (?1, 'notes/live', ?2, 'concept', 'Live', '', 'truth', '', '{}', 'notes', '', 1)",
+                params![collection_id, uuid::Uuid::now_v7().to_string()],
+            )
+            .unwrap();
         opened.conn.execute("DELETE FROM quaid_config", []).unwrap();
         drop(opened);
 
-        let reopened = open_with_model(db_path.to_str().unwrap(), &resolve_model("large"));
+        let reopened = open_with_model(db_path.to_str().unwrap(), &default_model());
         assert!(matches!(reopened, Err(DbError::Schema { .. })));
     }
 

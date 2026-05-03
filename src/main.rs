@@ -1,9 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod commands;
-mod core;
-mod mcp;
+use quaid::{commands, core};
 
 #[derive(Parser)]
 #[command(
@@ -36,10 +34,16 @@ enum Commands {
         path: Option<String>,
     },
     /// Read a page by slug
-    Get { slug: String },
+    Get {
+        slug: String,
+        #[arg(long)]
+        namespace: Option<String>,
+    },
     /// Write or update a page (reads from stdin)
     Put {
         slug: String,
+        #[arg(long)]
+        namespace: Option<String>,
         /// Expected current version for OCC (required for Unix updates; optional for creates)
         #[arg(long)]
         expected_version: Option<i64>,
@@ -50,6 +54,8 @@ enum Commands {
         wing: Option<String>,
         #[arg(long)]
         r#type: Option<String>,
+        #[arg(long)]
+        namespace: Option<String>,
         #[arg(long, default_value = "50")]
         limit: u32,
     },
@@ -58,6 +64,8 @@ enum Commands {
         query: String,
         #[arg(long)]
         wing: Option<String>,
+        #[arg(long)]
+        namespace: Option<String>,
         #[arg(long, default_value = "10")]
         limit: u32,
         /// Pass the query verbatim to FTS5 without sanitization (for expert FTS5 syntax: quoted phrases, boolean operators, wildcards)
@@ -76,18 +84,14 @@ enum Commands {
         token_budget: u32,
         #[arg(long)]
         wing: Option<String>,
+        #[arg(long)]
+        namespace: Option<String>,
     },
     /// Ingest a source document
     Ingest {
         path: String,
         #[arg(long)]
         force: bool,
-    },
-    /// Import a markdown directory (infers page types from PARA folder structure)
-    Import {
-        path: String,
-        #[arg(long)]
-        validate_only: bool,
     },
     /// Export memory to markdown directory
     Export {
@@ -202,6 +206,11 @@ enum Commands {
         #[command(subcommand)]
         action: commands::collection::CollectionAction,
     },
+    /// Manage memory namespaces
+    Namespace {
+        #[command(subcommand)]
+        action: commands::namespace::NamespaceAction,
+    },
     /// Get or set config values
     Config {
         #[command(subcommand)]
@@ -298,34 +307,63 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Init { .. } | Commands::Version => unreachable!(),
-        Commands::Get { slug } => commands::get::run(&db, &slug, cli.json),
+        Commands::Get { slug, namespace } => {
+            commands::get::run(&db, &slug, namespace.as_deref().or(Some("")), cli.json)
+        }
         Commands::Put {
             slug,
+            namespace,
             expected_version,
-        } => commands::put::run(&db, &slug, expected_version),
+        } => commands::put::run(&db, &slug, namespace.as_deref(), expected_version),
         Commands::List {
             wing,
             r#type,
+            namespace,
             limit,
-        } => commands::list::run(&db, wing, r#type, limit, cli.json),
+        } => commands::list::run(
+            &db,
+            wing,
+            r#type,
+            namespace.as_deref().or(Some("")),
+            limit,
+            cli.json,
+        ),
         Commands::Search {
             query,
             wing,
+            namespace,
             limit,
             raw,
-        } => commands::search::run(&db, &query, wing, limit, cli.json, raw),
+        } => commands::search::run(
+            &db,
+            &query,
+            wing,
+            namespace.as_deref().or(Some("")),
+            limit,
+            cli.json,
+            raw,
+        ),
         Commands::Query {
             query,
             depth,
             limit,
             token_budget,
             wing,
-        } => commands::query::run(&db, &query, &depth, limit, token_budget, wing, cli.json).await,
+            namespace,
+        } => {
+            commands::query::run(
+                &db,
+                &query,
+                &depth,
+                limit,
+                token_budget,
+                wing,
+                namespace.as_deref().or(Some("")),
+                cli.json,
+            )
+            .await
+        }
         Commands::Ingest { path, force } => commands::ingest::run(&db, &path, force),
-        Commands::Import {
-            path,
-            validate_only,
-        } => commands::import::run(&db, &path, validate_only),
         Commands::Export {
             path,
             raw,
@@ -372,6 +410,7 @@ async fn main() -> Result<()> {
         Commands::Gaps { limit, resolved } => commands::gaps::run(&db, limit, resolved, cli.json),
         Commands::Compact => commands::compact::run(&db),
         Commands::Collection { action } => commands::collection::run(&db, action, cli.json),
+        Commands::Namespace { action } => commands::namespace::run(&db, action, cli.json),
         Commands::Config { action } => commands::config::run(&db, action),
         Commands::Validate {
             all,
@@ -424,6 +463,13 @@ mod tests {
     }
 
     #[test]
+    fn early_command_returns_none_for_regular_subcommands() {
+        let cli = Cli::try_parse_from(["quaid", "config", "list"]).expect("parse config list");
+
+        assert_eq!(early_command(&cli), EarlyCommand::None);
+    }
+
+    #[test]
     fn validate_flags_from_args_defaults_to_all_checks() {
         let flags = validate_flags_from_args(false, false, false, false);
 
@@ -438,6 +484,15 @@ mod tests {
 
         assert!(flags.links);
         assert!(!flags.assertions);
+        assert!(flags.embeddings);
+    }
+
+    #[test]
+    fn validate_flags_from_args_honors_all_flag() {
+        let flags = validate_flags_from_args(true, false, false, false);
+
+        assert!(flags.links);
+        assert!(flags.assertions);
         assert!(flags.embeddings);
     }
 }

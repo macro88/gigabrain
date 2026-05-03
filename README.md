@@ -86,18 +86,24 @@ Sets up `PATH` and `QUAID_DB` automatically. Use `QUAID_CHANNEL=online` for the 
 ### Download a binary
 
 ```bash
-VERSION="v0.9.10"
+VERSION="<published-tag>"   # for example: the latest public tag until v0.15.0 is published
 PLATFORM="darwin-arm64"   # darwin-arm64 | darwin-x86_64 | linux-x86_64 | linux-aarch64
 curl -fsSL "https://github.com/quaid-app/quaid/releases/download/${VERSION}/quaid-${PLATFORM}-online" \
   -o quaid && chmod +x quaid && sudo mv quaid /usr/local/bin/
 ```
 
+Use a published tag here. This branch is preparing `v0.15.0`, so build from source if you need the unreleased Batch 5 live-serve single-file `quaid put` proxying and IPC trust-boundary hardening before the tag exists.
+
 ### Build from source
 
 ```bash
 git clone https://github.com/quaid-app/quaid
-cd quaid && cargo build --release
+cd quaid
+./scripts/setup-git-hooks.sh   # blocks direct pushes to main/master for this clone
+cargo build --release
 ```
+
+On Windows PowerShell, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup-git-hooks.ps1` after `cd quaid`.
 
 ---
 
@@ -123,11 +129,11 @@ Every page in Quaid has both. Agents read and write through 17 MCP tools via std
 # Initialize a new memory database
 quaid init ~/.quaid/memory.db
 
-# Import an existing markdown directory
-quaid import /path/to/notes/
-
 # Attach a live-sync collection (Obsidian vault, etc.)
 quaid collection add work ~/Documents/Obsidian
+
+# Ingest a single markdown file directly
+quaid ingest /path/to/note.md
 
 # Generate or refresh embeddings
 quaid embed
@@ -163,7 +169,7 @@ quaid serve
 
 ## MCP tools
 
-All 17 tools available in `v0.9.10` via `quaid serve` (macOS + Linux):
+The MCP surface stays at 17 tools on this branch and in the current release line. The `v0.15.0` docs pass is about Batch 5 Unix live-write handling — same-root single-file `quaid put` now proxies through a live `quaid serve` owner with authenticated per-session IPC, while bulk rewrites stay offline-only — not new tool names:
 
 | Category | Tools |
 |----------|-------|

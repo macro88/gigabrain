@@ -1,7 +1,6 @@
 // Reconciler: filesystem walk → stat-diff → ingest/quarantine/delete.
 //
-// This module WILL replace `import_dir()` from `migrate.rs` once tasks 5.2–5.5 land.
-// `migrate::import_dir()` remains the live ingest path until then.
+// This module owns collection-backed vault reconciliation and re-ingest.
 //
 // Planned responsibilities:
 // - Cold-start reconciliation on `quaid serve` startup
@@ -27,13 +26,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 #[cfg(unix)]
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use crate::core::fs_safety;
 #[cfg(unix)]
 use rustix::fd::OwnedFd;
+#[cfg(unix)]
+use rustix::fs::{openat, Mode, OFlags};
 
 // ── Reconciliation Result ─────────────────────────────────────
 
@@ -53,7 +54,7 @@ pub struct ReconcileStats {
     pub hard_deleted: usize,
 }
 
-const MIN_CANONICAL_BODY_BYTES: i64 = 64;
+pub(crate) const MIN_CANONICAL_BODY_BYTES: i64 = 64;
 const UUID_MIGRATION_SAMPLE_LIMIT: usize = 5;
 const DEFAULT_RESTORE_STABILITY_MAX_ITERS: usize = 5;
 
@@ -61,6 +62,7 @@ const DEFAULT_RESTORE_STABILITY_MAX_ITERS: usize = 5;
 pub enum FullHashReconcileMode {
     Audit,
     FreshAttach,
+    OverflowRecovery,
     RemapRoot,
     Restore,
     RemapDriftCapture,
@@ -72,6 +74,7 @@ impl FullHashReconcileMode {
         match self {
             Self::Audit => "audit",
             Self::FreshAttach => "fresh-attach",
+            Self::OverflowRecovery => "overflow-recovery",
             Self::RemapRoot => "remap-root",
             Self::Restore => "restore",
             Self::RemapDriftCapture => "remap-drift-capture",
@@ -415,6 +418,183 @@ pub fn full_hash_reconcile_authorized(
     }
 }
 
+pub fn scheduled_full_hash_audit_authorized(
+    conn: &Connection,
+    collection_id: i64,
+    due_relative_paths: &[PathBuf],
+    authorization: FullHashReconcileAuthorization,
+) -> Result<ReconcileStats, ReconcileError> {
+    #[cfg(unix)]
+    {
+        let collection = load_collection_by_id(conn, collection_id)?;
+        authorize_full_hash_reconcile(&collection, FullHashReconcileMode::Audit, &authorization)?;
+        if due_relative_paths.is_empty() {
+            return Ok(ReconcileStats::default());
+        }
+        let root_path = Path::new(&collection.root_path);
+        ignore_patterns::reload_patterns(conn, collection.id, root_path).map_err(|err| {
+            ReconcileError::Other(format!(
+                "scheduled_full_hash_audit: refusing to walk with stale .quaidignore state: {err}"
+            ))
+        })?;
+
+        let stored_entries = load_stored_file_state_entries(conn, collection.id)?;
+        let mut plan = FullHashPlan::default();
+        let mut audited_page_ids = HashSet::new();
+        let root_fd = fs_safety::open_root_fd(root_path)?;
+
+        for relative_path in due_relative_paths {
+            let Some(stored) = stored_entries.get(relative_path) else {
+                continue;
+            };
+            audited_page_ids.insert(stored.page_id);
+            match stat_and_hash_audit_path(&root_fd, relative_path)? {
+                Some((stat, sha256)) => {
+                    if stored.sha256 == sha256 {
+                        plan.unchanged.push(FullHashUnchangedEntry {
+                            relative_path: relative_path.clone(),
+                            page_id: stored.page_id,
+                            stat,
+                            sha256,
+                        });
+                    } else {
+                        plan.diff.modified.insert(relative_path.clone(), stat);
+                    }
+                }
+                None => {
+                    plan.diff.missing.insert(relative_path.clone());
+                }
+            }
+        }
+
+        assert_raw_import_invariants_for_page_ids(
+            conn,
+            &audited_page_ids,
+            "scheduled_full_hash_audit",
+        )?;
+        apply_full_hash_metadata_self_heal(conn, collection.id, &plan.unchanged)?;
+        if !plan.diff.missing.is_empty() {
+            conn.execute(
+                "UPDATE collections
+                 SET needs_full_sync = 1,
+                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                 WHERE id = ?1",
+                [collection.id],
+            )?;
+            eprintln!(
+                "WARN: scheduled_full_hash_audit_missing_paths_marked_dirty collection={} collection_id={} missing_count={}",
+                collection.name,
+                collection.id,
+                plan.diff.missing.len()
+            );
+        }
+        let rename_resolution = RenameResolution::default();
+        let apply_summary =
+            apply_reconciliation(conn, &collection, &plan.diff, &rename_resolution, root_path)?;
+
+        Ok(ReconcileStats {
+            walked: plan.unchanged.len() + plan.diff.modified.len(),
+            unchanged: plan.unchanged.len(),
+            modified: plan.diff.modified.len(),
+            new: 0,
+            missing: plan.diff.missing.len(),
+            native_renamed: 0,
+            uuid_renamed: 0,
+            hash_renamed: 0,
+            quarantined_ambiguous: 0,
+            quarantined_db_state: apply_summary.quarantined_db_state,
+            hard_deleted: apply_summary.hard_deleted,
+        })
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (conn, collection_id, due_relative_paths);
+        Err(ReconcileError::Other(format!(
+            "scheduled_full_hash_audit: {} authorization for audit mode is not supported on Windows. \
+             Vault sync commands require Unix.",
+            authorization.as_str()
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn stat_and_hash_audit_path(
+    root_fd: &OwnedFd,
+    relative_path: &Path,
+) -> Result<Option<(FileStat, String)>, ReconcileError> {
+    let parent_fd = match fs_safety::walk_to_parent(root_fd, relative_path) {
+        Ok(parent_fd) => parent_fd,
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let entry_name = relative_path.file_name().ok_or_else(|| {
+        ReconcileError::Other(format!(
+            "scheduled_full_hash_audit: missing final path component for {}",
+            relative_path.display()
+        ))
+    })?;
+    let stat = match fs_safety::stat_at_nofollow(&parent_fd, Path::new(entry_name)) {
+        Ok(stat) => stat,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    if stat.is_symlink() {
+        eprintln!(
+            "WARN: scheduled_full_hash_audit skipping symlinked tracked file {}",
+            relative_path.display()
+        );
+        return Ok(None);
+    }
+    if !stat.is_regular_file() {
+        return Ok(None);
+    }
+
+    let sha256 = hash_file_nofollow(&parent_fd, Path::new(entry_name))?;
+    Ok(Some((
+        FileStat {
+            mtime_ns: stat.mtime_ns,
+            ctime_ns: Some(stat.ctime_ns),
+            size_bytes: stat.size_bytes,
+            inode: Some(stat.inode),
+        },
+        sha256,
+    )))
+}
+
+#[cfg(unix)]
+fn hash_file_nofollow(root_fd: &OwnedFd, name: &Path) -> Result<String, ReconcileError> {
+    let file_fd = openat(
+        root_fd,
+        name,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    let mut file = fs::File::from(file_fd);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(hex::encode(hasher.finalize()))
+}
+
 fn authorize_full_hash_reconcile(
     collection: &Collection,
     mode: FullHashReconcileMode,
@@ -443,6 +623,11 @@ fn authorize_full_hash_reconcile(
             FullHashReconcileMode::FreshAttach,
             FullHashReconcileAuthorization::AttachCommand { .. },
             Detached,
+        )
+        | (
+            FullHashReconcileMode::OverflowRecovery,
+            FullHashReconcileAuthorization::ActiveLease { .. },
+            Active,
         ) => Ok(()),
         (
             FullHashReconcileMode::RemapRoot,
@@ -562,6 +747,95 @@ fn canonical_body_refusal_reason(
         return Some(format!("{prefix}_below_min_body_bytes"));
     }
     None
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CanonicalIdentityRecord<K> {
+    pub key: K,
+    pub label: String,
+    pub uuid: Option<String>,
+    pub sha256: String,
+    pub body_size_bytes: i64,
+    pub has_nonempty_body: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PageIdentityResolution<K> {
+    Matched(K),
+    Missing,
+    AmbiguousHash,
+    DuplicateUuid {
+        candidate_labels: Vec<String>,
+    },
+    TrivialHashRefusal {
+        candidate_labels: Vec<String>,
+        reason: String,
+    },
+}
+
+pub(crate) fn resolve_page_identity<K>(
+    page: &CanonicalIdentityRecord<()>,
+    page_hash_count: usize,
+    candidates: &[CanonicalIdentityRecord<K>],
+) -> PageIdentityResolution<K>
+where
+    K: Clone,
+{
+    if let Some(uuid) = page.uuid.as_deref() {
+        let uuid_matches = candidates
+            .iter()
+            .filter(|candidate| candidate.uuid.as_deref() == Some(uuid))
+            .collect::<Vec<_>>();
+        match uuid_matches.as_slice() {
+            [candidate] => return PageIdentityResolution::Matched(candidate.key.clone()),
+            [] => {}
+            _ => {
+                return PageIdentityResolution::DuplicateUuid {
+                    candidate_labels: uuid_matches
+                        .into_iter()
+                        .map(|candidate| candidate.label.clone())
+                        .collect(),
+                };
+            }
+        }
+    }
+
+    let hash_matches = candidates
+        .iter()
+        .filter(|candidate| candidate.sha256 == page.sha256)
+        .collect::<Vec<_>>();
+    if hash_matches.is_empty() {
+        return PageIdentityResolution::Missing;
+    }
+    if page_hash_count != 1 || hash_matches.len() != 1 {
+        return PageIdentityResolution::AmbiguousHash;
+    }
+    if let Some(reason) =
+        canonical_body_refusal_reason("missing", page.body_size_bytes, page.has_nonempty_body)
+    {
+        return PageIdentityResolution::TrivialHashRefusal {
+            candidate_labels: hash_matches
+                .iter()
+                .map(|candidate| candidate.label.clone())
+                .collect(),
+            reason,
+        };
+    }
+    if let Some(reason) = canonical_body_refusal_reason(
+        "new",
+        hash_matches[0].body_size_bytes,
+        hash_matches[0].has_nonempty_body,
+    ) {
+        return PageIdentityResolution::TrivialHashRefusal {
+            candidate_labels: hash_matches
+                .iter()
+                .map(|candidate| candidate.label.clone())
+                .collect(),
+            reason,
+        };
+    }
+
+    PageIdentityResolution::Matched(hash_matches[0].key.clone())
 }
 
 fn raw_import_invariant_result(
@@ -956,6 +1230,13 @@ pub fn run_restore_remap_safety_pipeline(
     run_restore_remap_safety_pipeline_inner(conn, request, verify_read_only_mount, || Ok(()))
 }
 
+pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(
+    conn: &Connection,
+    request: &RestoreRemapSafetyRequest<'_>,
+) -> Result<RestoreRemapSafetyOutcome, ReconcileError> {
+    run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))
+}
+
 pub fn fresh_attach_reconcile_and_activate(
     conn: &Connection,
     collection_id: i64,
@@ -1134,10 +1415,21 @@ fn assert_full_hash_raw_import_invariants(
 ) -> Result<(), ReconcileError> {
     let mut stmt =
         conn.prepare("SELECT DISTINCT page_id FROM file_state WHERE collection_id = ?1")?;
-    let page_ids = stmt.query_map([collection_id], |row| row.get::<_, i64>(0))?;
+    let page_ids = stmt
+        .query_map([collection_id], |row| row.get::<_, i64>(0))?
+        .collect::<Result<HashSet<_>, _>>()?;
+    assert_raw_import_invariants_for_page_ids(conn, &page_ids, "full_hash_reconcile")
+}
 
-    for page_id in page_ids {
-        let page_id = page_id?;
+fn assert_raw_import_invariants_for_page_ids(
+    conn: &Connection,
+    page_ids: &HashSet<i64>,
+    context: &'static str,
+) -> Result<(), ReconcileError> {
+    let mut sorted_page_ids = page_ids.iter().copied().collect::<Vec<_>>();
+    sorted_page_ids.sort_unstable();
+
+    for page_id in sorted_page_ids {
         let (row_count, active_count): (i64, i64) = conn.query_row(
             "SELECT
                  COUNT(*) AS row_count,
@@ -1152,7 +1444,7 @@ fn assert_full_hash_raw_import_invariants(
             page_id,
             row_count,
             active_count,
-            "full_hash_reconcile",
+            context,
             RawImportInvariantPolicy::Enforce,
         )?;
     }
@@ -1494,91 +1786,79 @@ fn apply_hash_rename_matches(
             continue;
         }
 
-        if let Some(reason) = hash_refusal_reason(
-            missing_identity,
-            &remaining_candidates,
+        let candidate_records = remaining_candidates
+            .iter()
+            .filter_map(|candidate| {
+                new_identities
+                    .get(*candidate)
+                    .map(|identity| CanonicalIdentityRecord {
+                        key: (*candidate).clone(),
+                        label: path_to_string(candidate),
+                        uuid: identity.uuid.clone(),
+                        sha256: identity.sha256.clone(),
+                        body_size_bytes: identity.body_size_bytes,
+                        has_nonempty_body: identity.has_nonempty_body,
+                    })
+            })
+            .collect::<Vec<_>>();
+        let page_record = CanonicalIdentityRecord {
+            key: (),
+            label: path_to_string(&path),
+            uuid: missing_identity.uuid.clone(),
+            sha256: missing_identity.sha256.clone(),
+            body_size_bytes: missing_identity.body_size_bytes,
+            has_nonempty_body: missing_identity.has_nonempty_body,
+        };
+        let resolution_result = resolve_page_identity(
+            &page_record,
             missing_by_hash
                 .get(missing_identity.sha256.as_str())
                 .map_or(0, Vec::len),
-            new_identities,
-        ) {
-            if is_trivial_hash_refusal_reason(&reason) {
+            &candidate_records,
+        );
+        match resolution_result {
+            PageIdentityResolution::Matched(candidate) => record_rename_match(
+                resolution,
+                missing_identity.page_id,
+                &path,
+                &candidate,
+                RenameMatchKind::Hash,
+            ),
+            PageIdentityResolution::TrivialHashRefusal {
+                candidate_labels,
+                reason,
+            } => {
                 return Err(ReconcileError::UnresolvableTrivialContentError {
                     missing_path: path_to_string(&path),
-                    candidate_paths: remaining_candidates
-                        .iter()
-                        .map(|candidate| path_to_string(candidate))
-                        .collect(),
+                    candidate_paths: candidate_labels,
                     reason,
                 });
             }
-            log_hash_refusal(&reason, &path, &remaining_candidates);
-            resolution.remaining_missing.remove(&path);
-            resolution.quarantined_ambiguous += 1;
-            continue;
+            PageIdentityResolution::Missing => {}
+            PageIdentityResolution::AmbiguousHash => {
+                let reason = if missing_by_hash
+                    .get(missing_identity.sha256.as_str())
+                    .map_or(0, Vec::len)
+                    != 1
+                {
+                    "missing_hash_not_unique".to_owned()
+                } else {
+                    "new_hash_not_unique".to_owned()
+                };
+                log_hash_refusal(&reason, &path, &remaining_candidates);
+                resolution.remaining_missing.remove(&path);
+                resolution.quarantined_ambiguous += 1;
+            }
+            PageIdentityResolution::DuplicateUuid { .. } => {
+                let reason = "duplicate_uuid_candidates".to_owned();
+                log_hash_refusal(&reason, &path, &remaining_candidates);
+                resolution.remaining_missing.remove(&path);
+                resolution.quarantined_ambiguous += 1;
+            }
         }
-
-        record_rename_match(
-            resolution,
-            missing_identity.page_id,
-            &path,
-            remaining_candidates[0],
-            RenameMatchKind::Hash,
-        );
     }
 
     Ok(())
-}
-
-fn is_trivial_hash_refusal_reason(reason: &str) -> bool {
-    matches!(
-        reason,
-        "missing_empty_body"
-            | "missing_below_min_body_bytes"
-            | "new_empty_body"
-            | "new_below_min_body_bytes"
-    )
-}
-
-fn hash_refusal_reason(
-    missing_identity: &MissingPageIdentity,
-    new_candidates: &[&PathBuf],
-    missing_hash_count: usize,
-    new_identities: &HashMap<PathBuf, NewTreeIdentity>,
-) -> Option<String> {
-    if missing_hash_count != 1 {
-        return Some("missing_hash_not_unique".to_string());
-    }
-    if new_candidates.len() != 1 {
-        return Some("new_hash_not_unique".to_string());
-    }
-    // Guard: body bytes (after frontmatter, trimmed) must exceed 64.
-    // Whole-file size is intentionally NOT used here: a template note with large
-    // frontmatter and a tiny body would pass a whole-file threshold while still
-    // being template-like content with near-zero uniqueness value.
-    if let Some(reason) = canonical_body_refusal_reason(
-        "missing",
-        missing_identity.body_size_bytes,
-        missing_identity.has_nonempty_body,
-    ) {
-        return Some(reason);
-    }
-
-    let Some(new_identity) = new_identities.get(new_candidates[0]) else {
-        return Some(format!(
-            "missing_new_candidate path={}",
-            new_candidates[0].display()
-        ));
-    };
-    if let Some(reason) = canonical_body_refusal_reason(
-        "new",
-        new_identity.body_size_bytes,
-        new_identity.has_nonempty_body,
-    ) {
-        return Some(reason);
-    }
-
-    None
 }
 
 fn log_hash_refusal(reason: &str, missing_path: &Path, new_candidates: &[&PathBuf]) {
@@ -1591,6 +1871,51 @@ fn log_hash_refusal(reason: &str, missing_path: &Path, new_candidates: &[&PathBu
         "INFO: rename_inference_refused reason={reason} missing={} candidates={candidates}",
         missing_path.display()
     );
+}
+
+fn hash_refusal_reason(
+    missing_identity: &MissingPageIdentity,
+    new_candidates: &[&PathBuf],
+    missing_hash_count: usize,
+    new_identities: &HashMap<PathBuf, NewTreeIdentity>,
+) -> Option<String> {
+    let candidate_records = new_candidates
+        .iter()
+        .filter_map(|candidate| {
+            new_identities
+                .get(*candidate)
+                .map(|identity| CanonicalIdentityRecord {
+                    key: (*candidate).clone(),
+                    label: path_to_string(candidate),
+                    uuid: identity.uuid.clone(),
+                    sha256: identity.sha256.clone(),
+                    body_size_bytes: identity.body_size_bytes,
+                    has_nonempty_body: identity.has_nonempty_body,
+                })
+        })
+        .collect::<Vec<_>>();
+    let page_record = CanonicalIdentityRecord {
+        key: (),
+        label: String::new(),
+        uuid: missing_identity.uuid.clone(),
+        sha256: missing_identity.sha256.clone(),
+        body_size_bytes: missing_identity.body_size_bytes,
+        has_nonempty_body: missing_identity.has_nonempty_body,
+    };
+    match resolve_page_identity(&page_record, missing_hash_count, &candidate_records) {
+        PageIdentityResolution::Matched(_) | PageIdentityResolution::Missing => None,
+        PageIdentityResolution::AmbiguousHash => {
+            if missing_hash_count != 1 {
+                Some("missing_hash_not_unique".to_owned())
+            } else {
+                Some("new_hash_not_unique".to_owned())
+            }
+        }
+        PageIdentityResolution::DuplicateUuid { .. } => {
+            Some("duplicate_uuid_candidates".to_owned())
+        }
+        PageIdentityResolution::TrivialHashRefusal { reason, .. } => Some(reason),
+    }
 }
 
 fn record_rename_match(
@@ -1677,7 +2002,7 @@ fn load_new_tree_identities(
         let (compiled_truth, timeline) = markdown::split_content(&body);
         let uuid = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "resolve_rename_resolution: {} has invalid memory_id: {err}",
+                "resolve_rename_resolution: {} has invalid frontmatter uuid: {err}",
                 path.display()
             ))
         })?;
@@ -1717,7 +2042,7 @@ fn detect_duplicate_uuids_in_tree(
         let (frontmatter, _) = markdown::parse_frontmatter(&raw);
         if let Some(uuid) = page_uuid::parse_frontmatter_uuid(&frontmatter).map_err(|err| {
             ReconcileError::Other(format!(
-                "detect_duplicate_uuids_in_tree: {} has invalid memory_id: {err}",
+                "detect_duplicate_uuids_in_tree: {} has invalid frontmatter uuid: {err}",
                 relative_path.display()
             ))
         })? {
@@ -2302,12 +2627,6 @@ fn apply_reingest(
         &raw_bytes,
     )?;
     raw_imports::enqueue_embedding_job(conn, page_id)?;
-    record_reconcile_ingest(
-        conn,
-        &parsed.sha256,
-        &absolute_path.to_string_lossy(),
-        &parsed.slug,
-    )?;
 
     Ok(ApplyReingestOutcome { created })
 }
@@ -2401,24 +2720,6 @@ fn parse_vault_file(
     })
 }
 
-fn record_reconcile_ingest(
-    conn: &Connection,
-    hash: &str,
-    path: &str,
-    slug: &str,
-) -> Result<(), ReconcileError> {
-    conn.execute(
-        "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated)
-         VALUES (?1, 'file', ?2, json_array(?3))
-         ON CONFLICT(ingest_key) DO UPDATE SET
-             source_ref = excluded.source_ref,
-             pages_updated = excluded.pages_updated,
-             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        rusqlite::params![hash, path, slug],
-    )?;
-    Ok(())
-}
-
 fn derive_slug_from_path(file_path: &Path, root_path: &Path) -> String {
     file_path
         .strip_prefix(root_path)
@@ -2468,7 +2769,7 @@ fn is_ignored(globset: &globset::GlobSet, relative_path: &Path) -> bool {
     globset.is_match(relative_path)
 }
 
-fn is_markdown_file(path: &Path) -> bool {
+pub(crate) fn is_markdown_file(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
@@ -2668,12 +2969,55 @@ impl From<std::io::Error> for ReconcileError {
 mod tests {
     use super::*;
     use crate::core::file_state::upsert_file_state;
+    use std::ffi::OsString;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    use std::sync::{Mutex, OnceLock};
     #[cfg(unix)]
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
+
+    static ENV_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_mutation_lock() -> &'static Mutex<()> {
+        ENV_MUTATION_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = self.previous.as_ref() {
+                    std::env::set_var(self.key, value);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn production_reconciler_source() -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("core")
+            .join("reconciler.rs");
+        fs::read_to_string(path).expect("read production reconciler source")
+    }
 
     fn open_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -3548,6 +3892,82 @@ mod tests {
     }
 
     #[test]
+    fn load_collection_by_id_round_trips_optional_restore_metadata() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+        conn.execute(
+            "UPDATE collections
+             SET active_lease_session_id = 'serve-1',
+                 restore_command_id = 'restore-1',
+                 restore_lease_session_id = 'restore-lease',
+                 reload_generation = 4,
+                 watcher_released_session_id = 'serve-1',
+                 watcher_released_generation = 3,
+                 watcher_released_at = '2026-04-28T00:00:00Z',
+                 pending_command_heartbeat_at = '2026-04-28T00:01:00Z',
+                 pending_root_path = 'D:\\restored',
+                 pending_restore_manifest = '{\"entries\":[]}',
+                 restore_command_pid = 7,
+                 restore_command_host = 'host-a',
+                 integrity_failed_at = '2026-04-28T00:02:00Z',
+                 pending_manifest_incomplete_at = '2026-04-28T00:03:00Z',
+                 reconcile_halted_at = '2026-04-28T00:04:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [collection.id],
+        )
+        .unwrap();
+
+        let loaded = load_collection_by_id(&conn, collection.id).unwrap();
+
+        assert_eq!(loaded.active_lease_session_id.as_deref(), Some("serve-1"));
+        assert_eq!(loaded.restore_command_id.as_deref(), Some("restore-1"));
+        assert_eq!(
+            loaded.restore_lease_session_id.as_deref(),
+            Some("restore-lease")
+        );
+        assert_eq!(loaded.reload_generation, 4);
+        assert_eq!(
+            loaded.watcher_released_session_id.as_deref(),
+            Some("serve-1")
+        );
+        assert_eq!(loaded.watcher_released_generation, Some(3));
+        assert_eq!(loaded.pending_root_path.as_deref(), Some("D:\\restored"));
+        assert_eq!(
+            loaded.pending_restore_manifest.as_deref(),
+            Some("{\"entries\":[]}")
+        );
+        assert_eq!(loaded.restore_command_pid, Some(7));
+        assert_eq!(loaded.restore_command_host.as_deref(), Some("host-a"));
+        assert_eq!(
+            loaded.reconcile_halt_reason.as_deref(),
+            Some("duplicate_uuid")
+        );
+    }
+
+    #[test]
+    fn load_collection_by_id_rejects_invalid_collection_state() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+        conn.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        conn.execute(
+            "UPDATE collections SET state = 'bogus' WHERE id = ?1",
+            [collection.id],
+        )
+        .unwrap();
+
+        let error = load_collection_by_id(&conn, collection.id)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("invalid collection state"));
+        assert!(error.contains("bogus"));
+    }
+
+    #[test]
     fn full_hash_reconcile_rejects_restore_drift_capture_when_restore_lease_does_not_match_owner() {
         let collection =
             sample_collection_in_state(crate::core::collections::CollectionState::Restoring);
@@ -3691,6 +4111,93 @@ mod tests {
         assert_eq!(status.sentinel_count, 1);
     }
 
+    #[test]
+    fn collection_dirty_status_is_clean_without_flags_or_sentinels() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let recovery_root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+
+        let status = is_collection_dirty(&conn, collection.id, recovery_root.path()).unwrap();
+
+        assert!(!status.is_dirty());
+        assert!(!status.needs_full_sync);
+        assert_eq!(status.sentinel_count, 0);
+        assert!(!status.recovery_in_progress);
+        assert!(status.last_sync_at.is_none());
+    }
+
+    #[test]
+    fn raw_import_invariant_result_reports_zero_rows_and_multi_active_histories() {
+        let missing =
+            raw_import_invariant_result(7, 0, 0, "reconcile", RawImportInvariantPolicy::Enforce)
+                .unwrap_err()
+                .to_string();
+        assert!(missing.contains("InvariantViolationError"));
+        assert!(missing.contains("page_id=7 has zero total raw_imports rows"));
+
+        let multi_active = raw_import_invariant_result(
+            9,
+            3,
+            2,
+            "full_hash_reconcile",
+            RawImportInvariantPolicy::Enforce,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(multi_active.contains("InvariantViolationError"));
+        assert!(
+            multi_active.contains("page_id=9 has 2 active raw_imports rows across 3 total rows")
+        );
+    }
+
+    #[test]
+    fn canonical_body_refusal_reason_covers_empty_small_and_nontrivial_bodies() {
+        assert_eq!(
+            canonical_body_refusal_reason("missing", 0, false).as_deref(),
+            Some("missing_empty_body")
+        );
+        assert_eq!(
+            canonical_body_refusal_reason("new", 63, true).as_deref(),
+            Some("new_below_min_body_bytes")
+        );
+        assert!(canonical_body_refusal_reason("new", 64, true).is_none());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn windows_reconciler_helpers_fail_closed_with_explicit_platform_errors() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+
+        let reconcile_error = reconcile(&conn, &collection).unwrap_err().to_string();
+        assert!(reconcile_error.contains("fd-relative operations not supported on Windows"));
+
+        let full_hash_error = full_hash_reconcile_authorized(
+            &conn,
+            collection.id,
+            FullHashReconcileMode::OverflowRecovery,
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(full_hash_error.contains("active-lease authorization"));
+        assert!(full_hash_error.contains("overflow-recovery mode"));
+
+        let snapshot_error = take_stat_snapshot(&conn, &collection)
+            .unwrap_err()
+            .to_string();
+        assert!(snapshot_error
+            .contains("take_stat_snapshot: fd-relative operations not supported on Windows"));
+
+        let mount_error = verify_read_only_mount(&collection).unwrap_err().to_string();
+        assert!(mount_error.contains("restore/remap safety checks are not supported on Windows"));
+        assert!(mount_error.contains("collection=test"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn verify_read_only_mount_rejects_writable_mounts() {
@@ -3756,6 +4263,287 @@ mod tests {
 
         assert_eq!(summary.pages_updated, 1);
         assert_eq!(active_raw_import_bytes(&conn, page_id), updated.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remap_phase1_drift_capture_refuses_nonzero_drift_then_second_pass_is_clean() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection_with_state(
+            &conn,
+            root.path(),
+            crate::core::collections::CollectionState::Active,
+            false,
+        );
+        let original = "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nOriginal body.\n";
+        fs::write(root.path().join("note.md"), original).unwrap();
+        let original_stat = stat_for(root.path(), "note.md");
+        let original_sha = file_state::hash_file(&root.path().join("note.md")).unwrap();
+        let page_id = seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/note",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54761235",
+                relative_path: "note.md",
+                stat: &original_stat,
+                sha256: &original_sha,
+                compiled_truth: "Original body.",
+                timeline: "",
+            },
+        );
+        raw_imports::rotate_active_raw_import(&conn, page_id, "note.md", original.as_bytes())
+            .unwrap();
+
+        let updated =
+            "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nUpdated body before remap.\n";
+        fs::write(root.path().join("note.md"), updated).unwrap();
+
+        let first = capture_phase1_drift(
+            &conn,
+            &collection,
+            RestoreRemapOperation::Remap,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            first,
+            ReconcileError::RemapDriftConflictError { summary, .. }
+                if summary.pages_updated == 1
+                    && summary.pages_added == 0
+                    && summary.pages_quarantined == 0
+                    && summary.pages_deleted == 0
+        ));
+        assert_eq!(active_raw_import_bytes(&conn, page_id), updated.as_bytes());
+
+        let second = capture_phase1_drift(
+            &conn,
+            &collection,
+            RestoreRemapOperation::Remap,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(second, DriftCaptureSummary::default());
+    }
+
+    #[test]
+    fn remap_safety_pipeline_wrapper_source_skips_mount_verifier_only() {
+        let source = production_reconciler_source();
+        let start = source
+            .find("pub(crate) fn run_restore_remap_safety_pipeline_without_mount_check(")
+            .unwrap();
+        let end = source[start..]
+            .find("pub fn fresh_attach_reconcile_and_activate(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("run_restore_remap_safety_pipeline_inner(conn, request, |_| Ok(()), || Ok(()))"),
+            "the no-mount wrapper must reuse the shared safety pipeline and only skip the mount verifier"
+        );
+    }
+
+    #[test]
+    fn remap_safety_pipeline_source_keeps_phase_order_before_dirty_recheck() {
+        let source = production_reconciler_source();
+        let start = source
+            .find("fn run_restore_remap_safety_pipeline_inner")
+            .expect("shared restore/remap safety pipeline must remain present");
+        let end = source[start..]
+            .find("pub fn run_restore_remap_safety_pipeline(")
+            .map(|offset| start + offset)
+            .expect("shared restore/remap safety wrapper must remain present");
+        let snippet = &source[start..end];
+        let phase1_idx = snippet
+            .find("let mut total_drift =")
+            .expect("phase 1 drift capture assignment must remain present");
+        let phase2_idx = snippet
+            .find("run_phase2_stability_check(")
+            .expect("phase 2 stability check must remain present");
+        let phase3_idx = snippet
+            .find("run_phase3_pre_destruction_fence(")
+            .expect("phase 3 fence must remain present");
+        let dirty_idx = snippet
+            .find("fresh_collection_dirty_status(")
+            .expect("fresh-connection dirty recheck must remain present");
+        assert!(
+            phase1_idx < phase2_idx && phase2_idx < phase3_idx && phase3_idx < dirty_idx,
+            "restore/remap safety must capture drift, prove stability, fence, then do the fresh dirty recheck"
+        );
+    }
+
+    #[test]
+    fn scheduled_full_hash_audit_source_uses_nofollow_fd_relative_reads() {
+        let source = production_reconciler_source();
+        let start = source
+            .find("pub fn scheduled_full_hash_audit_authorized(")
+            .expect("scheduled audit entrypoint must remain present");
+        let end = source[start..]
+            .find("fn authorize_full_hash_reconcile(")
+            .map(|offset| start + offset)
+            .expect("audit helper block must remain before authorization logic");
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("let root_fd = fs_safety::open_root_fd(root_path)?;")
+                && snippet.contains("stat_and_hash_audit_path(&root_fd, relative_path)?")
+                && snippet.contains("fs_safety::walk_to_parent(root_fd, relative_path)")
+                && snippet
+                    .contains("fs_safety::stat_at_nofollow(&parent_fd, Path::new(entry_name))")
+                && snippet.contains("OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW"),
+            "scheduled audit must stay on fd-relative NOFOLLOW reads instead of path-based hashing"
+        );
+        assert!(
+            !snippet.contains("file_state::stat_file(&absolute_path)")
+                && !snippet.contains("file_state::hash_file(&absolute_path)"),
+            "scheduled audit must not fall back to path-based stat/hash reads that follow symlinks"
+        );
+        assert!(
+            snippet.contains("scheduled_full_hash_audit_missing_paths_marked_dirty")
+                && snippet.contains("SET needs_full_sync = 1")
+                && !snippet.contains("remaining_missing: plan.diff.missing.clone()"),
+            "scheduled audit must mark the collection dirty on missing paths instead of deleting pages inline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scheduled_full_hash_audit_marks_collection_dirty_without_deleting_missing_pages() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("notes")).unwrap();
+        let note_path = root.path().join("notes").join("note.md");
+        let note_bytes = b"---\nslug: notes/note\ntitle: Note\ntype: concept\n---\naudit me\n";
+        fs::write(&note_path, note_bytes).unwrap();
+
+        let collection = insert_collection(&conn, root.path());
+        let stat = stat_for(root.path(), "notes/note.md");
+        let sha256 = format!("{:x}", sha2::Sha256::digest(note_bytes));
+        let page_id = seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/note",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54768888",
+                relative_path: "notes/note.md",
+                stat: &stat,
+                sha256: &sha256,
+                compiled_truth: "audit me",
+                timeline: "",
+            },
+        );
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
+             VALUES (?1, ?2, 1, ?3, ?4)",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                note_bytes.as_slice(),
+                "notes/note.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = '2000-01-01T00:00:00Z'
+             WHERE collection_id = ?1 AND relative_path = 'notes/note.md'",
+            [collection.id],
+        )
+        .unwrap();
+        fs::remove_file(&note_path).unwrap();
+
+        let stats = scheduled_full_hash_audit_authorized(
+            &conn,
+            collection.id,
+            &[PathBuf::from("notes/note.md")],
+            FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(stats.missing, 1);
+        assert_eq!(stats.hard_deleted, 0);
+        assert_eq!(stats.quarantined_db_state, 0);
+        let needs_full_sync: bool = conn
+            .query_row(
+                "SELECT needs_full_sync FROM collections WHERE id = ?1",
+                [collection.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .unwrap();
+        assert!(needs_full_sync);
+        let existing_page_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM pages WHERE id = ?1 AND quarantined_at IS NULL",
+                [page_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(existing_page_id, Some(page_id));
+    }
+
+    #[test]
+    fn capture_phase1_drift_source_refuses_remap_on_material_changes() {
+        let source = production_reconciler_source();
+        let start = source.find("fn capture_phase1_drift(").unwrap();
+        let end = source[start..]
+            .find("fn run_phase2_stability_check")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("RestoreRemapOperation::Remap if summary.has_material_changes()")
+                && snippet.contains("ERROR: remap_drift_refused")
+                && snippet.contains("ReconcileError::RemapDriftConflictError"),
+            "Phase 1 remap capture must fail closed when old-root drift would otherwise be lost"
+        );
+    }
+
+    #[test]
+    fn capture_phase1_drift_source_logs_restore_capture_without_refusal() {
+        let source = production_reconciler_source();
+        let start = source.find("fn capture_phase1_drift(").unwrap();
+        let end = source[start..]
+            .find("fn run_phase2_stability_check")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("RestoreRemapOperation::Restore if summary.has_material_changes()")
+                && snippet.contains("WARN: restore_drift_captured"),
+            "Phase 1 restore capture must record the adopted drift without turning it into a remap-style refusal"
+        );
+    }
+
+    #[test]
+    fn authorize_full_hash_source_requires_active_lease_for_remap_modes() {
+        let source = production_reconciler_source();
+        let start = source.find("fn authorize_full_hash_reconcile(").unwrap();
+        let end = source[start..]
+            .find("fn require_persisted_full_hash_owner_match(")
+            .map(|offset| start + offset)
+            .unwrap();
+        let snippet = &source[start..end];
+
+        assert!(
+            snippet.contains("FullHashReconcileMode::RemapRoot,")
+                && snippet.contains("FullHashReconcileMode::RemapDriftCapture,")
+                && snippet.contains("FullHashReconcileAuthorization::ActiveLease { .. }"),
+            "both remap full-hash modes must stay bound to the active owner lease"
+        );
     }
 
     #[test]
@@ -3966,6 +4754,151 @@ mod tests {
         assert_eq!(stats.walked, 1);
         assert_eq!(state, "active");
         assert_eq!(needs_full_sync, 0);
+    }
+
+    #[test]
+    fn load_db_files_round_trips_tracked_rows() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+        let page_id = insert_page(&conn, collection.id, "notes/a");
+        let stat = FileStat {
+            mtime_ns: 11,
+            ctime_ns: Some(22),
+            size_bytes: 33,
+            inode: Some(44),
+        };
+        upsert_file_state(&conn, collection.id, "notes/a.md", page_id, &stat, "abc123").unwrap();
+
+        let db_files = load_db_files(&conn, collection.id).unwrap();
+
+        assert_eq!(db_files.len(), 1);
+        assert_eq!(db_files.get(&PathBuf::from("notes/a.md")), Some(&stat));
+    }
+
+    #[test]
+    fn rename_match_helpers_cover_native_uuid_and_hash_paths() {
+        let stat = FileStat {
+            mtime_ns: 1,
+            ctime_ns: Some(2),
+            size_bytes: 3,
+            inode: Some(4),
+        };
+        let native_from = PathBuf::from("notes/native-old.md");
+        let native_to = PathBuf::from("notes/native-new.md");
+        let uuid_from = PathBuf::from("notes/uuid-old.md");
+        let uuid_to = PathBuf::from("notes/uuid-new.md");
+        let hash_from = PathBuf::from("notes/hash-old.md");
+        let hash_to = PathBuf::from("notes/hash-new.md");
+
+        let mut resolution = RenameResolution {
+            remaining_new: HashMap::from([
+                (native_to.clone(), stat.clone()),
+                (uuid_to.clone(), stat.clone()),
+                (hash_to.clone(), stat.clone()),
+            ]),
+            remaining_missing: HashSet::from([
+                native_from.clone(),
+                uuid_from.clone(),
+                hash_from.clone(),
+            ]),
+            ..Default::default()
+        };
+        let missing_identities = HashMap::from([
+            (
+                native_from.clone(),
+                MissingPageIdentity {
+                    page_id: 1,
+                    uuid: Some("native-uuid".to_owned()),
+                    sha256: "native-hash".to_owned(),
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+            (
+                uuid_from.clone(),
+                MissingPageIdentity {
+                    page_id: 2,
+                    uuid: Some("uuid-match".to_owned()),
+                    sha256: "uuid-hash".to_owned(),
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+            (
+                hash_from.clone(),
+                MissingPageIdentity {
+                    page_id: 3,
+                    uuid: None,
+                    sha256: "hash-match".to_owned(),
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+        ]);
+        let new_identities = HashMap::from([
+            (
+                native_to.clone(),
+                NewTreeIdentity {
+                    relative_path: native_to.clone(),
+                    sha256: "native-hash".to_owned(),
+                    uuid: Some("native-uuid".to_owned()),
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+            (
+                uuid_to.clone(),
+                NewTreeIdentity {
+                    relative_path: uuid_to.clone(),
+                    sha256: "uuid-hash".to_owned(),
+                    uuid: Some("uuid-match".to_owned()),
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+            (
+                hash_to.clone(),
+                NewTreeIdentity {
+                    relative_path: hash_to.clone(),
+                    sha256: "hash-match".to_owned(),
+                    uuid: None,
+                    body_size_bytes: 80,
+                    has_nonempty_body: true,
+                },
+            ),
+        ]);
+
+        apply_native_rename_matches(
+            &mut resolution,
+            &missing_identities,
+            &[NativeRename {
+                from_path: native_from.clone(),
+                to_path: native_to.clone(),
+            }],
+            &new_identities,
+        );
+        apply_uuid_rename_matches(&mut resolution, &missing_identities, &new_identities);
+        apply_hash_rename_matches(&mut resolution, &missing_identities, &new_identities).unwrap();
+
+        assert_eq!(resolution.native_renamed, 1);
+        assert_eq!(resolution.uuid_renamed, 1);
+        assert_eq!(resolution.hash_renamed, 1);
+        assert!(resolution.remaining_missing.is_empty());
+        assert!(resolution.remaining_new.is_empty());
+        assert_eq!(resolution.matches.len(), 3);
+        assert!(resolution
+            .matches
+            .iter()
+            .any(|entry| entry.kind == RenameMatchKind::Native));
+        assert!(resolution
+            .matches
+            .iter()
+            .any(|entry| entry.kind == RenameMatchKind::Uuid));
+        assert!(resolution
+            .matches
+            .iter()
+            .any(|entry| entry.kind == RenameMatchKind::Hash));
     }
 
     #[test]
@@ -5393,7 +6326,755 @@ mod tests {
             )
             .unwrap();
 
-        assert!(error.contains("invalid memory_id"));
+        assert!(error.contains("invalid frontmatter uuid"));
         assert_eq!(committed_count, 0);
+    }
+
+    // ── Coverage gap tests ────────────────────────────────────
+
+    #[test]
+    fn reconcile_skips_non_active_collection_without_error() {
+        let conn = open_test_db();
+        for state in [
+            crate::core::collections::CollectionState::Detached,
+            crate::core::collections::CollectionState::Restoring,
+        ] {
+            let collection = sample_collection_in_state(state);
+            let result = reconcile_with_native_events(&conn, &collection, &[]);
+            let stats = result.unwrap();
+            assert_eq!(stats.walked, 0);
+            assert_eq!(stats.unchanged, 0);
+        }
+    }
+
+    #[test]
+    fn drift_capture_summary_has_material_changes_returns_false_when_all_zero() {
+        let summary = DriftCaptureSummary::default();
+        assert!(!summary.has_material_changes());
+    }
+
+    #[test]
+    fn drift_capture_summary_has_material_changes_returns_true_when_any_nonzero() {
+        for summary in [
+            DriftCaptureSummary {
+                pages_updated: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_added: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_quarantined: 1,
+                ..Default::default()
+            },
+            DriftCaptureSummary {
+                pages_deleted: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(summary.has_material_changes());
+        }
+    }
+
+    #[test]
+    fn drift_capture_summary_from_stats_maps_fields_correctly() {
+        let stats = ReconcileStats {
+            modified: 2,
+            new: 3,
+            quarantined_ambiguous: 1,
+            quarantined_db_state: 4,
+            hard_deleted: 5,
+            ..Default::default()
+        };
+        let summary = DriftCaptureSummary::from_stats(&stats);
+        assert_eq!(summary.pages_updated, 2);
+        assert_eq!(summary.pages_added, 3);
+        assert_eq!(summary.pages_quarantined, 5); // ambiguous + db_state
+        assert_eq!(summary.pages_deleted, 5);
+    }
+
+    #[test]
+    fn drift_capture_summary_add_assign_accumulates_fields() {
+        let mut left = DriftCaptureSummary {
+            pages_updated: 1,
+            pages_added: 2,
+            pages_quarantined: 3,
+            pages_deleted: 4,
+        };
+        let right = DriftCaptureSummary {
+            pages_updated: 10,
+            pages_added: 20,
+            pages_quarantined: 30,
+            pages_deleted: 40,
+        };
+        left.add_assign(&right);
+        assert_eq!(left.pages_updated, 11);
+        assert_eq!(left.pages_added, 22);
+        assert_eq!(left.pages_quarantined, 33);
+        assert_eq!(left.pages_deleted, 44);
+    }
+
+    #[test]
+    fn collection_dirty_status_is_dirty_when_only_sentinel_count_nonzero() {
+        let status = CollectionDirtyStatus {
+            needs_full_sync: false,
+            sentinel_count: 1,
+            recovery_in_progress: false,
+            last_sync_at: None,
+        };
+        assert!(status.is_dirty());
+    }
+
+    #[test]
+    fn collection_dirty_status_is_not_dirty_when_all_clear() {
+        let status = CollectionDirtyStatus {
+            needs_full_sync: false,
+            sentinel_count: 0,
+            recovery_in_progress: false,
+            last_sync_at: None,
+        };
+        assert!(!status.is_dirty());
+    }
+
+    #[test]
+    fn phase2_stability_exceeds_max_iters_returns_collection_unstable_error() {
+        fn always_different(n: usize) -> StatSnapshot {
+            HashMap::from([(
+                PathBuf::from("note.md"),
+                FileStat {
+                    mtime_ns: n as i64,
+                    ctime_ns: Some(n as i64),
+                    size_bytes: 10,
+                    inode: Some(1),
+                },
+            )])
+        }
+
+        let mut call = 0usize;
+        let err = run_phase2_stability_check(
+            RestoreRemapOperation::Restore,
+            2,
+            "vault-test",
+            || {
+                call += 1;
+                Ok(always_different(call))
+            },
+            || Ok(DriftCaptureSummary::default()),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("CollectionUnstableError"));
+        assert!(err.contains("vault-test"));
+        assert!(err.contains("phase=stability"));
+    }
+
+    #[test]
+    fn phase2_stability_remap_operation_error_contains_remap_in_message() {
+        let mut call = 0usize;
+        let err = run_phase2_stability_check(
+            RestoreRemapOperation::Remap,
+            1,
+            "remap-vault",
+            || {
+                call += 1;
+                Ok(HashMap::from([(
+                    PathBuf::from("file.md"),
+                    FileStat {
+                        mtime_ns: call as i64,
+                        ctime_ns: Some(call as i64),
+                        size_bytes: 5,
+                        inode: Some(1),
+                    },
+                )]))
+            },
+            || Ok(DriftCaptureSummary::default()),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("CollectionUnstableError"));
+        assert!(err.contains("operation=remap"));
+    }
+
+    #[test]
+    fn build_full_hash_plan_classifies_unchanged_modified_new_and_missing_entries() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection_with_state(
+            &conn,
+            root.path(),
+            crate::core::collections::CollectionState::Active,
+            false,
+        );
+
+        let unchanged_bytes =
+            b"---\nslug: notes/unchanged\ntitle: Unchanged\ntype: concept\n---\nunchanged body\n";
+        fs::write(root.path().join("unchanged.md"), unchanged_bytes).unwrap();
+        let unchanged_stat = stat_for(root.path(), "unchanged.md");
+        let unchanged_sha = file_state::hash_file(&root.path().join("unchanged.md")).unwrap();
+        let unchanged_page = seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/unchanged",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54761231",
+                relative_path: "unchanged.md",
+                stat: &unchanged_stat,
+                sha256: &unchanged_sha,
+                compiled_truth: "unchanged body",
+                timeline: "",
+            },
+        );
+
+        let modified_original =
+            b"---\nslug: notes/modified\ntitle: Modified\ntype: concept\n---\nold modified body\n";
+        fs::write(root.path().join("modified.md"), modified_original).unwrap();
+        let modified_stat = stat_for(root.path(), "modified.md");
+        let modified_sha = file_state::hash_file(&root.path().join("modified.md")).unwrap();
+        seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/modified",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54761232",
+                relative_path: "modified.md",
+                stat: &modified_stat,
+                sha256: &modified_sha,
+                compiled_truth: "old modified body",
+                timeline: "",
+            },
+        );
+        fs::write(
+            root.path().join("modified.md"),
+            b"---\nslug: notes/modified\ntitle: Modified\ntype: concept\n---\nnew modified body\n",
+        )
+        .unwrap();
+        let modified_new_stat = stat_for(root.path(), "modified.md");
+
+        let missing_bytes =
+            b"---\nslug: notes/missing\ntitle: Missing\ntype: concept\n---\nmissing body\n";
+        let missing_stat = FileStat {
+            mtime_ns: 1,
+            ctime_ns: Some(1),
+            size_bytes: missing_bytes.len() as i64,
+            inode: Some(1),
+        };
+        seed_page_with_identity(
+            &conn,
+            collection.id,
+            SeededPageIdentity {
+                slug: "notes/missing",
+                uuid: "01969f11-9448-7d79-8d3f-c68f54761233",
+                relative_path: "missing.md",
+                stat: &missing_stat,
+                sha256: "missing-sha",
+                compiled_truth: "missing body",
+                timeline: "",
+            },
+        );
+
+        fs::write(
+            root.path().join("new.md"),
+            b"---\nslug: notes/new\ntitle: New\ntype: concept\n---\nnew body\n",
+        )
+        .unwrap();
+        let new_stat = stat_for(root.path(), "new.md");
+
+        let walked_files = HashMap::from([
+            (PathBuf::from("unchanged.md"), unchanged_stat.clone()),
+            (PathBuf::from("modified.md"), modified_new_stat.clone()),
+            (PathBuf::from("new.md"), new_stat.clone()),
+        ]);
+
+        let plan = build_full_hash_plan(&conn, collection.id, root.path(), &walked_files).unwrap();
+
+        assert_eq!(plan.unchanged.len(), 1);
+        assert_eq!(plan.unchanged[0].page_id, unchanged_page);
+        assert_eq!(
+            plan.unchanged[0].relative_path,
+            PathBuf::from("unchanged.md")
+        );
+        assert_eq!(plan.unchanged[0].sha256, unchanged_sha);
+        assert!(plan
+            .diff
+            .modified
+            .contains_key(&PathBuf::from("modified.md")));
+        assert!(plan.diff.new.contains_key(&PathBuf::from("new.md")));
+        assert!(plan.diff.missing.contains(&PathBuf::from("missing.md")));
+    }
+
+    #[test]
+    fn detect_duplicate_uuids_in_tree_rejects_invalid_frontmatter_uuid() {
+        let root = TempDir::new().unwrap();
+        fs::write(
+            root.path().join("broken.md"),
+            b"---\nmemory_id: not-a-uuid\ntitle: Broken\ntype: concept\n---\nbody\n",
+        )
+        .unwrap();
+        let walked_files = HashMap::from([(
+            PathBuf::from("broken.md"),
+            stat_for(root.path(), "broken.md"),
+        )]);
+
+        let error = detect_duplicate_uuids_in_tree(root.path(), &walked_files).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("detect_duplicate_uuids_in_tree: broken.md has invalid frontmatter uuid"));
+    }
+
+    #[test]
+    fn detect_duplicate_uuids_in_tree_rejects_duplicate_uuid_paths() {
+        let root = TempDir::new().unwrap();
+        let raw_bytes =
+            b"---\nmemory_id: 01969f11-9448-7d79-8d3f-c68f54761234\ntitle: Duplicate\ntype: concept\n---\nbody\n";
+        fs::write(root.path().join("one.md"), raw_bytes).unwrap();
+        fs::write(root.path().join("two.md"), raw_bytes).unwrap();
+        let walked_files = HashMap::from([
+            (PathBuf::from("one.md"), stat_for(root.path(), "one.md")),
+            (PathBuf::from("two.md"), stat_for(root.path(), "two.md")),
+        ]);
+
+        let error = detect_duplicate_uuids_in_tree(root.path(), &walked_files).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ReconcileError::DuplicateUuidError { ref uuid, ref paths }
+                if uuid == "01969f11-9448-7d79-8d3f-c68f54761234"
+                    && paths == &vec!["one.md".to_owned(), "two.md".to_owned()]
+        ));
+    }
+
+    #[test]
+    fn infer_type_from_path_returns_correct_type_for_each_folder() {
+        let root = Path::new("/vault");
+        let cases = [
+            ("projects", "project"),
+            ("areas", "area"),
+            ("resources", "resource"),
+            ("archives", "archive"),
+            ("journal", "journal"),
+            ("journals", "journal"),
+            ("people", "person"),
+            ("companies", "company"),
+            ("orgs", "company"),
+        ];
+        for (folder, expected) in cases {
+            let path = Path::new("/vault").join(folder).join("note.md");
+            let result = infer_type_from_path(&path, root);
+            assert_eq!(result.as_deref(), Some(expected), "folder={folder}");
+        }
+    }
+
+    #[test]
+    fn infer_type_from_path_returns_none_for_unknown_folder() {
+        let root = Path::new("/vault");
+        let path = Path::new("/vault/misc/note.md");
+        assert!(infer_type_from_path(path, root).is_none());
+    }
+
+    #[test]
+    fn infer_type_from_path_strips_numeric_prefix_before_matching() {
+        let root = Path::new("/vault");
+        let path = Path::new("/vault/01. Projects/something.md");
+        let result = infer_type_from_path(path, root);
+        assert_eq!(result.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn strip_numeric_prefix_removes_leading_digits_dot_and_space() {
+        assert_eq!(strip_numeric_prefix("01. Folder"), "Folder");
+        assert_eq!(strip_numeric_prefix("123. Area"), "Area");
+        assert_eq!(strip_numeric_prefix("9. Thing"), "Thing");
+    }
+
+    #[test]
+    fn strip_numeric_prefix_leaves_non_numeric_name_unchanged() {
+        assert_eq!(strip_numeric_prefix("Projects"), "Projects");
+        assert_eq!(strip_numeric_prefix("01-not-standard"), "01-not-standard");
+        assert_eq!(strip_numeric_prefix(""), "");
+    }
+
+    #[test]
+    fn is_markdown_file_returns_true_for_md_extension() {
+        assert!(is_markdown_file(Path::new("note.md")));
+        assert!(is_markdown_file(Path::new("note.MD")));
+        assert!(is_markdown_file(Path::new("note.Md")));
+    }
+
+    #[test]
+    fn is_markdown_file_returns_false_for_non_md_extension() {
+        assert!(!is_markdown_file(Path::new("note.txt")));
+        assert!(!is_markdown_file(Path::new("image.png")));
+        assert!(!is_markdown_file(Path::new("no-extension")));
+        assert!(!is_markdown_file(Path::new(".hidden")));
+    }
+
+    #[test]
+    fn raw_import_invariant_multiple_active_rows_fails_with_enforce_policy() {
+        let result = raw_import_invariant_result(
+            99,
+            3,
+            2,
+            "test-context",
+            RawImportInvariantPolicy::Enforce,
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("InvariantViolationError"));
+        assert!(err.contains("page_id=99"));
+        assert!(err.contains("2 active raw_imports rows"));
+    }
+
+    #[test]
+    fn raw_import_invariant_multiple_active_rows_warns_with_allow_override_policy() {
+        let result = raw_import_invariant_result(
+            99,
+            3,
+            2,
+            "test-context",
+            RawImportInvariantPolicy::AllowRerenderOverride,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn reconcile_error_display_collection_lacks_writer_quiescence() {
+        let err = ReconcileError::CollectionLacksWriterQuiescenceError {
+            collection_name: "my-vault".to_owned(),
+            root_path: "/mnt/vault".to_owned(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("CollectionLacksWriterQuiescenceError"));
+        assert!(s.contains("my-vault"));
+        assert!(s.contains("/mnt/vault"));
+    }
+
+    #[test]
+    fn reconcile_error_display_collection_dirty_error() {
+        let err = ReconcileError::CollectionDirtyError {
+            collection_name: "dirty-vault".to_owned(),
+            status: CollectionDirtyStatus {
+                needs_full_sync: true,
+                sentinel_count: 2,
+                recovery_in_progress: false,
+                last_sync_at: Some("2024-01-01T00:00:00Z".to_owned()),
+            },
+        };
+        let s = err.to_string();
+        assert!(s.contains("CollectionDirtyError"));
+        assert!(s.contains("dirty-vault"));
+        assert!(s.contains("needs_full_sync=true"));
+        assert!(s.contains("sentinel_count=2"));
+    }
+
+    #[test]
+    fn reconcile_error_display_remap_drift_conflict_error() {
+        let err = ReconcileError::RemapDriftConflictError {
+            collection_name: "remap-vault".to_owned(),
+            summary: DriftCaptureSummary {
+                pages_updated: 1,
+                pages_added: 2,
+                pages_quarantined: 0,
+                pages_deleted: 0,
+            },
+        };
+        let s = err.to_string();
+        assert!(s.contains("RemapDriftConflictError"));
+        assert!(s.contains("remap-vault"));
+        assert!(s.contains("pages_updated=1"));
+    }
+
+    #[test]
+    fn reconcile_error_display_collection_unstable_error() {
+        let err = ReconcileError::CollectionUnstableError {
+            collection_name: "unstable-vault".to_owned(),
+            operation: RestoreRemapOperation::Remap,
+            phase: "stability",
+            retries: 5,
+        };
+        let s = err.to_string();
+        assert!(s.contains("CollectionUnstableError"));
+        assert!(s.contains("unstable-vault"));
+        assert!(s.contains("operation=remap"));
+        assert!(s.contains("retries=5"));
+    }
+
+    #[test]
+    fn uuid_migration_preflight_succeeds_when_no_pages_exist() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
+            [],
+        )
+        .unwrap();
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = uuid_migration_preflight(&conn, &collection);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn uuid_migration_preflight_succeeds_when_page_uuid_is_mirrored_in_frontmatter() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
+            [],
+        )
+        .unwrap();
+        let uuid = "01969f11-9448-7d79-8d3f-c68f54761234";
+        conn.execute(
+            "INSERT INTO pages (collection_id, slug, uuid, type, title, compiled_truth, timeline, frontmatter)
+             VALUES (1, 'notes/mirrored', ?1, 'concept', 'Mirrored', 'tiny', '', ?2)",
+            rusqlite::params![
+                uuid,
+                format!("{{\"slug\":\"notes/mirrored\",\"memory_id\":\"{uuid}\"}}")
+            ],
+        )
+        .unwrap();
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = uuid_migration_preflight(&conn, &collection);
+        assert!(
+            result.is_ok(),
+            "preflight should pass when uuid is mirrored: {result:?}"
+        );
+    }
+
+    #[test]
+    fn uuid_migration_preflight_succeeds_when_page_has_nontrivial_body_without_uuid_mirror() {
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO collections (name, root_path) VALUES ('test', '/vault')",
+            [],
+        )
+        .unwrap();
+        let large_body = "a".repeat(MIN_CANONICAL_BODY_BYTES as usize);
+        conn.execute(
+            "INSERT INTO pages (collection_id, slug, uuid, type, title, compiled_truth, timeline, frontmatter)
+             VALUES (1, 'notes/large', '01969f11-9448-7d79-8d3f-c68f54761235', 'concept', 'Large', ?1, '', '{\"slug\":\"notes/large\"}')",
+            rusqlite::params![large_body],
+        )
+        .unwrap();
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        // Large body → has_canonical_trivial_body returns false → no error
+        let result = uuid_migration_preflight(&conn, &collection);
+        assert!(
+            result.is_ok(),
+            "large-body page should not trigger preflight error: {result:?}"
+        );
+    }
+
+    #[test]
+    fn load_frontmatter_map_fails_on_invalid_json() {
+        let result = load_frontmatter_map("not valid json {");
+        assert!(matches!(result, Err(ReconcileError::Other(_))));
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("load_frontmatter_map"));
+    }
+
+    #[test]
+    fn default_restore_stability_max_iters_uses_env_var_when_set() {
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "12");
+        let value = default_restore_stability_max_iters();
+        assert_eq!(value, 12);
+    }
+
+    #[test]
+    fn default_restore_stability_max_iters_falls_back_to_default_when_var_is_zero() {
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "0");
+        let value = default_restore_stability_max_iters();
+        assert_eq!(value, DEFAULT_RESTORE_STABILITY_MAX_ITERS);
+    }
+
+    #[test]
+    fn default_restore_stability_max_iters_guard_restores_previous_value() {
+        let _guard = env_mutation_lock().lock().unwrap();
+        let _original = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "7");
+        {
+            let _env = EnvVarGuard::set("QUAID_RESTORE_STABILITY_MAX_ITERS", "12");
+            assert_eq!(default_restore_stability_max_iters(), 12);
+        }
+
+        assert_eq!(
+            std::env::var("QUAID_RESTORE_STABILITY_MAX_ITERS").as_deref(),
+            Ok("7")
+        );
+        assert_eq!(default_restore_stability_max_iters(), 7);
+    }
+
+    #[test]
+    fn full_hash_reconcile_authorization_helpers_cover_all_identity_variants() {
+        let audit = FullHashReconcileAuthorization::AuditCommand;
+        assert_eq!(audit.as_str(), "audit-command");
+        assert_eq!(audit.identity(), None);
+
+        let active = FullHashReconcileAuthorization::ActiveLease {
+            lease_session_id: "lease-1".to_owned(),
+        };
+        assert_eq!(active.as_str(), "active-lease");
+        assert_eq!(active.identity(), Some("lease-1"));
+
+        let attach = FullHashReconcileAuthorization::AttachCommand {
+            attach_command_id: "attach-1".to_owned(),
+        };
+        assert_eq!(attach.as_str(), "attach-command");
+        assert_eq!(attach.identity(), Some("attach-1"));
+
+        let restore_command = FullHashReconcileAuthorization::RestoreCommand {
+            restore_command_id: "restore-1".to_owned(),
+        };
+        assert_eq!(restore_command.as_str(), "restore-command");
+        assert_eq!(restore_command.identity(), Some("restore-1"));
+
+        let restore_lease = FullHashReconcileAuthorization::RestoreLease {
+            lease_session_id: "lease-2".to_owned(),
+        };
+        assert_eq!(restore_lease.as_str(), "restore-lease");
+        assert_eq!(restore_lease.identity(), Some("lease-2"));
+    }
+
+    #[test]
+    fn sentinel_count_ignores_files_without_needs_full_sync_extension() {
+        let recovery_root = tempfile::TempDir::new().unwrap();
+        let collection_id = 1i64;
+        let dir = collection_recovery_dir(recovery_root.path(), collection_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("write-1.needs_full_sync"), b"dirty").unwrap();
+        fs::write(dir.join("readme.txt"), b"not a sentinel").unwrap();
+        fs::write(dir.join("other.log"), b"not a sentinel").unwrap();
+
+        let count = sentinel_count(recovery_root.path(), collection_id).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn sentinel_count_returns_zero_when_recovery_dir_does_not_exist() {
+        let recovery_root = tempfile::TempDir::new().unwrap();
+        let count = sentinel_count(recovery_root.path(), 999).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn authorize_remap_root_active_state_matching_lease_succeeds() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::RemapRoot,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "remap-root with matching lease on active should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn authorize_remap_root_restoring_state_matching_lease_succeeds() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Restoring);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::RemapRoot,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        );
+        // `owner_identity_defaults_for_state(Restoring)` sets active_lease to None,
+        // so this should fail with missing persisted owner identity.
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing persisted owner identity"));
+    }
+
+    #[test]
+    fn authorize_remap_root_active_state_mismatched_lease_fails() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::RemapRoot,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "wrong-lease".to_owned(),
+            },
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("caller identity mismatch"));
+        assert!(err.contains("remap-root"));
+    }
+
+    #[test]
+    fn authorize_overflow_recovery_active_state_with_active_lease_succeeds() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::OverflowRecovery,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn authorize_restore_active_state_with_active_lease_matching_owner_succeeds() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::Restore,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "lease-1".to_owned(),
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn authorize_full_hash_reconcile_empty_identity_fails() {
+        let collection =
+            sample_collection_in_state(crate::core::collections::CollectionState::Active);
+        let result = authorize_full_hash_reconcile(
+            &collection,
+            FullHashReconcileMode::RemapDriftCapture,
+            &FullHashReconcileAuthorization::ActiveLease {
+                lease_session_id: "   ".to_owned(),
+            },
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing caller identity"));
+    }
+
+    #[test]
+    fn full_hash_reconcile_mode_as_str_covers_all_variants() {
+        assert_eq!(FullHashReconcileMode::Audit.as_str(), "audit");
+        assert_eq!(FullHashReconcileMode::FreshAttach.as_str(), "fresh-attach");
+        assert_eq!(
+            FullHashReconcileMode::OverflowRecovery.as_str(),
+            "overflow-recovery"
+        );
+        assert_eq!(FullHashReconcileMode::RemapRoot.as_str(), "remap-root");
+        assert_eq!(FullHashReconcileMode::Restore.as_str(), "restore");
+        assert_eq!(
+            FullHashReconcileMode::RemapDriftCapture.as_str(),
+            "remap-drift-capture"
+        );
+        assert_eq!(
+            FullHashReconcileMode::RestoreDriftCapture.as_str(),
+            "restore-drift-capture"
+        );
+    }
+
+    #[test]
+    fn restore_remap_operation_as_str_covers_both_variants() {
+        assert_eq!(RestoreRemapOperation::Restore.as_str(), "restore");
+        assert_eq!(RestoreRemapOperation::Remap.as_str(), "remap");
     }
 }

@@ -49,3 +49,23 @@ When documenting a new MCP tool response shape:
 4. **Note optional fields.** `root_path` is `Option<String>` populated only for `active` collections; docs should reflect `null` in other cases.
 
 5. **Commit the JSON example as a contract.** Once shipped, MCP clients will codegen against it. A complete, accurate example beats a "representative" sketch with placeholder fields.
+
+## Frozen-schema widening check (added 2026-04-28)
+
+When a prior slice says an MCP response is a **frozen N-field schema** and the tests assert exact key equality:
+
+1. **Treat later additive fields as breaking until proven otherwise.**
+   - A later task saying "also expose X/Y/Z" does not silently override the frozen contract.
+   - Re-open the spec/design/tasks together or move the new diagnostics to a different surface.
+
+2. **Check the enforcement point, not just the prose.**
+   - Look for exact-key tests like `expected_keys == actual_keys`.
+   - If they exist, "documented extension" language is insufficient by itself.
+
+3. **Prefer CLI widening over MCP widening when only operator visibility is needed.**
+   - Human CLI output can often absorb extra health/status fields safely.
+   - Machine-readable MCP surfaces need an explicit compatibility decision.
+
+4. **Keep authorization and mode separate in review notes.**
+   - If a background recovery path wants a new audit label, that is usually a new *mode*.
+   - It should not automatically invent a new *authorization* bypass when an existing owner/lease proof already governs the action.

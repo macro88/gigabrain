@@ -16,14 +16,40 @@ use crate::core::ignore_patterns::{self, ParseResult};
 use crate::core::quarantine;
 use crate::core::vault_sync;
 
+fn parse_collection_name_arg(name: &str) -> Result<String, String> {
+    collections::validate_collection_name(name)
+        .map(|_| name.to_owned())
+        .map_err(|err| err.to_string())
+}
+
 #[derive(Subcommand, Debug)]
 pub enum CollectionAction {
     /// Attach a vault as a collection
     Add(CollectionAddArgs),
+    /// Persist quaid_id frontmatter for pages that still lack it
+    #[command(name = "migrate-uuids")]
+    MigrateUuids {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// List collections
     List,
     /// Show collection diagnostics
-    Info { name: String },
+    Info {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+    },
+    /// Detach a collection and optionally purge its indexed rows
+    Remove {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        #[arg(long)]
+        purge: bool,
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Manage .quaidignore patterns
     Ignore {
         #[command(subcommand)]
@@ -38,9 +64,12 @@ pub enum CollectionAction {
     Sync(CollectionSyncArgs),
     /// Restore a collection to a target path
     Restore(CollectionRestoreArgs),
+    /// Run an on-demand full-hash audit
+    Audit(CollectionAuditArgs),
     /// Clear restore-integrity blocked state
     #[command(name = "restore-reset")]
     RestoreReset {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -48,6 +77,7 @@ pub enum CollectionAction {
     /// Clear reconcile-halted state after manual repair
     #[command(name = "reconcile-reset")]
     ReconcileReset {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -56,20 +86,22 @@ pub enum CollectionAction {
 
 #[derive(Args, Debug)]
 pub struct CollectionAddArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     pub path: PathBuf,
     #[arg(long, conflicts_with = "writable")]
     pub read_only: bool,
     #[arg(long, conflicts_with = "read_only")]
     pub writable: bool,
+    #[arg(long = "write-quaid-id", conflicts_with = "read_only")]
+    pub write_quaid_id: bool,
     #[arg(long)]
-    pub write_memory_id: bool,
-    #[arg(long)]
-    pub watcher_mode: Option<String>,
+    pub namespace: Option<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct CollectionSyncArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     #[arg(long)]
     pub remap_root: Option<PathBuf>,
@@ -81,22 +113,43 @@ pub struct CollectionSyncArgs {
 
 #[derive(Args, Debug)]
 pub struct CollectionRestoreArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     pub target: PathBuf,
     #[arg(long)]
     pub online: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct CollectionAuditArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
+    pub name: String,
+    #[arg(long = "raw-imports-gc")]
+    pub raw_imports_gc: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum CollectionIgnoreAction {
     /// Add a user-authored ignore pattern
-    Add { name: String, pattern: String },
+    Add {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        pattern: String,
+    },
     /// Remove a user-authored ignore pattern
-    Remove { name: String, pattern: String },
+    Remove {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        pattern: String,
+    },
     /// List cached user-authored ignore patterns
-    List { name: String },
+    List {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+    },
     /// Explicitly clear the ignore file and cached mirror
     Clear {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -131,6 +184,7 @@ struct CollectionInfoOutput {
     last_sync_at: Option<String>,
     page_count: i64,
     queue_depth: i64,
+    failing_jobs: i64,
     quarantined_pages_awaiting_action: i64,
     ignore_parse_errors: Option<String>,
     pending_root_path: Option<String>,
@@ -145,6 +199,9 @@ struct CollectionInfoOutput {
     reload_generation: i64,
     watcher_released_session_id: Option<String>,
     watcher_released_generation: Option<i64>,
+    watcher_mode: Option<String>,
+    watcher_last_event_at: Option<String>,
+    watcher_channel_depth: Option<i64>,
     blocked_state: String,
     integrity_blocked: Option<String>,
     suggested_command: Option<String>,
@@ -175,7 +232,15 @@ struct CollectionStatusSummary {
 struct CollectionMetrics {
     page_count: i64,
     queue_depth: i64,
+    failing_jobs: i64,
     quarantined_pages_awaiting_action: i64,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct UuidMigrationSummary {
+    migrated: usize,
+    skipped_readonly: usize,
+    already_had_uuid: usize,
 }
 
 pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> {
@@ -184,8 +249,17 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
             ensure_unix_collection_command("quaid collection add")?;
             add(db, args, json)
         }
+        CollectionAction::MigrateUuids { name, dry_run } => {
+            ensure_unix_collection_command("quaid collection migrate-uuids")?;
+            migrate_uuids(db, &name, dry_run, json)
+        }
         CollectionAction::List => list(db, json),
         CollectionAction::Info { name } => info(db, &name, json),
+        CollectionAction::Remove {
+            name,
+            purge,
+            confirm,
+        } => remove(db, &name, purge, confirm, json),
         CollectionAction::Ignore { action } => ignore(db, action, json),
         CollectionAction::Quarantine { action } => quarantine_action(db, action, json),
         CollectionAction::Sync(args) => {
@@ -195,6 +269,10 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         CollectionAction::Restore(args) => {
             ensure_unix_collection_command("quaid collection restore")?;
             restore(db, args, json)
+        }
+        CollectionAction::Audit(args) => {
+            ensure_unix_collection_command("quaid collection audit")?;
+            audit(db, args, json)
         }
         CollectionAction::RestoreReset { name, confirm } => {
             if !confirm {
@@ -224,20 +302,15 @@ fn ensure_unix_collection_command(command: &'static str) -> Result<()> {
 }
 
 fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
+    crate::core::namespace::validate_optional_namespace(args.namespace.as_deref())
+        .map_err(|err| anyhow!(err.to_string()))?;
     collections::validate_collection_name(&args.name).map_err(|err| anyhow!(err.to_string()))?;
     if collections::get_by_name(db, &args.name)?.is_some() {
         bail!("collection already exists: {}", args.name);
     }
-    if args.write_memory_id {
-        bail!(
-            "--write-quaid-id is deferred in Batch K2; K1 only supports default read-only attach"
-        );
-    }
-    if let Some(mode) = args.watcher_mode {
-        bail!("--watcher-mode {mode} is not implemented in Batch K1");
-    }
 
     let root_path = resolve_collection_root(&args.path)?;
+    let root_path_string = root_path.display().to_string();
     let ignore_patterns = read_initial_ignore_patterns(&root_path)?;
     let writable = if args.read_only {
         false
@@ -250,6 +323,13 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
             collection_name: args.name.clone(),
         }
         .to_string()));
+    }
+    if args.write_quaid_id && !writable {
+        bail!("--write-quaid-id requires a writable collection root");
+    }
+    if args.write_quaid_id {
+        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &root_path_string)
+            .map_err(map_bulk_uuid_write_back_error)?;
     }
 
     let collection_id = {
@@ -268,7 +348,7 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
              VALUES (?1, ?2, 'detached', ?3, 0, ?4, NULL, 1)",
             params![
                 args.name,
-                root_path.display().to_string(),
+                root_path_string,
                 i64::from(writable),
                 ignore_patterns,
             ],
@@ -283,12 +363,37 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
         Ok(stats) => stats,
         Err(err) => {
             let _ = db.execute("DELETE FROM collections WHERE id = ?1", [collection_id]);
-            return Err(anyhow!(err.to_string()));
+            return Err(anyhow::Error::new(err)
+                .context(format!("failed to attach collection '{}'", args.name)));
         }
     };
+    if let Some(namespace) = args
+        .namespace
+        .as_deref()
+        .filter(|namespace| !namespace.is_empty())
+    {
+        crate::core::namespace::create_namespace(db, namespace, None)
+            .map_err(|err| anyhow!(err.to_string()))?;
+        db.execute(
+            "UPDATE pages SET namespace = ?1 WHERE collection_id = ?2",
+            params![namespace, collection_id],
+        )?;
+    }
 
     let collection = collections::get_by_name(db, &args.name)?
         .ok_or_else(|| anyhow!("collection not found after attach: {}", args.name))?;
+    let migration = if args.write_quaid_id {
+        Some(
+            run_uuid_write_back(db, &collection, false).with_context(|| {
+                format!(
+                    "failed to write Quaid IDs for collection '{}'",
+                    collection.name
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let metrics = collection_metrics(db, collection.id)?;
 
     render_success(
@@ -306,14 +411,108 @@ fn add(db: &Connection, args: CollectionAddArgs, json: bool) -> Result<()> {
             "queue_depth": metrics.queue_depth,
             "last_sync_at": collection.last_sync_at,
             "attach_command_id": attach_command_id,
+            "namespace": args.namespace,
             "walked": stats.walked,
             "modified": stats.modified,
             "new": stats.new,
             "missing": stats.missing,
             "uuid_renamed": stats.uuid_renamed,
-            "hash_renamed": stats.hash_renamed
+            "hash_renamed": stats.hash_renamed,
+            "uuid_write_back": migration
         }),
     )
+}
+
+fn migrate_uuids(db: &Connection, name: &str, dry_run: bool, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    let summary = run_uuid_write_back(db, &collection, dry_run)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        let mode = if dry_run { "dry-run" } else { "applied" };
+        println!(
+            "uuid migration {mode}: migrated={} skipped_readonly={} already_had_uuid={}",
+            summary.migrated, summary.skipped_readonly, summary.already_had_uuid
+        );
+    }
+    Ok(())
+}
+
+fn run_uuid_write_back(
+    db: &Connection,
+    collection: &collections::Collection,
+    dry_run: bool,
+) -> Result<UuidMigrationSummary> {
+    vault_sync::ensure_collection_vault_write_allowed(db, collection.id)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    let _lease = if dry_run {
+        vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
+            .map_err(map_bulk_uuid_write_back_error)?;
+        None
+    } else {
+        Some(
+            vault_sync::start_short_lived_owner_lease_for_root_path(db, &collection.root_path)
+                .map_err(map_bulk_uuid_write_back_error)?,
+        )
+    };
+
+    let mut summary = UuidMigrationSummary::default();
+    if dry_run {
+        let mut stmt = db.prepare(
+            "SELECT frontmatter
+             FROM pages
+             WHERE collection_id = ?1
+               AND quarantined_at IS NULL
+             ORDER BY slug",
+        )?;
+        let frontmatters = stmt
+            .query_map([collection.id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        for frontmatter_json in frontmatters {
+            let frontmatter: std::collections::HashMap<String, String> =
+                serde_json::from_str(&frontmatter_json).unwrap_or_default();
+            if frontmatter.contains_key(crate::core::page_uuid::QUAID_ID_FRONTMATTER_KEY) {
+                summary.already_had_uuid += 1;
+            } else {
+                summary.migrated += 1;
+            }
+        }
+        return Ok(summary);
+    }
+
+    let mut stmt = db.prepare(
+        "SELECT id
+         FROM pages
+         WHERE collection_id = ?1
+           AND quarantined_at IS NULL
+         ORDER BY slug",
+    )?;
+    let page_ids = stmt
+        .query_map([collection.id], |row| row.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    for page_id in page_ids {
+        match vault_sync::write_quaid_id_to_file(db, collection, page_id)
+            .map_err(|err| anyhow!(err.to_string()))?
+        {
+            vault_sync::WriteBackOutcome::Migrated => summary.migrated += 1,
+            vault_sync::WriteBackOutcome::SkippedReadOnly => summary.skipped_readonly += 1,
+            vault_sync::WriteBackOutcome::AlreadyHadUuid => summary.already_had_uuid += 1,
+        }
+    }
+
+    Ok(summary)
+}
+
+fn map_bulk_uuid_write_back_error(err: vault_sync::VaultSyncError) -> anyhow::Error {
+    match err {
+        vault_sync::VaultSyncError::ServeOwnsCollectionError { .. } => anyhow!(
+            "{err}. stop serve first, run the bulk UUID rewrite offline, then restart serve."
+        ),
+        other => anyhow!(other.to_string()),
+    }
 }
 
 fn list(db: &Connection, json: bool) -> Result<()> {
@@ -335,6 +534,7 @@ fn list(db: &Connection, json: bool) -> Result<()> {
                     FROM embedding_jobs ej
                     JOIN pages p ON p.id = ej.page_id
                     WHERE p.collection_id = c.id
+                      AND ej.job_state IN ('pending', 'running')
                 ), 0)
          FROM collections c
          WHERE c.root_path <> ''
@@ -378,38 +578,7 @@ fn list(db: &Connection, json: bool) -> Result<()> {
 
 fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
     let collection = load_collection_by_name(db, name)?;
-    let status = describe_collection_status(&collection);
-    let metrics = collection_metrics(db, collection.id)?;
-    let output = CollectionInfoOutput {
-        name: collection.name,
-        root_path: collection.root_path,
-        writable: collection.writable,
-        writable_mode: writable_label(collection.writable).to_owned(),
-        write_target: collection.is_write_target,
-        state: collection.state.as_str().to_owned(),
-        needs_full_sync: collection.needs_full_sync,
-        last_sync_at: collection.last_sync_at,
-        page_count: metrics.page_count,
-        queue_depth: metrics.queue_depth,
-        quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
-        ignore_parse_errors: collection.ignore_parse_errors,
-        pending_root_path: collection.pending_root_path,
-        restore_command_id: collection.restore_command_id,
-        restore_command_pid: collection.restore_command_pid,
-        restore_command_host: collection.restore_command_host,
-        pending_command_heartbeat_at: collection.pending_command_heartbeat_at,
-        integrity_failed_at: collection.integrity_failed_at,
-        pending_manifest_incomplete_at: collection.pending_manifest_incomplete_at,
-        reconcile_halted_at: collection.reconcile_halted_at,
-        reconcile_halt_reason: collection.reconcile_halt_reason,
-        reload_generation: collection.reload_generation,
-        watcher_released_session_id: collection.watcher_released_session_id,
-        watcher_released_generation: collection.watcher_released_generation,
-        blocked_state: status.blocked_state,
-        integrity_blocked: status.integrity_blocked,
-        suggested_command: status.suggested_command,
-        status_message: status.status_message,
-    };
+    let output = build_collection_info_output(db, collection)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -425,12 +594,23 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
             output.needs_full_sync,
             output.last_sync_at.as_deref().unwrap_or("null")
         );
+        println!("failing_jobs={}", output.failing_jobs);
         println!(
             "pending_root_path={} integrity_failed_at={} reconcile_halted_at={} ignore_parse_errors={}",
             output.pending_root_path.as_deref().unwrap_or("null"),
             output.integrity_failed_at.as_deref().unwrap_or("null"),
             output.reconcile_halted_at.as_deref().unwrap_or("null"),
             output.ignore_parse_errors.as_deref().unwrap_or("null")
+        );
+        println!(
+            "watcher_mode={} watcher_last_event_at={} watcher_channel_depth={}",
+            output.watcher_mode.as_deref().unwrap_or("null"),
+            output.watcher_last_event_at.as_deref().unwrap_or("null"),
+            output
+                .watcher_channel_depth
+                .map(|depth| depth.to_string())
+                .as_deref()
+                .unwrap_or("null")
         );
         println!(
             "blocked_state={} integrity_blocked={} suggested_command={} status_message=\"{}\"",
@@ -441,6 +621,116 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn remove(db: &Connection, name: &str, purge: bool, confirm: bool, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    if matches!(collection.state, collections::CollectionState::Restoring) {
+        return Err(anyhow!(vault_sync::VaultSyncError::CollectionRestoring {
+            collection_name: collection.name,
+            state: collection.state.as_str().to_owned(),
+            needs_full_sync: collection.needs_full_sync,
+        }
+        .to_string()));
+    }
+    if purge && !confirm {
+        bail!("collection remove --purge requires --confirm");
+    }
+
+    vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    let detached_pages: i64 = db.query_row(
+        "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
+        [collection.id],
+        |row| row.get(0),
+    )?;
+
+    let purged_pages = {
+        let tx = db.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM collection_owners WHERE collection_id = ?1",
+            [collection.id],
+        )?;
+        let purged_pages = if purge {
+            tx.execute(
+                "DELETE FROM pages WHERE collection_id = ?1",
+                [collection.id],
+            )? as i64
+        } else {
+            0
+        };
+        tx.execute(
+            "UPDATE collections
+             SET state = 'detached',
+                 active_lease_session_id = NULL,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            [collection.id],
+        )?;
+        tx.commit()?;
+        purged_pages
+    };
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "remove",
+            "collection": collection.name,
+            "state": "detached",
+            "purge": purge,
+            "detached_page_rows": detached_pages,
+            "purged_page_rows": purged_pages
+        }),
+    )
+}
+
+fn build_collection_info_output(
+    db: &Connection,
+    collection: collections::Collection,
+) -> Result<CollectionInfoOutput> {
+    let status = describe_collection_status(&collection);
+    let metrics = collection_metrics(db, collection.id)?;
+    let watcher_health = matches!(collection.state, collections::CollectionState::Active)
+        .then(|| vault_sync::collection_watcher_health(collection.id))
+        .flatten();
+    Ok(CollectionInfoOutput {
+        name: collection.name,
+        root_path: collection.root_path,
+        writable: collection.writable,
+        writable_mode: writable_label(collection.writable).to_owned(),
+        write_target: collection.is_write_target,
+        state: collection.state.as_str().to_owned(),
+        needs_full_sync: collection.needs_full_sync,
+        last_sync_at: collection.last_sync_at,
+        page_count: metrics.page_count,
+        queue_depth: metrics.queue_depth,
+        failing_jobs: metrics.failing_jobs,
+        quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
+        ignore_parse_errors: collection.ignore_parse_errors,
+        pending_root_path: collection.pending_root_path,
+        restore_command_id: collection.restore_command_id,
+        restore_command_pid: collection.restore_command_pid,
+        restore_command_host: collection.restore_command_host,
+        pending_command_heartbeat_at: collection.pending_command_heartbeat_at,
+        integrity_failed_at: collection.integrity_failed_at,
+        pending_manifest_incomplete_at: collection.pending_manifest_incomplete_at,
+        reconcile_halted_at: collection.reconcile_halted_at,
+        reconcile_halt_reason: collection.reconcile_halt_reason,
+        reload_generation: collection.reload_generation,
+        watcher_released_session_id: collection.watcher_released_session_id,
+        watcher_released_generation: collection.watcher_released_generation,
+        watcher_mode: watcher_health.as_ref().map(|health| health.mode.clone()),
+        watcher_last_event_at: watcher_health
+            .as_ref()
+            .and_then(|health| health.last_event_at.clone()),
+        watcher_channel_depth: watcher_health.as_ref().map(|health| health.channel_depth),
+        blocked_state: status.blocked_state,
+        integrity_blocked: status.integrity_blocked,
+        suggested_command: status.suggested_command,
+        status_message: status.status_message,
+    })
 }
 
 fn ignore(db: &Connection, action: CollectionIgnoreAction, json: bool) -> Result<()> {
@@ -856,9 +1146,17 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
                 ), 0),
                 COALESCE((
                     SELECT COUNT(*)
+                 FROM embedding_jobs ej
+                 JOIN pages p ON p.id = ej.page_id
+                 WHERE p.collection_id = ?1
+                   AND ej.job_state IN ('pending', 'running')
+                ), 0),
+                COALESCE((
+                    SELECT COUNT(*)
                     FROM embedding_jobs ej
                     JOIN pages p ON p.id = ej.page_id
                     WHERE p.collection_id = ?1
+                      AND ej.job_state = 'failed'
                 ), 0)",
         [collection_id],
         |row| {
@@ -866,6 +1164,7 @@ fn collection_metrics(db: &Connection, collection_id: i64) -> Result<CollectionM
                 page_count: row.get(0)?,
                 quarantined_pages_awaiting_action: row.get(1)?,
                 queue_depth: row.get(2)?,
+                failing_jobs: row.get(3)?,
             })
         },
     )
@@ -887,7 +1186,7 @@ fn describe_collection_status(collection: &collections::Collection) -> Collectio
             )),
             status_message: match reason {
                 "duplicate_uuid" => format!(
-                    "reconcile is halted on duplicate memory_id values; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
+                    "reconcile is halted on duplicate quaid_id values; repair the vault first, then run quaid collection reconcile-reset {} --confirm",
                     collection.name
                 ),
                 "unresolvable_trivial_content" => format!(
@@ -1075,6 +1374,31 @@ fn restore(db: &Connection, args: CollectionRestoreArgs, json: bool) -> Result<(
     )
 }
 
+fn audit(db: &Connection, args: CollectionAuditArgs, json: bool) -> Result<()> {
+    let stats = vault_sync::audit_collection(db, &args.name)?;
+    let raw_imports_deleted = if args.raw_imports_gc {
+        vault_sync::sweep_raw_import_ttl(db)?
+    } else {
+        0
+    };
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "audit",
+            "collection": args.name,
+            "walked": stats.walked,
+            "unchanged": stats.unchanged,
+            "modified": stats.modified,
+            "new": stats.new,
+            "missing": stats.missing,
+            "uuid_renamed": stats.uuid_renamed,
+            "hash_renamed": stats.hash_renamed,
+            "raw_imports_deleted": raw_imports_deleted
+        }),
+    )
+}
+
 fn resolve_collection_root(path: &Path) -> Result<PathBuf> {
     let canonical = fs::canonicalize(path).with_context(|| {
         format!(
@@ -1238,14 +1562,23 @@ fn render_success(json: bool, value: serde_json::Value) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::put;
-    use crate::core::db;
+    use crate::core::{db, markdown};
+    use sha2::{Digest, Sha256};
     use std::path::Path;
+    use uuid::Uuid;
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn open_test_db() -> Connection {
         db::open(":memory:").unwrap()
+    }
+
+    fn open_test_db_file_any() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("memory.db");
+        let conn = db::open(db_path.to_str().unwrap()).unwrap();
+        (dir, conn)
     }
 
     #[cfg(unix)]
@@ -1264,6 +1597,112 @@ mod tests {
         )
         .unwrap();
         conn.last_insert_rowid()
+    }
+
+    fn insert_page_with_raw_import(
+        conn: &Connection,
+        collection_id: i64,
+        slug: &str,
+        uuid: &str,
+        raw_bytes: &[u8],
+        relative_path: &str,
+    ) -> i64 {
+        let frontmatter_json = std::str::from_utf8(raw_bytes)
+            .ok()
+            .map(|s| {
+                let (fm, _) = markdown::parse_frontmatter(s);
+                serde_json::to_string(&fm).unwrap_or_else(|_| "{}".to_owned())
+            })
+            .unwrap_or_else(|| "{}".to_owned());
+        let compiled_truth = std::str::from_utf8(raw_bytes)
+            .ok()
+            .map(|s| markdown::parse_frontmatter(s).1)
+            .unwrap_or_default();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES (?1, ?2, ?3, 'concept', ?2, '', ?4, '', ?5, '', '', 1)",
+            rusqlite::params![collection_id, slug, uuid, compiled_truth, frontmatter_json],
+        )
+        .unwrap();
+        let page_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
+             VALUES (?1, ?2, 1, ?3, ?4)",
+            rusqlite::params![
+                page_id,
+                Uuid::now_v7().to_string(),
+                raw_bytes,
+                relative_path
+            ],
+        )
+        .unwrap();
+        let hash = Sha256::digest(raw_bytes);
+        let sha256 = hash
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        conn.execute(
+            "INSERT INTO file_state (collection_id, relative_path, page_id, mtime_ns, ctime_ns, size_bytes, inode, sha256)
+             VALUES (?1, ?2, ?3, 1, 1, ?4, 1, ?5)",
+            rusqlite::params![collection_id, relative_path, page_id, raw_bytes.len() as i64, sha256],
+        )
+        .unwrap();
+        page_id
+    }
+
+    fn page_id(conn: &Connection, collection_id: i64, slug: &str) -> i64 {
+        conn.query_row(
+            "SELECT id FROM pages WHERE collection_id = ?1 AND slug = ?2",
+            rusqlite::params![collection_id, slug],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn active_raw_import_count(conn: &Connection, page_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1 AND is_active = 1",
+            [page_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn total_raw_import_count(conn: &Connection, page_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+            [page_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn quarantine_page(conn: &Connection, page_id: i64, quarantined_at: &str) {
+        conn.execute(
+            "UPDATE pages SET quarantined_at = ?2 WHERE id = ?1",
+            rusqlite::params![page_id, quarantined_at],
+        )
+        .unwrap();
+    }
+
+    fn insert_knowledge_gap(conn: &Connection, page_id: i64, query_hash: &str) {
+        conn.execute(
+            "INSERT INTO knowledge_gaps (page_id, query_hash, context) VALUES (?1, ?2, 'context')",
+            rusqlite::params![page_id, query_hash],
+        )
+        .unwrap();
+    }
+
+    fn insert_embedding_job(conn: &Connection, page_id: i64, job_state: &str, attempt_count: i64) {
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error, started_at)
+             VALUES (?1, ?2, ?3, CASE WHEN ?2 = 'failed' THEN 'boom' ELSE NULL END, CASE WHEN ?2 = 'running' THEN '2026-04-28T00:00:00Z' ELSE NULL END)",
+            rusqlite::params![page_id, job_state, attempt_count],
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]
@@ -1298,8 +1737,8 @@ mod tests {
                 path: root_path.to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1319,14 +1758,44 @@ mod tests {
                 path: missing,
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
         .unwrap_err();
 
         assert!(error.to_string().contains("collection root"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE name = 'work'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn add_refuses_write_quaid_id_when_attach_is_read_only_before_creating_collection_row() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+
+        let error = run(
+            &conn,
+            CollectionAction::Add(CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: true,
+                writable: false,
+                write_quaid_id: true,
+                namespace: None,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(!error.to_string().is_empty());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM collections WHERE name = 'work'",
@@ -1351,8 +1820,8 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1388,8 +1857,8 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1475,8 +1944,8 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         );
@@ -1522,8 +1991,8 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: true,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1559,6 +2028,7 @@ mod tests {
             last_sync_at: collection.last_sync_at,
             page_count: metrics.page_count,
             queue_depth: metrics.queue_depth,
+            failing_jobs: metrics.failing_jobs,
             quarantined_pages_awaiting_action: metrics.quarantined_pages_awaiting_action,
             ignore_parse_errors: collection.ignore_parse_errors,
             pending_root_path: collection.pending_root_path,
@@ -1573,6 +2043,9 @@ mod tests {
             reload_generation: collection.reload_generation,
             watcher_released_session_id: collection.watcher_released_session_id,
             watcher_released_generation: collection.watcher_released_generation,
+            watcher_mode: None,
+            watcher_last_event_at: None,
+            watcher_channel_depth: None,
             blocked_state: status.blocked_state,
             integrity_blocked: status.integrity_blocked,
             suggested_command: status.suggested_command,
@@ -1617,6 +2090,258 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--confirm"));
+    }
+
+    #[test]
+    fn reconcile_reset_requires_confirm() {
+        let conn = db::open(":memory:").unwrap();
+        let error = run(
+            &conn,
+            CollectionAction::ReconcileReset {
+                name: "work".to_owned(),
+                confirm: false,
+            },
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--confirm"));
+    }
+
+    #[test]
+    fn add_rejects_duplicate_collection_name_before_attach() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = add(
+            &conn,
+            CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_quaid_id: false,
+                namespace: None,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("collection already exists"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_runs_uuid_write_back_when_requested() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+
+        add(
+            &conn,
+            CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_quaid_id: true,
+                namespace: None,
+            },
+            true,
+        )
+        .unwrap();
+
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+        let rendered = fs::read_to_string(root.path().join("note.md")).unwrap();
+        assert!(rendered.contains("quaid_id: "));
+        assert!(!rendered.contains("memory_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_dry_run_mutates_nothing() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let original = "---\ntitle: Note\ntype: note\n---\nhello\n";
+        fs::write(root.path().join("note.md"), original).unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+
+        let summary = run_uuid_write_back(&conn, &collection, true).unwrap();
+
+        assert_eq!(summary.migrated, 1);
+        assert_eq!(summary.skipped_readonly, 0);
+        assert_eq!(summary.already_had_uuid, 0);
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.md")).unwrap(),
+            original
+        );
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_refuses_live_serve_owner_with_pid_and_host() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 4321, 'batch3-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection.id],
+        )
+        .unwrap();
+
+        let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=4321"));
+        assert!(text.contains("owner_host=batch3-host"));
+        assert!(text.contains("stop serve first"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_write_quaid_id_refuses_same_root_live_owner_before_inserting_alias_row() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 7654, 'alias-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id)
+             SELECT id, 'serve-live' FROM collections WHERE name = 'work'",
+            [],
+        )
+        .unwrap();
+
+        let error = add(
+            &conn,
+            CollectionAddArgs {
+                name: "alias".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_quaid_id: true,
+                namespace: None,
+            },
+            true,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=7654"));
+        assert!(text.contains("owner_host=alias-host"));
+        assert!(text.contains("stop serve first"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM collections WHERE root_path = ?1",
+                [root.path().display().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_uuid_write_back_refuses_same_root_live_owner_before_rewriting_files() {
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let original = "---\ntitle: Note\ntype: note\n---\nhello\n";
+        let note_path = root.path().join("note.md");
+        fs::write(&note_path, original).unwrap();
+        attach_collection(&conn, "work", root.path());
+        let alias_id = insert_collection(&conn, "alias", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 7654, 'alias-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [alias_id],
+        )
+        .unwrap();
+
+        let error = run_uuid_write_back(&conn, &collection, false).unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=7654"));
+        assert!(text.contains("owner_host=alias-host"));
+        assert!(text.contains("stop serve first"));
+        let rendered = fs::read_to_string(&note_path).unwrap();
+        assert_eq!(rendered, original);
+        assert!(!rendered.contains("quaid_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migrate_uuids_skips_permission_denied_without_rotating_raw_imports() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+
+        let (_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+        attach_collection(&conn, "work", root.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+        let page_id = page_id(&conn, collection.id, "note");
+
+        let original_permissions = fs::metadata(root.path()).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_mode(0o555);
+        fs::set_permissions(root.path(), read_only_permissions).unwrap();
+
+        let summary = run_uuid_write_back(&conn, &collection, false).unwrap();
+
+        fs::set_permissions(root.path(), original_permissions).unwrap();
+
+        assert_eq!(summary.migrated, 0);
+        assert_eq!(summary.skipped_readonly, 1);
+        assert_eq!(summary.already_had_uuid, 0);
+        assert!(!fs::read_to_string(root.path().join("note.md"))
+            .unwrap()
+            .contains("quaid_id: "));
+        assert_eq!(active_raw_import_count(&conn, page_id), 1);
+        assert_eq!(total_raw_import_count(&conn, page_id), 1);
     }
 
     #[cfg(unix)]
@@ -1773,7 +2498,6 @@ mod tests {
         assert_eq!(collection_page_count(&conn, "work"), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn ignore_mutations_refuse_while_collection_is_restoring() {
         let conn = open_test_db();
@@ -1785,19 +2509,34 @@ mod tests {
         )
         .unwrap();
 
-        let error = run(
-            &conn,
-            CollectionAction::Ignore {
-                action: CollectionIgnoreAction::Add {
-                    name: "work".to_owned(),
-                    pattern: "private/**".to_owned(),
-                },
-            },
-            true,
-        )
-        .unwrap_err();
+        let error = ignore_add(&conn, "work", "private/**", true).unwrap_err();
 
-        assert!(error.to_string().contains("CollectionRestoringError"));
+        let text = error.to_string();
+        assert!(
+            text.contains("CollectionRestoringError"),
+            "expected CollectionRestoringError, got: {text}"
+        );
+        assert!(!root.path().join(".quaidignore").exists());
+    }
+
+    #[test]
+    fn ignore_mutations_refuse_when_collection_needs_full_sync() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = ignore_add(&conn, "work", "private/**", true).unwrap_err();
+
+        let text = error.to_string();
+        assert!(
+            text.contains("CollectionRestoringError"),
+            "expected CollectionRestoringError, got: {text}"
+        );
         assert!(!root.path().join(".quaidignore").exists());
     }
 
@@ -1836,6 +2575,48 @@ mod tests {
         assert!(production_source.contains("ignore_patterns::clear_patterns"));
     }
 
+    #[test]
+    fn audit_command_surface_keeps_platform_gate_and_gc_reporting_seam() {
+        let source = include_str!("collection.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+
+        let run_audit_start = production_source
+            .find("CollectionAction::Audit(args) =>")
+            .expect("audit command arm");
+        let run_audit_end = production_source[run_audit_start..]
+            .find("CollectionAction::RestoreReset")
+            .map(|offset| run_audit_start + offset)
+            .expect("restore-reset arm");
+        let run_audit = &production_source[run_audit_start..run_audit_end];
+        assert!(
+            run_audit.contains("ensure_unix_collection_command(\"quaid collection audit\")?"),
+            "collection run() must keep the Unix platform gate on the audit surface"
+        );
+        assert!(
+            run_audit.contains("audit(db, args, json)"),
+            "collection run() must dispatch the audit surface through the shared helper"
+        );
+
+        let helper_start = production_source.find("fn audit(").expect("audit helper");
+        let helper_end = production_source[helper_start..]
+            .find("fn resolve_collection_root(")
+            .map(|offset| helper_start + offset)
+            .expect("resolve_collection_root helper");
+        let helper = &production_source[helper_start..helper_end];
+        assert!(
+            helper.contains("if args.raw_imports_gc"),
+            "audit helper must keep the raw-import GC branch explicit"
+        );
+        assert!(
+            helper.contains("vault_sync::sweep_raw_import_ttl(db)?"),
+            "audit helper must keep the TTL sweep on the guarded branch"
+        );
+        assert!(
+            helper.contains("\"raw_imports_deleted\": raw_imports_deleted"),
+            "audit helper must report the deleted-row count in its rendered output"
+        );
+    }
+
     #[cfg(not(unix))]
     #[test]
     fn add_refuses_windows_platform() {
@@ -1849,8 +2630,8 @@ mod tests {
                 path: root.path().to_path_buf(),
                 read_only: false,
                 writable: false,
-                write_memory_id: false,
-                watcher_mode: None,
+                write_quaid_id: false,
+                namespace: None,
             }),
             true,
         )
@@ -1891,6 +2672,24 @@ mod tests {
                 name: "work".to_owned(),
                 target: target.path().to_path_buf(),
                 online: false,
+            }),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn audit_refuses_windows_platform() {
+        let conn = open_test_db();
+
+        let error = run(
+            &conn,
+            CollectionAction::Audit(CollectionAuditArgs {
+                name: "work".to_owned(),
+                raw_imports_gc: false,
             }),
             true,
         )
@@ -1943,6 +2742,67 @@ mod tests {
         assert_eq!(row.1, pending_root.display().to_string());
         assert_eq!(row.2, 0);
         assert!(row.3.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_runs_full_hash_reconcile_and_optional_raw_import_gc() {
+        let (_db_dir, conn) = open_test_db_file();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let relative_path = "notes/a.md";
+        let file_path = root.path().join(relative_path);
+        fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        let uuid = Uuid::now_v7().to_string();
+        let raw_bytes =
+            format!("---\nmemory_id: {uuid}\nslug: notes/a\ntitle: A\ntype: concept\n---\nBody.\n");
+        fs::write(&file_path, raw_bytes.as_bytes()).unwrap();
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            &uuid,
+            raw_bytes.as_bytes(),
+            relative_path,
+        );
+        conn.execute(
+            "UPDATE file_state
+             SET last_full_hash_at = datetime('now', '-8 days')
+             WHERE collection_id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2000-01-01T00:00:00Z')",
+            rusqlite::params![page_id, Uuid::now_v7().to_string(), b"old", relative_path],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Audit(CollectionAuditArgs {
+                name: "work".to_owned(),
+                raw_imports_gc: true,
+            }),
+            true,
+        )
+        .unwrap();
+
+        let row: (Option<String>, i64) = conn
+            .query_row(
+                "SELECT last_sync_at,
+                        (SELECT COUNT(*)
+                         FROM raw_imports
+                         WHERE page_id = ?2 AND is_active = 0)
+                 FROM collections
+                 WHERE id = ?1",
+                rusqlite::params![collection_id, page_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(row.0.is_some());
+        assert_eq!(row.1, 0);
     }
 
     #[cfg(unix)]
@@ -2136,6 +2996,91 @@ mod tests {
     }
 
     #[test]
+    fn run_routes_ignore_list_action() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET ignore_patterns = ?2 WHERE id = ?1",
+            rusqlite::params![
+                collection_id,
+                serde_json::to_string(&vec!["private/**"]).unwrap()
+            ],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::Ignore {
+                action: CollectionIgnoreAction::List {
+                    name: "work".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn run_routes_quarantine_list_export_and_discard_actions() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/quarantined",
+            &uuid::Uuid::now_v7().to_string(),
+            b"---\ntitle: Quarantined\ntype: note\n---\nbody\n",
+            "notes/quarantined.md",
+        );
+        let page_id = page_id(&conn, collection_id, "notes/quarantined");
+        quarantine_page(&conn, page_id, "2026-04-28T00:00:00Z");
+        insert_knowledge_gap(&conn, page_id, "gap-1");
+
+        run(
+            &conn,
+            CollectionAction::Quarantine {
+                action: CollectionQuarantineAction::List {
+                    name: "work".to_owned(),
+                },
+            },
+            true,
+        )
+        .unwrap();
+
+        let output_path = root.path().join("quarantine-export.json");
+        quarantine_action(
+            &conn,
+            CollectionQuarantineAction::Export {
+                slug: "work::notes/quarantined".to_owned(),
+                output: output_path.clone(),
+            },
+            true,
+        )
+        .unwrap();
+        assert!(output_path.exists());
+
+        quarantine_action(
+            &conn,
+            CollectionQuarantineAction::Discard {
+                slug: "work::notes/quarantined".to_owned(),
+                force: false,
+            },
+            true,
+        )
+        .unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
     fn describe_collection_status_points_pending_finalize_to_finalize_command() {
         let conn = db::open(":memory:").unwrap();
         let temp = tempfile::TempDir::new().unwrap();
@@ -2214,5 +3159,1111 @@ mod tests {
             status.suggested_command.as_deref(),
             Some("quaid collection sync work --finalize-pending")
         );
+    }
+
+    #[test]
+    fn describe_collection_status_reports_plain_restoring_without_finalize_hint() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 needs_full_sync = 0,
+                 pending_root_path = NULL,
+                 pending_manifest_incomplete_at = NULL
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "restoring");
+        assert!(status.integrity_blocked.is_none());
+        assert!(status.suggested_command.is_none());
+        assert!(status.status_message.contains("still in progress"));
+    }
+
+    #[test]
+    fn describe_collection_status_points_active_reconcile_needed_to_plain_sync() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'active',
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "active_reconcile_needed");
+        assert!(status.integrity_blocked.is_none());
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("quaid collection sync work")
+        );
+        assert!(status.status_message.contains("needs a real reconcile"));
+    }
+
+    #[test]
+    fn describe_collection_status_points_integrity_failure_to_restore_reset() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "restore_integrity_blocked");
+        assert_eq!(
+            status.integrity_blocked.as_deref(),
+            Some("manifest_tampering")
+        );
+        assert_eq!(
+            status.suggested_command.as_deref(),
+            Some("quaid collection restore-reset work --confirm")
+        );
+        assert!(status
+            .status_message
+            .contains("restore-reset work --confirm"));
+    }
+
+    #[test]
+    fn build_collection_info_output_surfaces_active_watcher_health_from_runtime_registry() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET reload_generation = 6,
+                 watcher_released_session_id = 'serve-session',
+                 watcher_released_generation = 5
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        vault_sync::set_collection_watcher_health_for_test(
+            collection_id,
+            "serve-session",
+            3,
+            Some(vault_sync::WatcherMode::Poll),
+            Some("2026-04-28T01:02:03Z".to_owned()),
+            7,
+        );
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let output = build_collection_info_output(&conn, collection).unwrap();
+
+        assert_eq!(output.watcher_mode.as_deref(), Some("poll"));
+        assert_eq!(
+            output.watcher_last_event_at.as_deref(),
+            Some("2026-04-28T01:02:03Z")
+        );
+        assert_eq!(output.watcher_channel_depth, Some(7));
+        assert_eq!(output.reload_generation, 6);
+        assert_eq!(
+            output.watcher_released_session_id.as_deref(),
+            Some("serve-session")
+        );
+        assert_eq!(output.watcher_released_generation, Some(5));
+        vault_sync::clear_collection_watcher_health_for_test(collection_id);
+    }
+
+    #[test]
+    fn collection_metrics_count_pending_and_running_jobs_separately_from_failed_jobs() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let pending_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/pending",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Pending\ntype: note\n---\nPending body.\n",
+            "notes/pending.md",
+        );
+        let running_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/running",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Running\ntype: note\n---\nRunning body.\n",
+            "notes/running.md",
+        );
+        let failed_page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/failed",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Failed\ntype: note\n---\nFailed body.\n",
+            "notes/failed.md",
+        );
+
+        insert_embedding_job(&conn, pending_page_id, "pending", 0);
+        insert_embedding_job(&conn, running_page_id, "running", 1);
+        insert_embedding_job(&conn, failed_page_id, "failed", 5);
+
+        let metrics = collection_metrics(&conn, collection_id).unwrap();
+        assert_eq!(metrics.queue_depth, 2);
+        assert_eq!(metrics.failing_jobs, 1);
+    }
+
+    #[test]
+    fn remove_without_purge_detaches_collection_and_keeps_pages() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/kept",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Kept\n---\nkept\n",
+            "notes/kept.md",
+        );
+
+        remove(&conn, "work", false, false, true).unwrap();
+
+        let (state, page_count): (String, i64) = conn
+            .query_row(
+                "SELECT state, (SELECT COUNT(*) FROM pages WHERE collection_id = ?1)
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "detached");
+        assert_eq!(page_count, 1);
+    }
+
+    #[test]
+    fn remove_with_purge_requires_confirm() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = remove(&conn, "work", true, false, true).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("collection remove --purge requires --confirm"));
+    }
+
+    #[test]
+    fn remove_with_purge_deletes_pages_and_detaches_collection() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/purged",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Purged\n---\npurged\n",
+            "notes/purged.md",
+        );
+
+        remove(&conn, "work", true, true, true).unwrap();
+
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let raw_import_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "detached");
+        assert_eq!(page_count, 0);
+        assert_eq!(raw_import_count, 0);
+    }
+
+    #[test]
+    fn remove_refuses_live_serve_owner_for_same_root() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 2468, 'remove-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = remove(&conn, "work", false, false, true).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=2468"));
+        assert!(text.contains("owner_host=remove-host"));
+    }
+
+    #[test]
+    fn remove_refuses_restoring_collection() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'restoring', needs_full_sync = 1 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = remove(&conn, "work", false, false, true).unwrap_err();
+        assert!(error.to_string().contains("CollectionRestoringError"));
+    }
+
+    #[test]
+    fn load_ignore_source_prefers_disk_and_falls_back_to_cached_patterns() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET ignore_patterns = ?2 WHERE id = ?1",
+            rusqlite::params![
+                collection_id,
+                serde_json::to_string(&vec!["cached/**", "*.tmp"]).unwrap()
+            ],
+        )
+        .unwrap();
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+
+        assert_eq!(
+            load_ignore_source(&collection).unwrap(),
+            Some("cached/**\n*.tmp\n".to_owned())
+        );
+
+        fs::write(root.path().join(".quaidignore"), "disk-only\n").unwrap();
+        assert_eq!(
+            load_ignore_source(&collection).unwrap(),
+            Some("disk-only\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn ignore_pattern_content_helpers_preserve_comments_and_avoid_duplicates() {
+        assert_eq!(
+            add_ignore_pattern_content(Some("notes/**".to_owned()), "notes/**"),
+            "notes/**"
+        );
+        assert_eq!(
+            add_ignore_pattern_content(Some("# keep\nnotes/**".to_owned()), "*.tmp"),
+            "# keep\nnotes/**\n*.tmp\n"
+        );
+        assert_eq!(
+            remove_ignore_pattern_content(Some("# keep\nnotes/**\n*.tmp\n".to_owned()), "notes/**"),
+            "# keep\n*.tmp\n"
+        );
+        assert_eq!(remove_ignore_pattern_content(None, "notes/**"), "");
+        assert_eq!(
+            remove_ignore_pattern_content(Some("notes/**\n*.tmp".to_owned()), "*.tmp"),
+            "notes/**"
+        );
+    }
+
+    #[test]
+    fn validate_cli_ignore_pattern_rejects_blank_and_comment_inputs() {
+        let blank = validate_cli_ignore_pattern("   ").unwrap_err();
+        assert!(blank.to_string().contains("non-empty glob"));
+
+        let comment = validate_cli_ignore_pattern("# comment").unwrap_err();
+        assert!(comment.to_string().contains("non-empty glob"));
+
+        assert_eq!(
+            validate_cli_ignore_pattern("  notes/**  ").unwrap(),
+            "notes/**"
+        );
+    }
+
+    #[test]
+    fn validate_proposed_ignore_content_formats_parse_errors() {
+        let error = validate_proposed_ignore_content("[broken\n").unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("line 1"));
+        assert!(text.contains("raw=\"[broken\""));
+        assert!(text.contains("Invalid glob pattern"));
+    }
+
+    #[test]
+    fn write_ignore_file_atomically_round_trips_contents() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let ignore_path = write_ignore_file_atomically(root.path(), Some("notes/**\n")).unwrap();
+        assert_eq!(ignore_path, root.path().join(".quaidignore"));
+        assert_eq!(fs::read_to_string(&ignore_path).unwrap(), "notes/**\n");
+
+        let cleared_path = write_ignore_file_atomically(root.path(), None).unwrap();
+        assert_eq!(cleared_path, ignore_path);
+        assert!(!cleared_path.exists());
+    }
+
+    #[test]
+    fn write_ignore_file_atomically_tolerates_absent_existing_file() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let ignore_path = write_ignore_file_atomically(root.path(), None).unwrap();
+
+        assert_eq!(ignore_path, root.path().join(".quaidignore"));
+        assert!(!ignore_path.exists());
+    }
+
+    #[test]
+    fn read_initial_ignore_patterns_handles_missing_and_valid_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        assert!(read_initial_ignore_patterns(root.path()).unwrap().is_none());
+
+        fs::write(root.path().join(".quaidignore"), "notes/**\n*.tmp\n").unwrap();
+        assert_eq!(
+            read_initial_ignore_patterns(root.path()).unwrap(),
+            Some(serde_json::to_string(&vec!["notes/**", "*.tmp"]).unwrap())
+        );
+    }
+
+    #[test]
+    fn load_ignore_source_reports_read_errors() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(root.path().join(".quaidignore")).unwrap();
+        insert_collection(&conn, "work", root.path());
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+
+        let error = load_ignore_source(&collection).unwrap_err();
+
+        assert!(error.to_string().contains("failed to read"));
+        assert!(error.to_string().contains(".quaidignore"));
+    }
+
+    #[test]
+    fn cached_user_ignore_patterns_reports_invalid_mirror_json() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET ignore_patterns = ?2 WHERE id = ?1",
+            rusqlite::params![collection_id, "not-json"],
+        )
+        .unwrap();
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+
+        let error = cached_user_ignore_patterns(&collection).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid ignore pattern mirror for work"));
+    }
+
+    #[test]
+    fn read_initial_ignore_patterns_reports_invalid_file_details() {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join(".quaidignore"), "[broken\n").unwrap();
+
+        let error = read_initial_ignore_patterns(root.path()).unwrap_err();
+        let text = error.to_string();
+
+        assert!(text.contains("invalid .quaidignore"));
+        assert!(text.contains("line 1 raw=\"[broken\" error=Invalid glob pattern"));
+        assert!(text.contains("Fix .quaidignore and re-run quaid collection add."));
+    }
+
+    #[test]
+    fn restore_reset_and_reconcile_reset_succeed_when_confirmed() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 pending_root_path = 'D:\\vault\\restored',
+                 integrity_failed_at = '2026-04-23T00:00:00Z',
+                 reconcile_halted_at = '2026-04-23T00:05:00Z',
+                 reconcile_halt_reason = 'duplicate_uuid'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        run(
+            &conn,
+            CollectionAction::RestoreReset {
+                name: "work".to_owned(),
+                confirm: true,
+            },
+            true,
+        )
+        .unwrap();
+        run(
+            &conn,
+            CollectionAction::ReconcileReset {
+                name: "work".to_owned(),
+                confirm: true,
+            },
+            true,
+        )
+        .unwrap();
+
+        let row: (String, Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT state, pending_root_path, integrity_failed_at, reconcile_halted_at
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert!(row.1.is_none());
+        assert!(row.2.is_none());
+        assert!(row.3.is_none());
+    }
+
+    #[test]
+    fn list_and_info_plain_text_helpers_return_ok_for_seeded_collection() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET ignore_parse_errors = 'line 2 raw=\"[broken\" error=Invalid glob pattern',
+                 reload_generation = 2,
+                 watcher_released_session_id = 'serve-1',
+                 watcher_released_generation = 1,
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        list(&conn, false).unwrap();
+        info(&conn, "work", false).unwrap();
+    }
+
+    #[test]
+    fn run_routes_list_and_info_json_helpers_for_seeded_collection() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/info",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Info\ntype: note\n---\nbody\n",
+            "notes/info.md",
+        );
+        quarantine_page(&conn, page_id, "2026-04-28T00:00:00Z");
+        insert_embedding_job(&conn, page_id, "failed", 2);
+        conn.execute(
+            "UPDATE collections
+             SET integrity_failed_at = '2026-04-28T00:00:00Z',
+                 ignore_parse_errors = 'line 1 raw=\"[broken\" error=Invalid glob pattern'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        run(&conn, CollectionAction::List, true).unwrap();
+        run(
+            &conn,
+            CollectionAction::Info {
+                name: "work".to_owned(),
+            },
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn resolve_collection_root_rejects_non_directory_paths() {
+        let root = tempfile::TempDir::new().unwrap();
+        let file_path = root.path().join("note.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let error = resolve_collection_root(&file_path).unwrap_err();
+        assert!(error.to_string().contains("must be a directory"));
+        assert_eq!(writable_label(true), "writable");
+        assert_eq!(writable_label(false), "read-only");
+        assert!(is_read_only_probe_error(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+        assert!(!is_read_only_probe_error(&io::Error::from(
+            io::ErrorKind::Other
+        )));
+    }
+
+    #[test]
+    fn resolve_collection_root_reports_missing_paths_clearly() {
+        let root = tempfile::TempDir::new().unwrap();
+        let missing = root.path().join("missing");
+
+        let error = resolve_collection_root(&missing).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("collection root does not exist or cannot be resolved"));
+    }
+
+    #[test]
+    fn ignore_render_and_match_helpers_cover_empty_and_comment_cases() {
+        assert_eq!(render_patterns_file(&[]), "");
+        assert_eq!(
+            render_patterns_file(&["notes/**".to_owned(), "*.tmp".to_owned()]),
+            "notes/**\n*.tmp\n"
+        );
+        assert!(ignore_content_contains_pattern(
+            "# comment\n\nnotes/**\n",
+            "notes/**"
+        ));
+        assert!(!ignore_content_contains_pattern(
+            "# comment\n\nnotes/**\n",
+            "*.tmp"
+        ));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn add_helper_cleans_up_collection_row_when_fresh_attach_is_unsupported() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\ntitle: Note\ntype: note\n---\nhello\n",
+        )
+        .unwrap();
+
+        let error = add(
+            &conn,
+            CollectionAddArgs {
+                name: "work".to_owned(),
+                path: root.path().to_path_buf(),
+                read_only: false,
+                writable: false,
+                write_quaid_id: false,
+                namespace: None,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("failed to attach collection 'work'"));
+        assert!(collections::get_by_name(&conn, "work").unwrap().is_none());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn probe_root_writable_succeeds_without_residue_on_windows() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let writable = probe_root_writable(root.path()).unwrap();
+
+        assert!(writable);
+        let residue = fs::read_dir(root.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".quaid-probe-")
+            });
+        assert!(!residue);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn probe_root_writable_reports_non_permission_failures_on_windows() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let error = probe_root_writable(&root.path().join("missing")).unwrap_err();
+
+        assert!(error.to_string().contains("failed capability probe in"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn ignore_dispatch_requires_confirm_before_clearing() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = ignore(
+            &conn,
+            CollectionIgnoreAction::Clear {
+                name: "work".to_owned(),
+                confirm: false,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+        assert!(!root.path().join(".quaidignore").exists());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn quarantine_restore_dispatch_refuses_windows_platform() {
+        let conn = open_test_db();
+
+        let error = quarantine_action(
+            &conn,
+            CollectionQuarantineAction::Restore {
+                slug: "work::notes/a".to_owned(),
+                relative_path: "notes/a.md".to_owned(),
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UnsupportedPlatformError"));
+    }
+
+    #[test]
+    fn describe_collection_status_reports_unresolvable_trivial_content_remediation() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-23T00:05:00Z',
+                 reconcile_halt_reason = 'unresolvable_trivial_content'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "reconcile_halted");
+        assert_eq!(
+            status.integrity_blocked.as_deref(),
+            Some("unresolvable_trivial_content")
+        );
+        assert!(status.status_message.contains("migrate-uuids work"));
+    }
+
+    #[test]
+    fn describe_collection_status_reports_unknown_reconcile_halt_generically() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "UPDATE collections
+             SET reconcile_halted_at = '2026-04-23T00:05:00Z',
+                 reconcile_halt_reason = 'mystery'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "reconcile_halted");
+        assert_eq!(status.integrity_blocked.as_deref(), Some("mystery"));
+        assert!(status.status_message.contains("repair the vault first"));
+    }
+
+    #[test]
+    fn describe_collection_status_reports_active_state_without_follow_up_command() {
+        let conn = db::open(":memory:").unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", temp.path());
+        let collection = collections::get_by_name(&conn, "work").unwrap().unwrap();
+
+        let status = describe_collection_status(&collection);
+
+        assert_eq!(status.blocked_state, "active");
+        assert!(status.integrity_blocked.is_none());
+        assert!(status.suggested_command.is_none());
+        assert!(status
+            .status_message
+            .contains("plain sync only reports success after active-root reconcile completes"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_finalize_pending_fails_closed_when_attach_backend_is_unavailable() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'active',
+                 needs_full_sync = 1
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: true,
+                online: false,
+            },
+            false,
+        )
+        .unwrap_err();
+
+        let row: (String, i64) = conn
+            .query_row(
+                "SELECT state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1, 1);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_finalize_pending_reports_blocked_outcome_for_no_pending_work() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: true,
+                online: false,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("FinalizePendingBlockedError"));
+        assert!(error.to_string().contains("NoPendingWork"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_finalize_pending_reports_orphan_recovered_as_success() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections
+             SET state = 'restoring',
+                 restore_command_id = 'restore-1'
+             WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: true,
+                online: false,
+            },
+            true,
+        )
+        .unwrap();
+
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, restore_command_id FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert!(row.1.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_remap_root_updates_collection_and_reports_summary_in_plain_text_mode() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let remapped_root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
+        std::fs::create_dir_all(remapped_root.path().join("notes")).unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\ntitle: Remapped Note\ntype: concept\n---\nhello from remap\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            raw_bytes,
+            "notes/a.md",
+        );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
+        fs::write(remapped_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: Some(remapped_root.path().to_path_buf()),
+                finalize_pending: false,
+                online: false,
+            },
+            false,
+        )
+        .unwrap();
+
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, remapped_root.path().display().to_string());
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_remap_root_updates_collection_in_json_mode() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let remapped_root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
+        std::fs::create_dir_all(remapped_root.path().join("nested")).unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 11111111-1111-7111-8111-111111111111\nslug: notes/a\ntitle: Remapped Note\ntype: concept\n---\nhello from remap in json mode and long enough for verifier coverage\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "11111111-1111-7111-8111-111111111111",
+            raw_bytes,
+            "notes/old-a.md",
+        );
+        fs::write(source_root.path().join("notes").join("old-a.md"), raw_bytes).unwrap();
+        fs::write(
+            remapped_root.path().join("nested").join("renamed-a.md"),
+            raw_bytes,
+        )
+        .unwrap();
+
+        sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: Some(remapped_root.path().to_path_buf()),
+                finalize_pending: false,
+                online: false,
+            },
+            true,
+        )
+        .unwrap();
+
+        let row: (String, String, i64, String) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync,
+                        (SELECT relative_path FROM file_state WHERE collection_id = ?1 LIMIT 1)
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, remapped_root.path().display().to_string());
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
+        assert_eq!(row.3, "nested/renamed-a.md");
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_remap_root_fails_closed_when_unix_backend_is_unavailable() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let remapped_root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let original_root = source_root.path().display().to_string();
+
+        let error = sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: Some(remapped_root.path().to_path_buf()),
+                finalize_pending: false,
+                online: false,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Vault sync commands require Unix"));
+        let row: (String, String, i64) = conn
+            .query_row(
+                "SELECT root_path, state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, original_root);
+        assert_eq!(row.1, "active");
+        assert_eq!(row.2, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_helper_materializes_pages_and_reopens_collection_in_plain_text_mode() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let source_root = tempfile::TempDir::new().unwrap();
+        let target_parent = tempfile::TempDir::new().unwrap();
+        let target_root = target_parent.path().join("restored");
+        std::fs::create_dir_all(source_root.path().join("notes")).unwrap();
+        let collection_id = insert_collection(&conn, "work", source_root.path());
+        let raw_bytes =
+            b"---\nmemory_id: 22222222-2222-7222-8222-222222222222\ntitle: Restored Note\ntype: concept\n---\nhello from restore\n";
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/a",
+            "22222222-2222-7222-8222-222222222222",
+            raw_bytes,
+            "notes/a.md",
+        );
+        fs::write(source_root.path().join("notes").join("a.md"), raw_bytes).unwrap();
+
+        restore(
+            &conn,
+            CollectionRestoreArgs {
+                name: "work".to_owned(),
+                target: target_root.clone(),
+                online: false,
+            },
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(target_root.join("notes").join("a.md")).unwrap(),
+            raw_bytes
+        );
+        let row: (String, String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT state, root_path, needs_full_sync, pending_root_path, restore_lease_session_id
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1, target_root.display().to_string());
+        assert_eq!(row.2, 0);
+        assert!(row.3.is_none());
+        assert!(row.4.is_none());
+    }
+
+    #[test]
+    fn ignore_helper_round_trips_patterns_cross_platform() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'detached' WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        ignore_add(&conn, "work", "note.md", true).unwrap();
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+        assert_eq!(
+            cached_user_ignore_patterns(&collection).unwrap(),
+            vec!["note.md"]
+        );
+
+        ignore_list(&conn, "work", true).unwrap();
+        ignore_remove(&conn, "work", "note.md", true).unwrap();
+        let collection = load_collection_by_name(&conn, "work").unwrap();
+        assert!(cached_user_ignore_patterns(&collection).unwrap().is_empty());
+
+        ignore_clear(&conn, "work", true).unwrap();
+        assert!(!root.path().join(".quaidignore").exists());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sync_helper_fails_closed_when_reconcile_backend_is_unavailable() {
+        let (_db_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(
+            root.path().join("note.md"),
+            "---\nslug: notes/note\ntitle: Note\ntype: concept\n---\nreconcile me\n",
+        )
+        .unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET needs_full_sync = 1 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = sync(
+            &conn,
+            CollectionSyncArgs {
+                name: "work".to_owned(),
+                remap_root: None,
+                finalize_pending: false,
+                online: false,
+            },
+            true,
+        )
+        .unwrap_err();
+
+        let row: (String, i64) = conn
+            .query_row(
+                "SELECT state, needs_full_sync FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(error
+            .to_string()
+            .contains("Vault sync commands (serve, collection add/sync) require Unix"));
+        assert_eq!(row.0, "active");
+        assert_eq!(row.1, 1);
     }
 }

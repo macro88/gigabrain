@@ -72,7 +72,12 @@ pub fn open_root_fd(_path: &Path) -> io::Result<std::fs::File> {
 /// # Windows behavior
 /// Returns `UnsupportedPlatformError`.
 #[cfg(unix)]
-pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Result<OwnedFd> {
+fn walk_to_parent_impl<Fd: AsFd>(
+    parent_fd: Fd,
+    relative_path: &Path,
+    create_dirs: bool,
+) -> io::Result<OwnedFd> {
+    use rustix::fs::mkdirat;
     use rustix::fs::openat;
 
     // Validate path
@@ -123,12 +128,41 @@ pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Resu
     let flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::RDONLY;
 
     for component in &components[..components.len().saturating_sub(1)] {
-        let next_fd = openat(&current_fd, Path::new(*component), flags, Mode::empty())
-            .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
+        let component_path = Path::new(*component);
+        let next_fd = match openat(&current_fd, component_path, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(error) if create_dirs && error.kind() == io::ErrorKind::NotFound => {
+                match mkdirat(&current_fd, component_path, Mode::from_raw_mode(0o755)) {
+                    Ok(()) => {}
+                    Err(mkdir_err) => {
+                        let mkdir_io = io::Error::from_raw_os_error(mkdir_err.raw_os_error());
+                        if mkdir_io.kind() != io::ErrorKind::AlreadyExists {
+                            return Err(mkdir_io);
+                        }
+                    }
+                }
+                openat(&current_fd, component_path, flags, Mode::empty())
+                    .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?
+            }
+            Err(error) => return Err(io::Error::from_raw_os_error(error.raw_os_error())),
+        };
         current_fd = next_fd;
     }
 
     Ok(current_fd)
+}
+
+#[cfg(unix)]
+pub fn walk_to_parent<Fd: AsFd>(parent_fd: Fd, relative_path: &Path) -> io::Result<OwnedFd> {
+    walk_to_parent_impl(parent_fd, relative_path, false)
+}
+
+#[cfg(unix)]
+pub fn walk_to_parent_create_dirs<Fd: AsFd>(
+    parent_fd: Fd,
+    relative_path: &Path,
+) -> io::Result<OwnedFd> {
+    walk_to_parent_impl(parent_fd, relative_path, true)
 }
 
 #[cfg(not(unix))]
@@ -136,6 +170,17 @@ pub fn walk_to_parent<Fd>(_parent_fd: Fd, _relative_path: &Path) -> io::Result<s
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "walk_to_parent: fd-relative operations not supported on Windows",
+    ))
+}
+
+#[cfg(not(unix))]
+pub fn walk_to_parent_create_dirs<Fd>(
+    _parent_fd: Fd,
+    _relative_path: &Path,
+) -> io::Result<std::fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "walk_to_parent_create_dirs: fd-relative operations not supported on Windows",
     ))
 }
 
@@ -443,6 +488,26 @@ mod tests {
     }
 
     #[test]
+    fn test_walk_to_parent_create_dirs_creates_missing_ancestors() {
+        let dir = TempDir::new().unwrap();
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let parent_fd =
+            walk_to_parent_create_dirs(root_fd, Path::new("nested/deep/file.txt")).unwrap();
+
+        let created = std::fs::File::from(
+            openat_create_excl(&parent_fd, Path::new("file.txt")).expect("create final file"),
+        );
+        drop(created);
+
+        assert!(dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("file.txt")
+            .exists());
+    }
+
+    #[test]
     fn test_stat_at_nofollow_success() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("file.txt");
@@ -573,5 +638,208 @@ mod tests {
         let content = fs::read(dir.path().join("final.txt")).unwrap();
         assert_eq!(content, b"hello");
         assert!(!dir.path().join("temp.txt").exists());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_is_regular_file_returns_true_for_file() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("file.txt");
+        fs::write(&file, b"hello").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let stat = stat_at_nofollow(root_fd, Path::new("file.txt")).unwrap();
+
+        assert!(stat.is_regular_file(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_directory());
+        assert!(!stat.is_symlink());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_is_directory_returns_true_for_directory() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("subdir");
+        fs::create_dir(&sub).unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let _parent_fd = walk_to_parent(root_fd, Path::new("subdir/placeholder")).unwrap();
+        // stat_at_nofollow needs a name relative to parent_fd, so stat "." on parent_fd
+        // by using the subdir path from root
+        let root_fd2 = open_root_fd(dir.path()).unwrap();
+        // stat_at_nofollow on a dir entry — use root_fd to stat "subdir"
+        let stat = stat_at_nofollow(root_fd2, Path::new("subdir")).unwrap();
+
+        assert!(stat.is_directory(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_regular_file());
+        assert!(!stat.is_symlink());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_is_symlink_returns_true_for_symlink() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        fs::write(&target, b"hello").unwrap();
+        let link = dir.path().join("link.txt");
+        symlink(&target, &link).unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let stat = stat_at_nofollow(root_fd, Path::new("link.txt")).unwrap();
+
+        assert!(stat.is_symlink(), "mode_bits={:#o}", stat.mode_bits);
+        assert!(!stat.is_regular_file());
+        assert!(!stat.is_directory());
+    }
+
+    #[test]
+    fn test_walk_to_parent_single_component_returns_root_fd() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("file.txt"), b"test").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        // A single-component path: the parent is the root itself.
+        let parent_fd = walk_to_parent(root_fd, Path::new("file.txt")).unwrap();
+
+        // Verify we can stat "file.txt" from this parent fd.
+        let stat = stat_at_nofollow(parent_fd, Path::new("file.txt"));
+        assert!(stat.is_ok());
+    }
+
+    #[test]
+    fn test_linkat_parent_fd_success() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("source.txt"), b"content").unwrap();
+
+        let root_fd = open_root_fd(dir.path()).unwrap();
+        let result = linkat_parent_fd(&root_fd, Path::new("source.txt"), Path::new("hardlink.txt"));
+
+        assert!(result.is_ok(), "linkat should succeed: {result:?}");
+        assert!(dir.path().join("hardlink.txt").exists());
+        assert_eq!(
+            fs::read(dir.path().join("hardlink.txt")).unwrap(),
+            b"content"
+        );
+        // Both names should exist (hard link, not rename).
+        assert!(dir.path().join("source.txt").exists());
+    }
+
+    #[test]
+    fn test_file_stat_nofollow_mode_bits_direct() {
+        // Directly test the FileStatNoFollow methods via known mode_bits values.
+        let regular = FileStatNoFollow {
+            mtime_ns: 0,
+            ctime_ns: 0,
+            size_bytes: 0,
+            inode: 0,
+            mode_bits: 0o100644, // regular file
+        };
+        assert!(regular.is_regular_file());
+        assert!(!regular.is_directory());
+        assert!(!regular.is_symlink());
+
+        let directory = FileStatNoFollow {
+            mode_bits: 0o040755,
+            ..regular.clone()
+        };
+        assert!(directory.is_directory());
+        assert!(!directory.is_regular_file());
+        assert!(!directory.is_symlink());
+
+        let symlink = FileStatNoFollow {
+            mode_bits: 0o120777,
+            ..regular.clone()
+        };
+        assert!(symlink.is_symlink());
+        assert!(!symlink.is_regular_file());
+        assert!(!symlink.is_directory());
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod windows_fallback_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn open_root_fd_returns_unsupported_on_windows() {
+        let result = open_root_fd(Path::new("C:\\some\\path"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn walk_to_parent_returns_unsupported_on_windows() {
+        // The Windows stub ignores the fd parameter (generic, unconstrained), so
+        // we can pass any value — using a plain integer here avoids any file I/O.
+        let result = walk_to_parent(0u32, Path::new("sub/file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn walk_to_parent_create_dirs_returns_unsupported_on_windows() {
+        let result = walk_to_parent_create_dirs(0u32, Path::new("sub/file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn stat_at_nofollow_returns_unsupported_on_windows() {
+        let result = stat_at_nofollow(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn openat_create_excl_returns_unsupported_on_windows() {
+        let result = openat_create_excl(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn renameat_parent_fd_returns_unsupported_on_windows() {
+        let result = renameat_parent_fd(0u32, Path::new("old.txt"), Path::new("new.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn linkat_parent_fd_returns_unsupported_on_windows() {
+        let result = linkat_parent_fd(0u32, Path::new("old.txt"), Path::new("new.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn unlinkat_parent_fd_returns_unsupported_on_windows() {
+        let result = unlinkat_parent_fd(0u32, Path::new("file.txt"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn file_stat_nofollow_mode_bits_methods_work_without_unix() {
+        // The FileStatNoFollow struct and its methods are platform-agnostic.
+        let regular = FileStatNoFollow {
+            mtime_ns: 0,
+            ctime_ns: 0,
+            size_bytes: 0,
+            inode: 0,
+            mode_bits: 0o100644,
+        };
+        assert!(regular.is_regular_file());
+        assert!(!regular.is_directory());
+        assert!(!regular.is_symlink());
+
+        let dir = FileStatNoFollow {
+            mode_bits: 0o040755,
+            ..regular.clone()
+        };
+        assert!(dir.is_directory());
+
+        let sym = FileStatNoFollow {
+            mode_bits: 0o120777,
+            ..regular.clone()
+        };
+        assert!(sym.is_symlink());
     }
 }

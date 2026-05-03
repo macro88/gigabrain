@@ -22,7 +22,8 @@ Read `skills/` — all workflow intelligence lives in SKILL.md files there.
 
 ```bash
 quaid init ~/.quaid/memory.db          # create new memory store
-quaid import /path/to/notes/   # import markdown directory
+quaid collection add work ~/vault      # attach a live-sync markdown collection
+quaid ingest /path/to/note.md          # ingest a single markdown file
 quaid query "who knows X?"     # hybrid semantic query
 quaid search "keyword"         # FTS5 full-text search
 quaid get people/alice          # read a page
@@ -39,7 +40,7 @@ quaid serve                     # start MCP server
 - `src/core/` — library modules (DB, search, embeddings, parsing)
 - `src/commands/` — one file per CLI command
 - `src/mcp/server.rs` — MCP stdio server
-- `src/schema.sql` — v4 DDL (embedded via include_str!)
+- `src/schema.sql` — current DDL (embedded via include_str!)
 - `skills/*/SKILL.md` — fat markdown skill files
 
 ## Constraints
@@ -47,7 +48,7 @@ quaid serve                     # start MCP server
 - Single writer. No auth. No multi-tenant.
 - `memory_put` uses optimistic concurrency (`expected_version`). Re-fetch before writing.
 - `memory_gap` always creates gaps with `sensitivity = 'internal'`. Escalation requires `memory_gap_approve`.
-- Ingest is idempotent: SHA-256 of source content is the idempotency key.
+- Ingest is idempotent for exact-byte duplicates and keeps the active source in `raw_imports`.
 
 ## Tech stack
 

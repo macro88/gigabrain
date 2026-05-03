@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use crate::core::page_uuid;
 
@@ -12,6 +13,7 @@ pub fn rotate_active_raw_import(
     raw_bytes: &[u8],
 ) -> rusqlite::Result<()> {
     assert_existing_active_row_invariant(conn, page_id)?;
+    let content_hash = content_hash_hex(raw_bytes);
 
     conn.execute(
         "UPDATE raw_imports
@@ -21,9 +23,15 @@ pub fn rotate_active_raw_import(
     )?;
 
     conn.execute(
-        "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-         VALUES (?1, ?2, 1, ?3, ?4)",
-        rusqlite::params![page_id, page_uuid::generate_uuid_v7(), raw_bytes, file_path],
+        "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+         VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+        rusqlite::params![
+            page_id,
+            page_uuid::generate_uuid_v7(),
+            content_hash,
+            raw_bytes,
+            file_path
+        ],
     )?;
 
     if let Ok(raw_str) = std::str::from_utf8(raw_bytes) {
@@ -49,11 +57,21 @@ pub fn rotate_active_raw_import(
     assert_exactly_one_active_row(conn, page_id)
 }
 
+pub fn content_hash_hex(raw_bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(raw_bytes))
+}
+
 pub fn enqueue_embedding_job(conn: &Connection, page_id: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO embedding_jobs (page_id)
-         VALUES (?1)
+        "INSERT INTO embedding_jobs
+             (page_id, chunk_index, priority, job_state, attempt_count, last_error, created_at, enqueued_at, started_at)
+         VALUES (?1, 0, 0, 'pending', 0, NULL, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
          ON CONFLICT(page_id) DO UPDATE SET
+             chunk_index = excluded.chunk_index,
+             priority = excluded.priority,
+             job_state = 'pending',
+             attempt_count = 0,
+             last_error = NULL,
              started_at = NULL,
              enqueued_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
         [page_id],
@@ -141,6 +159,23 @@ fn prune_inactive_rows(conn: &Connection, page_id: i64) -> rusqlite::Result<()> 
     }
 
     Ok(())
+}
+
+pub fn sweep_expired_inactive_rows(conn: &Connection) -> rusqlite::Result<usize> {
+    if keep_all_enabled() {
+        return Ok(0);
+    }
+
+    let ttl_days = integer_env("QUAID_RAW_IMPORTS_TTL_DAYS", DEFAULT_TTL_DAYS).max(0);
+    let ttl_cutoff = format!("-{ttl_days} days");
+    let deleted = conn.execute(
+        "DELETE FROM raw_imports
+         WHERE is_active = 0
+           AND julianday(created_at) < julianday('now', ?1)",
+        [ttl_cutoff],
+    )?;
+
+    Ok(deleted)
 }
 
 fn keep_all_enabled() -> bool {
@@ -237,6 +272,44 @@ mod tests {
         rotate_active_raw_import(&conn, page_id, "notes/test.md", b"first").unwrap();
 
         assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
+        let content_hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM raw_imports WHERE page_id = ?1 AND is_active = 1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_hash, content_hash_hex(b"first"));
+    }
+
+    #[test]
+    fn enqueue_embedding_job_resets_failed_jobs_back_to_pending() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+
+        conn.execute(
+            "INSERT INTO embedding_jobs (page_id, job_state, attempt_count, last_error, started_at)
+             VALUES (?1, 'failed', 4, 'boom', '2026-04-28T00:00:00Z')",
+            [page_id],
+        )
+        .unwrap();
+
+        enqueue_embedding_job(&conn, page_id).unwrap();
+
+        let row: (String, i64, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT job_state, attempt_count, last_error, started_at
+                 FROM embedding_jobs
+                 WHERE page_id = ?1",
+                [page_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 0);
+        assert!(row.2.is_none());
+        assert!(row.3.is_none());
     }
 
     #[test]
@@ -381,5 +454,87 @@ mod tests {
 
         assert!(error.contains("InvariantViolationError"));
         assert!(error.contains("0 active raw_imports rows"));
+    }
+
+    #[test]
+    fn expired_inactive_rows_are_swept_even_when_page_is_idle() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+        let _env_guard = env_mutation_lock().lock().unwrap();
+        let _keep_all = EnvVarGuard::clear("QUAID_RAW_IMPORTS_KEEP_ALL");
+        let _keep = EnvVarGuard::set("QUAID_RAW_IMPORTS_KEEP", "10");
+        let _ttl = EnvVarGuard::set("QUAID_RAW_IMPORTS_TTL_DAYS", "30");
+
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 1, ?3, ?4, datetime('now'))",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"active",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2025-01-10T00:00:00Z')",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"expired",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, datetime('now', '-1 day'))",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"recent",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+
+        let deleted = sweep_expired_inactive_rows(&conn).unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining_inactive: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM raw_imports
+                 WHERE page_id = ?1 AND is_active = 0",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_inactive, 1);
+        assert_eq!(active_raw_import_count(&conn, page_id).unwrap(), 1);
+    }
+
+    #[test]
+    fn ttl_sweep_respects_keep_all_override() {
+        let conn = open_test_db();
+        let page_id = page_id(&conn);
+        let _env_guard = env_mutation_lock().lock().unwrap();
+        let _keep_all = EnvVarGuard::set("QUAID_RAW_IMPORTS_KEEP_ALL", "1");
+
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             VALUES (?1, ?2, 0, ?3, ?4, '2025-01-10T00:00:00Z')",
+            rusqlite::params![
+                page_id,
+                page_uuid::generate_uuid_v7(),
+                b"expired",
+                "notes/test.md"
+            ],
+        )
+        .unwrap();
+
+        let deleted = sweep_expired_inactive_rows(&conn).unwrap();
+        assert_eq!(deleted, 0);
     }
 }

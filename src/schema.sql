@@ -1,4 +1,4 @@
--- memory.db schema — Quaid v6
+-- memory.db schema — Quaid v8
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS quaid_config (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS collections (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                TEXT    NOT NULL UNIQUE,
+    name                TEXT    NOT NULL UNIQUE CHECK(instr(name, '::') = 0),
     root_path           TEXT    NOT NULL,
     state               TEXT    NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'detached', 'restoring')),
     writable            INTEGER NOT NULL DEFAULT 1,
@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS serve_sessions (
     host          TEXT    NOT NULL,
     started_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     heartbeat_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    ipc_path      TEXT    DEFAULT NULL
+    ipc_path      TEXT    DEFAULT NULL,
+    session_type  TEXT    NOT NULL DEFAULT 'serve'
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_serve_sessions_heartbeat
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS pages (
     -- DEFAULT 1 routes legacy inserts to the default collection (id=1).
     -- A matching ensure_default_collection() call in db.rs guarantees the row exists.
     collection_id   INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,
+    namespace       TEXT    NOT NULL DEFAULT '',
     slug            TEXT    NOT NULL,
     -- NULL until UUID lifecycle (tasks 5a.*) is fully wired; allows NULL so
     -- legacy INSERT helpers that omit uuid continue to work.
@@ -104,9 +106,10 @@ CREATE TABLE IF NOT EXISTS pages (
     updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     truth_updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     timeline_updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE(collection_id, slug)
+    UNIQUE(collection_id, namespace, slug)
 );
 
+CREATE INDEX IF NOT EXISTS idx_pages_namespace ON pages(namespace);
 -- Partial index: SQLite allows multiple NULLs in unique indexes, but being
 -- explicit here avoids confusion when uuid is still unset.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL;
@@ -117,6 +120,12 @@ CREATE INDEX IF NOT EXISTS idx_pages_updated  ON pages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_pages_wing     ON pages(wing);
 CREATE INDEX IF NOT EXISTS idx_pages_wing_room ON pages(wing, room);
 CREATE INDEX IF NOT EXISTS idx_pages_quarantined ON pages(quarantined_at) WHERE quarantined_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS namespaces (
+    id         TEXT PRIMARY KEY,
+    ttl_hours  REAL DEFAULT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS quarantine_exports (
     page_id         INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -306,6 +315,7 @@ CREATE TABLE IF NOT EXISTS raw_imports (
     page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     import_id  TEXT    NOT NULL,
     is_active  INTEGER NOT NULL DEFAULT 1,
+    content_hash TEXT  NOT NULL DEFAULT '',
     raw_bytes  BLOB    NOT NULL,
     file_path  TEXT    NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -322,23 +332,6 @@ CREATE TABLE IF NOT EXISTS import_manifest (
     page_count  INTEGER NOT NULL,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-
--- ============================================================
--- ingest_log: per-file SHA-256 idempotency audit trail.
--- Kept for compatibility with the import/ingest/embed commands;
--- will be removed when the reconciler slice replaces quaid import.
--- ============================================================
-CREATE TABLE IF NOT EXISTS ingest_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    ingest_key   TEXT    NOT NULL UNIQUE,   -- SHA-256 of raw file bytes
-    source_type  TEXT    NOT NULL,          -- 'file' | 'stdin'
-    source_ref   TEXT    NOT NULL DEFAULT '',
-    pages_updated TEXT   NOT NULL DEFAULT '[]',
-    summary      TEXT    NOT NULL DEFAULT '',
-    completed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_ingest_log_key ON ingest_log(ingest_key);
 
 -- ============================================================
 -- file_state: stat-based change detection for vault sync
@@ -367,13 +360,20 @@ CREATE INDEX IF NOT EXISTS idx_file_state_page ON file_state(page_id);
 CREATE TABLE IF NOT EXISTS embedding_jobs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id     INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
     priority    INTEGER NOT NULL DEFAULT 0,
+    job_state   TEXT    NOT NULL DEFAULT 'pending'
+                        CHECK(job_state IN ('pending', 'running', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT    DEFAULT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     enqueued_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     started_at  TEXT    DEFAULT NULL,
     UNIQUE(page_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue ON embedding_jobs(priority DESC, enqueued_at);
+CREATE INDEX IF NOT EXISTS idx_embedding_jobs_queue
+    ON embedding_jobs(job_state, priority DESC, enqueued_at);
 
 -- ============================================================
 -- config: mutable runtime defaults
@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '6'),
+    ('version',               '8'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),

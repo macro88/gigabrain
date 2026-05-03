@@ -11,15 +11,16 @@
 //!   7. Latency gate           — p95 < 250ms over 100 queries (release build, #[ignore])
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use quaid::commands::check;
 use quaid::commands::embed;
+use quaid::commands::ingest;
 use quaid::core::assertions;
 use quaid::core::db;
 use quaid::core::fts::search_fts;
-use quaid::core::migrate::{export_dir, import_dir};
+use quaid::core::migrate::export_dir;
 use quaid::core::search::hybrid_search;
 
 fn open_test_db() -> rusqlite::Connection {
@@ -65,6 +66,44 @@ fn count_fixture_files() -> usize {
         .count()
 }
 
+fn collect_markdown_files(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .expect("read dir")
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    files
+}
+
+fn page_count(conn: &rusqlite::Connection) -> usize {
+    conn.query_row("SELECT COUNT(*) FROM pages", [], |row| row.get::<_, i64>(0))
+        .expect("count pages") as usize
+}
+
+fn ingest_markdown_tree(conn: &rusqlite::Connection, root: &Path) -> usize {
+    let mut imported = 0usize;
+    for file in collect_markdown_files(root) {
+        let before = page_count(conn);
+        ingest::run(conn, file.to_str().expect("utf8 path"), false).expect("ingest file");
+        let after = page_count(conn);
+        imported += after.saturating_sub(before);
+    }
+    imported
+}
+
 // ── 1. Import completeness ────────────────────────────────────────────────────
 
 #[test]
@@ -72,20 +111,11 @@ fn import_completeness_all_fixtures_produce_pages() {
     let conn = open_test_db();
     let fixture_count = count_fixture_files();
 
-    let stats = import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    let imported = ingest_markdown_tree(&conn, &fixtures_dir());
 
     assert_eq!(
-        stats.imported, fixture_count,
-        "expected {fixture_count} pages imported, got {}",
-        stats.imported
-    );
-    assert_eq!(
-        stats.skipped_already_ingested, 0,
-        "no files should be skipped on first import"
-    );
-    assert_eq!(
-        stats.skipped_non_markdown, 0,
-        "no non-markdown files in fixture set"
+        imported, fixture_count,
+        "expected {fixture_count} pages imported, got {imported}"
     );
 
     let page_count: i64 = conn
@@ -102,7 +132,7 @@ fn import_completeness_all_fixtures_produce_pages() {
 #[test]
 fn sms_exact_slug_returns_page_as_top_1() {
     let conn = open_test_db();
-    import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    ingest_markdown_tree(&conn, &fixtures_dir());
     embed::run(&conn, None, true, false).expect("embed pages");
 
     // All fixture slugs should be retrievable via exact-slug lookup
@@ -132,7 +162,7 @@ fn sms_exact_slug_returns_page_as_top_1() {
 #[test]
 fn timeline_retrieval_known_fact_appears_in_top_5() {
     let conn = open_test_db();
-    import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    ingest_markdown_tree(&conn, &fixtures_dir());
     embed::run(&conn, None, true, false).expect("embed pages");
 
     // Known facts from fixture timelines — should surface correct pages
@@ -162,28 +192,28 @@ fn duplicate_ingest_produces_no_additional_pages() {
     let conn = open_test_db();
 
     // First import
-    let stats1 = import_dir(&conn, &fixtures_dir(), false).expect("first import");
+    let imported_first = ingest_markdown_tree(&conn, &fixtures_dir());
     let page_count_after_first: i64 = conn
         .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
         .expect("count pages");
 
-    // Second import — should skip all (hash-based idempotency)
-    let stats2 = import_dir(&conn, &fixtures_dir(), false).expect("second import");
+    let imported_second = ingest_markdown_tree(&conn, &fixtures_dir());
     let page_count_after_second: i64 = conn
         .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
         .expect("count pages");
 
     assert_eq!(
-        stats2.imported, 0,
-        "second import should import 0 files (all cached)"
-    );
-    assert_eq!(
-        stats2.skipped_already_ingested, stats1.imported,
-        "all files from first import should be skipped"
+        imported_first,
+        count_fixture_files(),
+        "first ingest pass should import every fixture exactly once"
     );
     assert_eq!(
         page_count_after_first, page_count_after_second,
         "page count should not change on second import"
+    );
+    assert_eq!(
+        imported_second, 0,
+        "second ingest pass should import 0 files"
     );
 }
 
@@ -283,7 +313,7 @@ fn prose_only_pages_do_not_create_false_contradictions() {
 fn idempotent_roundtrip_export_reimport_export_is_zero_diff() {
     let (conn, _dir) = open_disk_db();
 
-    import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    ingest_markdown_tree(&conn, &fixtures_dir());
 
     let export_dir1 = tempfile::TempDir::new().expect("export dir 1");
     let count1 = export_dir(&conn, export_dir1.path()).expect("export 1");
@@ -295,9 +325,9 @@ fn idempotent_roundtrip_export_reimport_export_is_zero_diff() {
 
     // Re-import into a fresh DB
     let (conn2, _dir2) = open_disk_db();
-    let stats = import_dir(&conn2, export_dir1.path(), false).expect("reimport");
+    let imported = ingest_markdown_tree(&conn2, export_dir1.path());
     assert_eq!(
-        stats.imported, count1,
+        imported, count1,
         "reimport should import all exported files"
     );
 
@@ -365,7 +395,7 @@ fn collect_recursive(root: &Path, dir: &Path, pages: &mut Vec<(String, String)>)
 #[ignore = "latency gate requires release build — run: cargo test --release --test corpus_reality latency -- --ignored"]
 fn latency_100_queries_p95_under_250ms() {
     let conn = open_test_db();
-    import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    ingest_markdown_tree(&conn, &fixtures_dir());
     embed::run(&conn, None, true, false).expect("embed pages");
 
     let queries = [
@@ -420,7 +450,7 @@ fn percentile(sorted: &[f64], pct: usize) -> f64 {
 #[test]
 fn fts5_search_finds_all_fixture_pages_by_distinctive_terms() {
     let conn = open_test_db();
-    import_dir(&conn, &fixtures_dir(), false).expect("import fixtures");
+    ingest_markdown_tree(&conn, &fixtures_dir());
 
     // Term → expected slug
     let cases: &[(&str, &str)] = &[
