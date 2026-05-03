@@ -4633,6 +4633,13 @@ pub fn begin_restore(
         let (_, expected_session_id, generation) =
             mark_collection_restoring_for_handshake(conn, collection.id)?;
         wait_for_exact_ack(conn, collection.id, &expected_session_id, generation)?;
+        conn.execute(
+            "UPDATE collections
+             SET restore_lease_session_id = ?2,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            params![collection.id, expected_session_id.clone()],
+        )?;
         #[cfg(unix)]
         {
             let request = RestoreRemapSafetyRequest {
@@ -11756,6 +11763,59 @@ mod tests {
         assert!(row.0.is_none());
         assert_eq!(row.1, 0);
         assert_eq!(row.2, 0);
+    }
+
+    #[test]
+    fn live_collection_owner_ignores_stale_heartbeat_rows_older_than_fifteen_seconds() {
+        let conn = open_test_db();
+        let temp = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", temp.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-stale', 77, 'host', datetime('now', '-16 seconds'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-stale')",
+            [collection_id],
+        )
+        .unwrap();
+
+        assert!(live_collection_owner(&conn, collection_id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn start_serve_runtime_refreshes_session_heartbeat_on_five_second_interval() {
+        let (_dir, db_path, conn) = open_test_db_file();
+        drop(conn);
+
+        let runtime = start_serve_runtime(db_path.clone()).unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        let first_heartbeat: String = conn
+            .query_row(
+                "SELECT heartbeat_at FROM serve_sessions WHERE session_id = ?1",
+                [runtime.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+
+        thread::sleep(Duration::from_millis(6200));
+
+        let conn = Connection::open(&db_path).unwrap();
+        let second_heartbeat: String = conn
+            .query_row(
+                "SELECT heartbeat_at FROM serve_sessions WHERE session_id = ?1",
+                [runtime.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(first_heartbeat, second_heartbeat);
+
+        drop(runtime);
     }
 
     #[test]

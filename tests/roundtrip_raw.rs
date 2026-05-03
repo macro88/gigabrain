@@ -1,7 +1,8 @@
 use std::fs;
 
+use quaid::commands::ingest;
 use quaid::core::db;
-use quaid::core::migrate::{export_dir, import_dir};
+use quaid::core::migrate::export_dir;
 
 #[test]
 fn export_reproduces_canonical_markdown_fixture_byte_for_byte() {
@@ -28,8 +29,11 @@ fn export_reproduces_canonical_markdown_fixture_byte_for_byte() {
     let db_path = db_root.path().join("memory.db");
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
 
-    let import_stats = import_dir(&conn, fixture_root.path(), false).unwrap();
-    assert_eq!(import_stats.imported, 1);
+    ingest::run(&conn, fixture_path.to_str().unwrap(), false).unwrap();
+    let page_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pages", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_count, 1);
 
     let export_root = tempfile::TempDir::new().unwrap();
     let exported_count = export_dir(&conn, export_root.path()).unwrap();

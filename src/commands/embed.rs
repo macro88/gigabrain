@@ -173,16 +173,16 @@ fn page_needs_refresh(
         }))
 }
 
-/// Best-effort lookup of the source file path for a given slug via
-/// the ingest_log table. Returns `None` when no matching ingest row can
-/// be found, including pages created outside file ingest flows.
+/// Best-effort lookup of the source file path for a given slug via the active
+/// raw_imports row. Returns `None` when no matching row can be found.
 fn lookup_source_path(db: &Connection, slug: &str) -> Option<String> {
     db.query_row(
-        "SELECT source_ref FROM ingest_log \
-         WHERE EXISTS ( \
-              SELECT 1 FROM json_each(pages_updated) WHERE value = ?1 \
-          ) \
-         ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+        "SELECT ri.file_path
+         FROM raw_imports ri
+         JOIN pages p ON p.id = ri.page_id
+         WHERE p.slug = ?1 AND ri.is_active = 1
+         ORDER BY ri.created_at DESC, ri.id DESC
+         LIMIT 1",
         [slug],
         |row| row.get(0),
     )
@@ -628,35 +628,42 @@ mod tests {
     }
 
     /// When a page's frontmatter slug differs from its filename (e.g. file is
-    /// `notes/2024-01-meeting.md` but `slug: people/alice`), the LIKE-heuristic
-    /// would silently miss. This test verifies that `lookup_source_path` finds
-    /// the correct source_ref via the `pages_updated` JSON field.
+    /// `notes/2024-01-meeting.md` but `slug: people/alice`), lookup must follow
+    /// the active raw_imports row rather than guessing from the filename.
     #[test]
     fn lookup_source_path_works_when_frontmatter_slug_differs_from_filename() {
         let conn = open_test_db();
-
-        // Simulate what record_ingest now writes: slug stored in pages_updated.
         conn.execute(
-            "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
-             VALUES ('abc123', 'file', '/notes/2024-01-meeting.md', json_array('people/alice'))",
+            "INSERT INTO pages (slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+             VALUES ('people/alice', '01969f11-9448-7d79-8d3f-c68f54761234', 'person', 'Alice', '', '', '', '{}', 'people', '', 1)",
             [],
         )
-        .expect("insert ingest_log row");
+        .expect("insert page");
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'people/alice'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("page id");
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
+             VALUES (?1, '01969f11-9448-7d79-8d3f-c68f54769999', 1, x'74657374', '/notes/2024-01-meeting.md')",
+            [page_id],
+        )
+        .expect("insert raw import row");
 
-        // Slug does NOT match filename — heuristic would return None.
-        // Correct slug-based lookup must return the real path.
         let result = lookup_source_path(&conn, "people/alice");
         assert_eq!(
             result.as_deref(),
             Some("/notes/2024-01-meeting.md"),
-            "should find source_ref for frontmatter slug that differs from filename"
+            "should find file_path for frontmatter slug that differs from filename"
         );
 
-        // Filename stem is not a valid slug in this DB — must return None.
         let miss = lookup_source_path(&conn, "notes/2024-01-meeting");
         assert_eq!(
             miss, None,
-            "filename-derived slug should not match when only frontmatter slug is stored"
+            "filename-derived slug should not match when only the resolved page slug exists"
         );
     }
 
@@ -678,12 +685,12 @@ mod tests {
         assert_eq!(
             result.as_deref(),
             file_path.to_str(),
-            "single-file ingest should preserve slug→source mapping for later warnings"
+            "single-file ingest should preserve slug→file-path mapping for later warnings"
         );
     }
 
     #[test]
-    fn lookup_source_path_recovers_after_reimport_backfills_empty_pages_updated() {
+    fn lookup_source_path_recovers_after_duplicate_skip_refreshes_active_raw_import_path() {
         let conn = open_test_db();
 
         let first_dir = tempfile::TempDir::new().expect("create first dir");
@@ -694,14 +701,8 @@ mod tests {
         )
         .expect("write first fixture");
 
-        crate::core::migrate::import_dir(&conn, first_dir.path(), false).expect("first import");
-        conn.execute(
-            "UPDATE ingest_log \
-             SET source_ref = 'old/path.md', pages_updated = '[]' \
-             WHERE source_type = 'file'",
-            [],
-        )
-        .expect("seed legacy ingest row");
+        crate::commands::ingest::run(&conn, first_path.to_str().expect("utf8 path"), false)
+            .expect("first ingest");
 
         let second_dir = tempfile::TempDir::new().expect("create second dir");
         let second_path = second_dir.path().join("note.md");
@@ -711,7 +712,8 @@ mod tests {
         )
         .expect("write second fixture");
 
-        crate::core::migrate::import_dir(&conn, second_dir.path(), false).expect("second import");
+        crate::commands::ingest::run(&conn, second_path.to_str().expect("utf8 path"), false)
+            .expect("second ingest");
 
         assert_eq!(
             lookup_source_path(&conn, "note").as_deref(),
@@ -720,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_source_path_recovers_after_reimport_repairs_stale_slug_metadata() {
+    fn lookup_source_path_updates_after_force_reingest_from_moved_path() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().expect("create temp dir");
 
@@ -731,29 +733,19 @@ mod tests {
         )
         .expect("write original fixture");
 
-        crate::core::migrate::import_dir(&conn, dir.path(), false).expect("initial import");
-        conn.execute(
-            "UPDATE ingest_log \
-             SET pages_updated = json_array('sub/note') \
-             WHERE source_type = 'file'",
-            [],
-        )
-        .expect("seed stale slug metadata");
+        crate::commands::ingest::run(&conn, original_path.to_str().expect("utf8 path"), false)
+            .expect("initial ingest");
 
         std::fs::create_dir_all(dir.path().join("sub")).expect("create subdir");
         let moved_path = dir.path().join("sub").join("note.md");
         std::fs::rename(&original_path, &moved_path).expect("move file");
 
-        crate::core::migrate::import_dir(&conn, dir.path(), false).expect("reimport moved file");
+        crate::commands::ingest::run(&conn, moved_path.to_str().expect("utf8 path"), true)
+            .expect("reingest moved file");
 
         assert_eq!(
             lookup_source_path(&conn, "note").as_deref(),
             moved_path.to_str()
-        );
-        assert_eq!(
-            lookup_source_path(&conn, "sub/note"),
-            None,
-            "path-derived slug drift must not replace the existing page mapping"
         );
     }
 }

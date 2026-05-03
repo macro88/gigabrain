@@ -36,14 +36,14 @@ Quaid requires `quaid serve` to be running for MCP/API access. For CLI-only use,
 
 | Task | QMD | Quaid |
 |------|-----|-----------|
-| Search vault (first use) | `qmd search "query"` - 1 cmd | `quaid import ~/docs && quaid serve` then query |
+| Search vault (first use) | `qmd search "query"` - 1 cmd | `quaid collection add docs ~/docs && quaid serve`, then query |
 | Search vault (returning user) | `qmd search "query"` - instant | Need serve running, or use CLI directly |
-| Keep index fresh | Cron runs `qmd update` hourly - zero thought | Manual import or cron setup |
+| Keep index fresh | Cron runs `qmd update` hourly - zero thought | `quaid serve` watcher on Unix; manual sync on unsupported platforms |
 | Add to OpenClaw context | Built-in skill, auto-configured | Manual MCP config, `quaid serve` must be running |
 | Cross-session availability | Always available (SQLite file persists) | Only if serve process survived |
-| Embedding updates | `qmd embed` - separate step, takes ~30s | Part of import, but slow (427s for 356 files) |
+| Embedding updates | `qmd embed` - separate step, takes ~30s | Initial collection attach plus background embedding queue |
 
-The biggest friction point is the import/serve split. QMD users never think about "did I import today?" Quaid users have to.
+The biggest friction point used to be the import/serve split. Collections fixed the ingest side, but Quaid still needs `serve` to feel automatic.
 
 ---
 
@@ -55,23 +55,23 @@ The biggest friction point is the import/serve split. QMD users never think abou
 
 **Fix:** Auto-start `quaid serve` as a background daemon on first use, or make `quaid init` optionally register it as a launchd/systemd service. One-time setup, then it's always there.
 
-### 2. Import Speed Regression
+### 2. Initial Sync Speed Regression
 
-v0.9.4 import time: 427 seconds for 356 files.  
-v0.9.1 import time: 159 seconds for the same corpus.  
+v0.9.4 initial sync time: 427 seconds for 356 files.  
+v0.9.1 initial sync time: 159 seconds for the same corpus.  
 QMD update time (no changes): 3 seconds. QMD update time (full re-index): ~45 seconds.
 
-Until import speed reaches parity with v0.9.1, the daily workflow is painful. Users who import once and forget it will hit stale results. Users who import daily will hate it.
+Until initial-sync speed reaches parity with v0.9.1, first attach remains painful on large vaults.
 
-**Fix:** Track file mtimes or content hashes at import time. Skip unchanged files entirely (same mechanism QMD uses). This should bring re-import time down to under 10 seconds for a warm vault.
+**Fix:** Keep tightening reconciler stat-diff and hash fallback so warm `collection sync` runs stay under 10 seconds.
 
-### 3. No Incremental Update Path
+### 3. No Cross-Platform Incremental Update Path
 
 QMD has a clean incremental update model: on each `qmd update`, it only re-indexes files whose SHA-256 hash changed. New files get indexed. Deleted files get tombstoned. Changed files get a new content record. The FTS5 and embedding indexes update accordingly.
 
-Quaid has `quaid import` which appears to do a full re-import each time. There's no equivalent of `qmd update` that cheaply syncs changes.
+Quaid now has `quaid collection sync`, but the live watcher is still Unix-only and unsupported platforms do not get the same always-on incremental path.
 
-**Fix:** Add `quaid sync` (or `quaid import --incremental`) that mirrors QMD's approach. Hash-compare on mtime, only re-embed changed content. This is the single highest-impact change for daily usability.
+**Fix:** Finish the cross-platform collection sync/watch story so every platform gets the same cheap incremental path.
 
 ### 4. The OpenClaw Integration Gap
 
@@ -105,7 +105,7 @@ Hash-check files on import. Skip unchanged. Re-import only modified/new files. T
 `quaid daemon install` or `quaid init --daemon` that registers `quaid serve` as a launchd service (macOS) / systemd unit (Linux). One command, then it's always running. No manual start required.
 
 **3. OpenClaw skill that handles the full setup**  
-Ship `skills/openclaw/SKILL.md` that covers: installing quaid, running `quaid import`, starting the daemon, configuring MCP in openclaw.json. Zero manual steps for OpenClaw users after installing the skill.
+Ship `skills/openclaw/SKILL.md` that covers: installing quaid, running `quaid collection add`, starting the daemon, configuring MCP in openclaw.json. Zero manual steps for OpenClaw users after installing the skill.
 
 ### P1 - Significant quality-of-life improvements
 

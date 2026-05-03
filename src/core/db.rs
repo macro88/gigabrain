@@ -12,7 +12,7 @@ use super::inference::{
 use super::types::DbError;
 
 static SQLITE_VEC_INIT: Once = Once::new();
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const PAGES_AU_QUARANTINE_GUARD: &str = "WHERE old.quarantined_at IS NULL";
 const PAGES_AU_TRIGGER_SQL: &str =
     "CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -234,6 +234,8 @@ fn open_connection(path: &str) -> Result<Connection, DbError> {
     ensure_namespace_schema(&conn)?;
     ensure_collection_owner_columns(&conn)?;
     ensure_serve_session_columns(&conn)?;
+    ensure_collection_name_guards(&conn)?;
+    ensure_raw_import_hash_schema(&conn)?;
     set_version(&conn)?;
     ensure_default_collection(&conn)?;
 
@@ -485,6 +487,87 @@ fn ensure_serve_session_columns(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+fn ensure_collection_name_guards(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS collections_name_reject_double_colon_insert
+         BEFORE INSERT ON collections
+         WHEN instr(NEW.name, '::') > 0
+         BEGIN
+             SELECT RAISE(ABORT, 'collections.name cannot contain ::');
+         END;
+
+         CREATE TRIGGER IF NOT EXISTS collections_name_reject_double_colon_update
+         BEFORE UPDATE OF name ON collections
+         WHEN instr(NEW.name, '::') > 0
+         BEGIN
+             SELECT RAISE(ABORT, 'collections.name cannot contain ::');
+         END;",
+    )?;
+    Ok(())
+}
+
+fn ensure_raw_import_hash_schema(conn: &Connection) -> Result<(), DbError> {
+    if !table_exists(conn, "raw_imports")? {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(raw_imports)")?;
+    let existing_columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<HashSet<_>, _>>()?;
+
+    let mut added_content_hash = false;
+    if !existing_columns.contains("content_hash") {
+        conn.execute_batch(
+            "ALTER TABLE raw_imports ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';",
+        )?;
+        added_content_hash = true;
+    }
+
+    if !index_exists(conn, "idx_raw_imports_content_hash")? {
+        conn.execute_batch(
+            "CREATE INDEX idx_raw_imports_content_hash
+             ON raw_imports(content_hash)
+             WHERE content_hash != '';",
+        )?;
+    }
+
+    if !added_content_hash {
+        return Ok(());
+    }
+
+    const BACKFILL_BATCH_SIZE: i64 = 128;
+    loop {
+        let rows_to_backfill: Vec<(i64, Vec<u8>)> = conn
+            .prepare(
+                "SELECT id, raw_bytes
+                 FROM raw_imports
+                 WHERE content_hash = ''
+                 ORDER BY id
+                 LIMIT ?1",
+            )?
+            .query_map([BACKFILL_BATCH_SIZE], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+
+        if rows_to_backfill.is_empty() {
+            break;
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        for (id, raw_bytes) in rows_to_backfill {
+            tx.execute(
+                "UPDATE raw_imports
+                 SET content_hash = ?1
+                 WHERE id = ?2",
+                params![crate::core::raw_imports::content_hash_hex(&raw_bytes), id],
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    Ok(())
+}
+
 /// Ensure a collection with id=1 exists in the database.
 ///
 /// All legacy INSERT INTO pages statements that omit collection_id rely on
@@ -609,7 +692,6 @@ fn is_bootstrap_fresh_db(conn: &Connection) -> Result<bool, DbError> {
         "embedding_jobs",
         "file_state",
         "import_manifest",
-        "ingest_log",
         "knowledge_gaps",
         "links",
         "page_embeddings",
@@ -786,6 +868,17 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     Ok(exists.is_some())
 }
 
+fn index_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
+    let exists: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 LIMIT 1",
+            [name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(exists.is_some())
+}
+
 fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbError> {
     for (table, key) in [("quaid_config", "schema_version"), ("config", "version")] {
         if !table_exists(conn, table)? {
@@ -816,7 +909,7 @@ fn read_existing_schema_version(conn: &Connection) -> Result<Option<i64>, DbErro
 fn format_schema_reinit_message(schema_version: i64, path: &str) -> String {
     let default_path = default_db_path_string();
     format!(
-        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then run:\n    quaid init {}\n    quaid import <export-directory>\n  Original database: {}",
+        "Error: database schema version mismatch.\n  Found version {}, expected {}.\n  Existing databases created before the Quaid rename are not supported.\n  To migrate: export your data with the pre-rename binary, then re-ingest the exported markdown with the current workflow.\n    quaid init {}\n    quaid collection add migrated <export-directory>\n    # or ingest files individually with `quaid ingest`\n  Original database: {}",
         schema_version, SCHEMA_VERSION, default_path, path
     )
 }
@@ -918,7 +1011,6 @@ mod tests {
             "embedding_models",
             "file_state",
             "import_manifest",
-            "ingest_log",
             "knowledge_gaps",
             "links",
             "namespaces",
@@ -941,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn open_sets_user_version_to_7() {
+    fn open_sets_user_version_to_8() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test_memory.db");
         let conn = open(db_path.to_str().unwrap()).unwrap();
@@ -949,7 +1041,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -991,7 +1083,7 @@ mod tests {
         let version: i64 = conn2
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -1060,6 +1152,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn open_backfills_raw_import_content_hash_for_existing_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test_memory.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let conn = open(path_str).unwrap();
+        conn.execute(
+            "INSERT INTO pages (slug, uuid, type, title)
+             VALUES ('notes/hash-test', ?1, 'concept', 'notes/hash-test')",
+            [crate::core::page_uuid::generate_uuid_v7()],
+        )
+        .unwrap();
+        let page_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = 'notes/hash-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+             VALUES (?1, 'import-1', 1, ?2, ?3, 'notes/hash-test.md')",
+            params![
+                page_id,
+                crate::core::raw_imports::content_hash_hex(b"hello"),
+                b"hello"
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = Connection::open(path_str).unwrap();
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_raw_imports_content_hash;
+             ALTER TABLE raw_imports RENAME TO raw_imports_old;
+             CREATE TABLE raw_imports (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+                 import_id  TEXT    NOT NULL,
+                 is_active  INTEGER NOT NULL DEFAULT 1,
+                 raw_bytes  BLOB    NOT NULL,
+                 file_path  TEXT    NOT NULL,
+                 created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                 UNIQUE(page_id, import_id)
+             );
+             INSERT INTO raw_imports (id, page_id, import_id, is_active, raw_bytes, file_path, created_at)
+             SELECT id, page_id, import_id, is_active, raw_bytes, file_path, created_at
+             FROM raw_imports_old;
+             DROP TABLE raw_imports_old;
+             CREATE INDEX idx_raw_imports_page ON raw_imports(page_id);
+             CREATE INDEX idx_raw_imports_active ON raw_imports(page_id, is_active)
+                 WHERE is_active = 1;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open(path_str).unwrap();
+        let content_hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM raw_imports WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            content_hash,
+            crate::core::raw_imports::content_hash_hex(b"hello")
+        );
     }
 
     #[test]
@@ -1141,7 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn open_with_model_rejects_legacy_database_before_creating_v7_tables() {
+    fn open_with_model_rejects_legacy_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -1150,7 +1313,7 @@ mod tests {
             .expect_err("legacy database should be refused");
 
         assert!(matches!(err, DbError::Schema { .. }));
-        assert!(err.to_string().contains("Found version 5, expected 7"));
+        assert!(err.to_string().contains("Found version 5, expected 8"));
 
         let conn = Connection::open(&db_path).unwrap();
         assert!(!table_exists(&conn, "collections").unwrap());
@@ -1165,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn init_rejects_legacy_database_before_creating_v7_tables() {
+    fn init_rejects_legacy_database_before_creating_v8_tables() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("legacy.db");
         seed_existing_db(&db_path, 5);
@@ -1188,9 +1351,9 @@ mod tests {
     }
 
     #[test]
-    fn open_connection_seeds_config_version_to_7_for_partial_v7_databases() {
+    fn open_connection_seeds_config_version_to_8_for_partial_v8_databases() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("partial-v7.db");
+        let db_path = dir.path().join("partial-v8.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
         let config_version: String = conn
             .query_row(
@@ -1199,19 +1362,19 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(config_version, "7");
+        assert_eq!(config_version, "8");
         drop(conn);
 
         assert!(
             preflight_existing_schema(db_path.to_str().unwrap()).is_ok(),
-            "freshly seeded v7 DDL should not be misclassified as legacy before quaid_config is written"
+            "freshly seeded v8 DDL should not be misclassified as legacy before quaid_config is written"
         );
     }
 
     #[test]
-    fn open_with_model_recovers_crash_partial_v7_bootstrap() {
+    fn open_with_model_recovers_crash_partial_v8_bootstrap() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("partial-v7.db");
+        let db_path = dir.path().join("partial-v8.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
         drop(conn);
 
@@ -1220,14 +1383,14 @@ mod tests {
         let stored = read_quaid_config(&opened.conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 7);
+        assert_eq!(stored.schema_version, 8);
     }
 
     #[cfg(feature = "online-model")]
     #[test]
-    fn open_with_model_recovers_crash_partial_v7_bootstrap_from_registry_model() {
+    fn open_with_model_recovers_crash_partial_v8_bootstrap_from_registry_model() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("partial-v7-registry.db");
+        let db_path = dir.path().join("partial-v8-registry.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
         let large_model = hydrate_model_config(&resolve_model("large")).unwrap();
         ensure_embedding_model_registry(&conn, &large_model).unwrap();
@@ -1243,9 +1406,9 @@ mod tests {
     }
 
     #[test]
-    fn init_recovers_crash_partial_v7_bootstrap() {
+    fn init_recovers_crash_partial_v8_bootstrap() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("partial-v7-init.db");
+        let db_path = dir.path().join("partial-v8-init.db");
         let conn = open_connection(db_path.to_str().unwrap()).unwrap();
         drop(conn);
 
@@ -1254,7 +1417,7 @@ mod tests {
         let stored = read_quaid_config(&conn).unwrap().unwrap();
 
         assert_eq!(stored.model_alias, "small");
-        assert_eq!(stored.schema_version, 7);
+        assert_eq!(stored.schema_version, 8);
     }
 
     #[test]
@@ -1415,7 +1578,7 @@ mod tests {
         assert_eq!(config.model_id, "BAAI/bge-large-en-v1.5");
         assert_eq!(config.model_alias, "large");
         assert_eq!(config.embedding_dim, 1024);
-        assert_eq!(config.schema_version, 7);
+        assert_eq!(config.schema_version, 8);
     }
 
     #[test]
@@ -1431,7 +1594,7 @@ mod tests {
                 model_id: "BAAI/bge-small-en-v1.5".to_owned(),
                 model_alias: "small".to_owned(),
                 embedding_dim: 384,
-                schema_version: 7,
+                schema_version: 8,
             }
         );
     }

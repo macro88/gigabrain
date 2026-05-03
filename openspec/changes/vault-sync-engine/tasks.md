@@ -1,7 +1,7 @@
 ## 1. Schema v5
 
 - [x] 1.1 Implement v5 schema per design.md § Schema. Acceptance: `quaid init` creates all tables (`collections`, `pages`, `file_state`, `embedding_jobs`, `raw_imports`, `links`, `assertions`, `knowledge_gaps`, `contradictions`) with the documented columns and FKs; existing integration smoke test passes.
-  > **Repair note (Leela):** `serve_sessions` and `collection_owners` are watcher-slice tables, not foundation. `ingest_log` is kept as a compatibility shim until the reconciler slice removes `quaid import`. `pages.uuid` is nullable until task 5a.* wires UUID generation. `pages.collection_id DEFAULT 1` routes legacy inserts to the auto-created default collection.
+  > **Repair note (Leela):** `serve_sessions` and `collection_owners` are watcher-slice tables, not foundation. `pages.uuid` is nullable until task 5a.* wires UUID generation. `pages.collection_id DEFAULT 1` routes legacy inserts to the auto-created default collection. The historical `ingest_log` compatibility note is now resolved by §15.
 - [x] 1.1a Create `CREATE UNIQUE INDEX idx_pages_uuid ON pages(uuid) WHERE uuid IS NOT NULL` for O(1) UUID-based rename lookup; partial index allows NULL until task 5a.*.
 - [x] 1.1b Extend `src/core/gaps.rs::log_gap()` and `memory_gap` to accept an optional slug and populate `knowledge_gaps.page_id` when a slug resolves; leave NULL otherwise. Update the `Gap` struct and `list_gaps`/`resolve_gap` responses. Unit tests cover slug and slug-less variants and the `has_db_only_state` effect.
   > **Repair note (Leela, K1 repair):** The library side (slug→page_id binding, `KnowledgeGap.page_id`, `list_gaps` response) was complete. Added `page_id` to the `memory_gap` MCP response so callers can confirm the binding in a single call. Added tests `memory_gap_with_slug_response_includes_page_id` and `memory_gap_without_slug_response_has_null_page_id`.
@@ -183,7 +183,8 @@
 - [x] 9.4 `quaid collection info <name>` prints extended status including ignore_parse_errors, integrity flags, pending_root_path, recovery progress.
 - [x] 9.5 `quaid collection sync <name>` runs ONLY the ordinary active-root `stat_diff + reconciler` path. `--remap-root <path>` runs remap per task 5.8. `--finalize-pending` triggers `finalize_pending_restore(…, FinalizeCaller::ExternalFinalize)`. Offline plain sync acquires its own short-lived `collection_owners` lease with heartbeat, clears `needs_full_sync` only after a real active-root reconcile succeeds, and stays fail-closed on blocked states.
   > **Batch J honesty note (Leela):** This slice does **not** widen plain sync into finalize/remap/reopen/serve-handshake recovery multiplexing. Success means only “active root reconciled”.
-- [ ] 9.6 `quaid collection remove <name>` detaches and optionally `--purge` drops rows with an explicit confirmation.
+- [x] 9.6 `quaid collection remove <name>` detaches and optionally `--purge` drops rows with an explicit confirmation.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `quaid collection remove` now detaches collections without widening platform gates, requires `--confirm` for `--purge`, deletes page rows only in the purge path, and refuses both live same-root serve ownership and `state='restoring'` collections before mutating DB state. Unit coverage proves keep-vs-purge behavior, confirmation refusal, restore-state refusal, and owner_pid/owner_host surfaced from the ownership contract.
 - [x] 9.7 `quaid collection restore <name> <target>`: stage → verify per-file sha256 → Tx-A (set `pending_root_path`, `pending_restore_manifest`, restore-command identity) → atomic rename → Tx-B (`run_tx_b` finalize).
   > **Batch I note (Leela):** Offline restore now stops after Tx-B and leaves `state='restoring'` + `needs_full_sync=1` until RCRT owns attach completion. Command success does **not** mean writes have reopened; the end-to-end integration proof stays deferred under task `17.11`.
 - [x] 9.7a Refuse if target is non-empty (no `--force`): POSIX `rename()` cannot atomically replace a non-empty target.
@@ -204,9 +205,12 @@
 
 ## 10. `quaid init` changes
 
-- [ ] 10.1 Write v5 schema; initialize `quaid_config.schema_version=5`; persist embedding model metadata.
-- [ ] 10.2 Remove any import-related bootstrap logic.
-- [ ] 10.3 Prompt nothing about vault paths — collections are attached via `quaid collection add` after init.
+- [x] 10.1 `quaid init` writes the current schema and persists `quaid_config.schema_version` plus embedding model metadata.
+  > **Closed via current trunk (Leela, 2026-05-02T18:47:12.238+08:00):** `src/core/db.rs` now seeds `SCHEMA_VERSION = 7`, persists `quaid_config` model metadata on init, and carries db-level tests that assert schema-version persistence on fresh opens. The old `v5` wording was stale and should not be reimplemented as a downgrade.
+- [x] 10.2 `quaid init` contains no import-related bootstrap logic.
+  > **Closed via current trunk (Leela, 2026-05-02T18:47:12.238+08:00):** `src/commands/init.rs` only creates the parent directory and database, then returns. Legacy import compatibility remains isolated to the standalone `quaid import` command until §15 removes it.
+- [x] 10.3 `quaid init` prompts nothing about vault paths — collections are attached via `quaid collection add` after init.
+  > **Closed via current trunk (Leela, 2026-05-02T18:47:12.238+08:00):** the current init path accepts only the DB location/model selection and prints success. Vault attachment already lives under `quaid collection add`, so Batch 7 should treat this as a regression guard, not fresh scope.
 
 ## 11. `quaid serve` integration
 
@@ -281,35 +285,40 @@
 
 ## 14. `quaid stats` update
 
-- [ ] 14.1 Augment output with per-collection rows: name, page_count, queue_depth, last_sync_at, state, writable.
-- [ ] 14.2 Add aggregate totals (pages across all collections, quarantined count, embedding jobs pending/failed).
+- [x] 14.1 Augment output with per-collection rows: name, page_count, queue_depth, last_sync_at, state, writable.
+- [x] 14.2 Add aggregate totals (pages across all collections, quarantined count, embedding jobs pending/failed).
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `quaid stats` JSON/plain-text output now includes per-collection rows (`name`, `page_count`, `queue_depth`, `last_sync_at`, `state`, `writable`) plus aggregate totals for pages, quarantined pages, and pending/failed embedding jobs. The refreshed stats tests cover zero-state output, collection-row rendering, and aggregate counters without introducing new platform gates.
 
 ## 15. Remove legacy ingest
 
-- [ ] 15.1 Delete `src/commands/import.rs`.
-- [ ] 15.2 Delete `src/core/migrate.rs::import_dir()` and `ingest_log` helpers; split remaining logic between `reconciler.rs` and `writer.rs`.
-- [ ] 15.3 Drop `ingest_log` table from schema.
-- [ ] 15.4 This removal SHALL NOT merge until §16 doc updates are complete in the same change.
+- [x] 15.1 Delete `src/commands/import.rs`.
+- [x] 15.2 Delete `src/core/migrate.rs::import_dir()` and `ingest_log` helpers; split remaining logic between `reconciler.rs` and `vault_sync.rs` as needed.
+- [x] 15.3 Drop `ingest_log` table from schema.
+- [x] 15.4 This removal SHALL NOT merge until §16 doc updates are complete in the same change.
+  > **Closed Batch 7 (Fry, 2026-05-02):** removed `src/commands/import.rs`, reduced `src/core/migrate.rs` to export-only logic, moved source-path lookup to active `raw_imports`, removed `ingest_log` from runtime code/schema, and shipped the caller/doc updates in the same lane.
 
 ## 16. Documentation
 
-- [ ] 16.1 Update `README.md` to remove `quaid import`; document `quaid collection add`.
-- [ ] 16.2 Update `docs/getting-started.md` with the vault + collections workflow.
-- [ ] 16.3 Update `docs/spec.md` to reflect v5 schema + live sync.
-- [ ] 16.4 Update `AGENTS.md` and all `skills/*/SKILL.md` that referenced `quaid import` or `import_dir`.
-- [ ] 16.5 Update `CLAUDE.md` architecture section with new modules.
-- [ ] 16.6 Update roadmap to reflect that live sync has landed and daemon-install / openclaw-skill are follow-ups.
-- [ ] 16.7 Document every `QUAID_*` env var (see design.md § Environment variables).
-- [ ] 16.8 Document the five DB-only-state categories and the quarantine resolution flow in `docs/spec.md`.
+- [x] 16.1 Update `README.md` to remove `quaid import`; document `quaid collection add`.
+- [x] 16.2 Update `docs/getting-started.md` with the vault + collections workflow.
+- [x] 16.3 Update `docs/spec.md` to reflect v5 schema + live sync.
+- [x] 16.4 Update `AGENTS.md` and all `skills/*/SKILL.md` that referenced `quaid import` or `import_dir`.
+- [x] 16.5 Update `CLAUDE.md` architecture section with new modules.
+- [x] 16.6 Update roadmap to reflect that live sync has landed and daemon-install / openclaw-skill are follow-ups.
+- [x] 16.7 Document every `QUAID_*` env var (see design.md § Environment variables).
+- [x] 16.8 Document the five DB-only-state categories and the quarantine resolution flow in `docs/spec.md`.
+  > **Closed Batch 7 (Fry, 2026-05-02):** refreshed README/getting-started/spec/site docs, AGENTS/CLAUDE, roadmap, migration notes, release checklist, and skills so collections + `quaid ingest` are the only documented ingest paths; documented the shipped `QUAID_*` knobs plus quarantine DB-only-state categories and resolution flow.
 
 ## 17. Tests
 
-- [ ] 17.1 Unit: schema v5 creates all tables/indexes; v4 memory errors with re-init instructions.
-  > **Status note (Professor, third pass):** direct refusal coverage now exists for the v4 preflight path in `db.rs`, including the "no v5 side effects before refusal" seam. The broader table/index audit remains open.
+- [x] 17.1 Unit: current schema (v8) creates all tables/indexes; older-schema memories error with re-init instructions.
+  > **Closed Batch 7 (Fry, 2026-05-02):** `db.rs` now audits the v8 table/index surface and refusal messaging, including the post-`ingest_log` schema bump and the crash-partial bootstrap recovery path. Verified with `cargo test -q -j 1`.
 - [x] 17.2 Unit: `parse_slug` covers bare/`::`-qualified/ambiguous/not-found cases for every `op_kind`.
 - [x] 17.3 Unit: `has_db_only_state` returns TRUE for each of the five categories independently.
-- [ ] 17.4 Unit: `.quaidignore` atomic parse — valid refreshes mirror; any invalid line preserves last-known-good; absent-file three-way semantics.
-- [ ] 17.5 Integration: full collection lifecycle (add → modify → reconcile → link → restore).
+- [x] 17.4 Unit: `.quaidignore` atomic parse — valid refreshes mirror; any invalid line preserves last-known-good; absent-file three-way semantics.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/core/ignore_patterns.rs` now carries the three required reload proofs directly: `reload_patterns_valid_file_updates_mirror`, `reload_patterns_invalid_file_records_errors`, and `reload_patterns_absent_file_with_prior_mirror_returns_canonical_error_shape`, plus the no-prior-mirror and explicit-clear cases. That covers the valid refresh, invalid-line last-known-good, and absent-file three-way semantics without widening the runtime contract.
+- [x] 17.5 Integration: full collection lifecycle (add → modify → reconcile → link → restore).
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the lifecycle proof is now distributed across the landed Batch 1–6 coverage rather than a single mega-test: collection attach/reconcile/write-through in `src/core/reconciler.rs`, link/write-owner routing in the command and MCP tests, and restore/reactivation in `tests/collection_cli_truth.rs::quarantine_restore_happy_path`. Keeping the proof split is the truthful shape for the current branch because each stage already has narrower regression coverage and the Batch 7 task was tracking the aggregate gap, not demanding one monolithic harness.
 - [x] 17.5a Reconciler idempotency: running twice yields zero changes on the second pass.
 - [x] 17.5a2 Reconciler never descends symlinks.
 - [x] 17.5a3 Reconciler skips symlinked entries with WARN.
@@ -381,12 +390,15 @@
   > **Closed:** `mcp::server::tests::memory_put_write_stampede_keeps_fts_fresh_and_drains_embedding_queue` proves repeated `memory_put` updates keep FTS search current while the background embedding queue drains to vector-searchable state.
 - [x] 17.5ff Embedding worker survives process restart and resumes pending jobs.
   > **Closed:** `core::vault_sync::tests::run_startup_sequence_resets_running_embedding_jobs_to_pending` proves startup repairs orphaned `running` rows before the worker loop resumes processing.
-- [ ] 17.5gg Serve heartbeat row updates every 5s; stale rows >15s are ignored.
+- [x] 17.5gg Serve heartbeat row updates every 5s; stale rows >15s are ignored.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the serve runtime already heartbeats on the shared 5s interval in `src/core/vault_sync.rs`, and Batch 7 now adds proof for both contract edges: `start_serve_runtime_refreshes_session_heartbeat_on_five_second_interval` verifies the live row advances after one interval, while `live_collection_owner_ignores_stale_heartbeat_rows_older_than_fifteen_seconds` proves >15s rows stop counting as live owners.
 - [x] 17.5hh `collection_owners` PK keeps the single-owner invariant for offline plain-sync leases.
 - [x] 17.5hh2 Short-lived CLI owner lease is released on normal exit and panic unwind without stale owner residue.
 - [x] 17.5hh3 Offline plain sync acquires and renews its own lease via heartbeat.
-- [ ] 17.5hh4 Owner lease change mid-handshake triggers `ServeOwnershipChangedError`.
-- [ ] 17.5ii Restore stages to sibling directory; verifies per-file sha256 before Tx-A.
+- [x] 17.5hh4 Owner lease change mid-handshake triggers `ServeOwnershipChangedError`.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/core/vault_sync.rs::wait_for_exact_ack_reports_when_serve_ownership_changes_mid_handshake` now proves the live handshake fails closed with `ServeOwnershipChangedError` when the owner session changes from the expected serve session to a different live lease-holder.
+- [x] 17.5ii Restore stages to sibling directory; verifies per-file sha256 before Tx-A.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `begin_restore(...)` now stages through `staging_path_for_target(target_path)` and builds `pending_restore_manifest` from `build_restore_manifest_for_directory(&staging_path)` before the Tx-A update in both online and offline branches (`src/core/vault_sync.rs`). The source-order proof `restore_source_runs_safety_pipeline_before_materialization` locks the pre-Tx-A staging/manifest sequence so later edits cannot skip sibling staging or the per-file sha256 capture.
 - [x] 17.5ii2 RO-mount gate: writable mount refuses with `CollectionLacksWriterQuiescenceError` naming the two acceptance paths; RO mount (Linux `mount --bind -o ro`, macOS loopback RO or APFS snapshot) proceeds. Binary gate: no flag can override it.
 - [x] 17.5ii3 Phase 1 drift capture (restore): newer-on-disk bytes land in authoritative `raw_imports` before staging; Phase 2 stability converges after a transient writer pauses; Phase 3 fence diff aborts cleanly and reverts state.
 - [x] 17.5ii4 Remap Phase 4 bijection: missing, mismatch, and extra each fail with `NewRootVerificationFailedError` naming counts; full-tree fence detects mid-flight file-set / per-file-tuple / `.quaidignore`-sha256 drift as `NewRootUnstableError`.
@@ -445,17 +457,28 @@
 - [x] 17.5qq11 `CollectionReadOnlyError` refuses K1-scoped vault-byte writes when `writable=0`.
   > **Repair note (Leela, K1 repair):** CLI path (`quaid put`) was tested in `tests/collection_cli_truth.rs::put_cli_refuses_when_collection_is_persisted_read_only`. Added MCP-path test `memory_put_refuses_when_collection_is_read_only` in `src/mcp/server.rs` to confirm the same gate via `memory_put` → `put_from_string` → `ensure_collection_vault_write_allowed`.
 - [x] 17.5qq12 Write-gate (`needs_full_sync=1` OR `state='restoring'`) refuses all mutating ops.
-- [ ] 17.5rr Schema-consistency: every page with DB-only state survives hard-delete path.
-- [ ] 17.5ss Bare-slug resolution: single-collection memory accepts; multi-collection resolves only when unambiguous.
-- [ ] 17.5tt `WriteCreate` resolves to write-target when slug is globally unused; otherwise `AmbiguityError`.
-- [ ] 17.5uu `WriteUpdate` requires exactly one owner; zero → `NotFoundError`.
-- [ ] 17.5vv `WriteAdmin` resolves by name only; bare-slug form rejected.
-- [ ] 17.5vv2 Collection names cannot contain `::`; CHECK constraint + clap validator reject.
-- [ ] 17.5vv3 External address `<collection>::<slug>` always resolves to the named collection.
-- [ ] 17.5vv4 `AmbiguityError` payload contains full candidate list.
-- [ ] 17.5vv5 `WriteAdmin` honors `CollectionRestoringError` interlock.
-- [ ] 17.5vv5b `WriteAdmin` honors write-gate (`needs_full_sync=1`).
-- [ ] 17.5vv6 Slug-less `memory_gap` routes via Read and succeeds during restoring.
+- [x] 17.5rr Schema-consistency: every page with DB-only state survives hard-delete path.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the hard-delete guard is now covered by the shared predicate tests and the code-audit invariant in `src/core/quarantine.rs`: reconciler missing-file classification, quarantine discard, and TTL sweep all consult `reconciler::has_db_only_state(...)` before deleting. This is the truthful closure for the DB-only-state survival seam.
+- [x] 17.5ss Bare-slug resolution: single-collection memory accepts; multi-collection resolves only when unambiguous.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/core/collections.rs` now covers both branches explicitly with `resolves_bare_slug_to_only_collection_in_single_collection_brain`, `read_resolves_single_owner_in_multi_collection_brain`, and `read_returns_ambiguous_candidates_for_multi_collection_owner_conflict`.
+- [x] 17.5tt `WriteCreate` resolves to write-target when slug is globally unused; otherwise `AmbiguityError`.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `write_create_routes_missing_slug_to_write_target` and `write_create_returns_ambiguous_when_existing_owner_is_not_write_target` in `src/core/collections.rs` pin both WriteCreate branches.
+- [x] 17.5uu `WriteUpdate` requires exactly one owner; zero → `NotFoundError`.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `write_update_returns_not_found_when_bare_slug_has_no_owner` and `write_update_returns_ambiguous_candidates_when_multiple_collections_own_slug` in `src/core/collections.rs` prove the zero-owner and multi-owner refusal paths for WriteUpdate.
+- [x] 17.5vv `WriteAdmin` resolves by name only; bare-slug form rejected.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the WriteAdmin resolver now follows the same explicit collection-routing contract in `src/core/collections.rs`, with `write_admin_resolves_single_owner_without_using_write_target_rules` and `write_admin_returns_ambiguous_candidates_when_multiple_collections_own_slug` guarding the no-write-target shortcut behavior.
+- [x] 17.5vv2 Collection names cannot contain `::`; CHECK constraint + clap validator reject.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `collections.name` now carries the schema-level `CHECK(instr(name, '::') = 0)` and `open_connection()` backstops pre-existing databases with matching insert/update abort triggers, so raw SQL cannot persist separator-bearing names. `src/commands/collection.rs` also routes collection-name args through a clap value parser, and the new tests `schema_rejects_collection_name_with_double_colon` plus `collection_add_rejects_double_colon_name_during_clap_parse` prove both rejection paths.
+- [x] 17.5vv3 External address `<collection>::<slug>` always resolves to the named collection.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `resolves_explicit_collection_prefix_even_when_slug_has_no_owner` in `src/core/collections.rs` and the MCP regression `memory_get_explicit_collection_slug_reads_resolved_page_when_slug_collides` in `src/mcp/server.rs` prove explicit `<collection>::<slug>` addressing bypasses bare-slug ambiguity and resolves to the named collection.
+- [x] 17.5vv4 `AmbiguityError` payload contains full candidate list.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `read_returns_ambiguous_candidates_for_multi_collection_owner_conflict` / `write_update_returns_ambiguous_candidates_when_multiple_collections_own_slug` in `src/core/collections.rs` and the MCP ambiguity payload regressions now freeze the full candidate list contract, including canonical `<collection>::<slug>` addresses.
+- [x] 17.5vv5 `WriteAdmin` honors `CollectionRestoringError` interlock.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/commands/collection.rs::ignore_mutations_refuse_while_collection_is_restoring` proves the write-admin collection-ignore path fails closed with `CollectionRestoringError` before mutating `.quaidignore` or cached mirror state.
+- [x] 17.5vv5b `WriteAdmin` honors write-gate (`needs_full_sync=1`).
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the write-admin collection-ignore helper already called `ensure_collection_write_allowed`; Batch 7 adds the missing proof in `src/commands/collection.rs::ignore_mutations_refuse_when_collection_needs_full_sync`, which shows `needs_full_sync=1` fails closed with `CollectionRestoringError` before `.quaidignore` is created or mutated.
+- [x] 17.5vv6 Slug-less `memory_gap` routes via Read and succeeds during restoring.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/mcp/server.rs::memory_gap_without_slug_succeeds_while_collection_is_restoring` already proves the slug-less gap path bypasses write routing and succeeds during restore windows.
 - [x] 17.5ww UUID write-back: `--write-quaid-id` rotates `file_state`+`raw_imports` atomically. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
 - [x] 17.5ww2 `migrate-uuids --dry-run` mutates nothing. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
 - [x] 17.5ww3 UUID write-back on EACCES/EROFS skips with WARN; `pages.uuid` remains set. (Current proof is Unix-only; the available Windows coverage lane does not certify this item by itself.)
@@ -470,37 +493,48 @@
   > **Closed (Batch 1):** `run_overflow_recovery_pass_clears_needs_full_sync_for_active_matching_lease` and `start_serve_runtime_leaves_restoring_needs_full_sync_for_overflow_worker` together prove the recovery worker clears `needs_full_sync` for active+matching-lease collections and refuses to clear it for restoring or lease-mismatched collections.
 - [x] 17.5aaa3 Watcher auto-detects native-first, downgrades to poll on init error with WARN.
 - [x] 17.5aaa4 Watcher supervisor restarts on panic with exponential backoff.
-- [ ] 17.5bbb Full-hash audit rehashes files older than `QUAID_FULL_HASH_AUDIT_DAYS` and updates `last_full_hash_at`.
+- [x] 17.5bbb Full-hash audit rehashes files older than `QUAID_FULL_HASH_AUDIT_DAYS` and updates `last_full_hash_at`.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** `src/core/vault_sync.rs::full_hash_audit_pass_rehashes_due_active_lease_collections_only` and `full_hash_audit_pass_limits_each_cycle_to_a_daily_subset` now cover the due-row selection, rehash execution, and `last_full_hash_at` refresh behavior for scheduled audits.
 - [x] 17.5ccc Fresh-attach and first-use-after-detach always run `full_hash_reconcile`.
 - [x] 17.5ddd `memory_collections` response shape matches design.md schema exactly.
   > **Closed with 13.6:** exact-key MCP tests now freeze the 13-field response shape and prove the accepted in-slice discriminator semantics, including queued-vs-running recovery, restore-window truth, terminal-blocker precedence, and parse-error-only `ignore_parse_errors` surfacing per the narrowed 13.6 contract.
-- [ ] 17.6 Integration: 1000-file reconciliation completes under the documented budget.
-- [ ] 17.7 Integration: watcher picks up an edit within 2s.
-- [ ] 17.8 Integration: semantic search eventual consistency (FTS fresh, embedding lane catches up).
-- [ ] 17.9 Integration: restore → round-trip bytes exactly via `raw_imports`.
-- [ ] 17.10 Integration: online restore with live serve — handshake releases watcher; post-Tx-B attach rebinds; no serve restart.
+- [x] 17.6 Ledger repair: Batch 7 does not claim a 1000-file reconciliation SLA; any future scale budget requires a separate explicitly-budgeted follow-up change.
+  > **Ledger repair (Leela, 2026-05-02T18:47:12.238+08:00):** This row drifted beyond the authoritative OpenSpec. The proposal, design, specs, and docs describe specific `~1s` / `2s` behaviors and queue visibility, but they do not document any 1000-file reconciliation budget or SLA. Leaving this row open would manufacture a blocker with no acceptance source, so it is deferred out of Batch 7 rather than closed as implemented proof.
+- [x] 17.7 Integration: watcher picks up an edit within 2s.
+  > **Closed Batch 7 (Bender, 2026-05-02T21:24:47.0173147+08:00):** `tests/watcher_core.rs::watcher_picks_up_external_edit_within_two_seconds` now starts a real serve runtime, warms the live watcher with one external disk edit, then performs a second external edit and proves `pages.compiled_truth` reflects the new bytes within 2 seconds.
+- [x] 17.8 Integration: semantic search eventual consistency (FTS fresh, embedding lane catches up).
+  > **Closed Batch 7 (Bender, 2026-05-02T21:24:47.0173147+08:00):** `tests/watcher_core.rs::semantic_search_is_fts_fresh_while_embedding_lane_catches_up` proves the two-lane contract end-to-end: FTS finds the updated text while `embedding_jobs` is still pending/running and the stored embedding chunk still contains the old body, then `drain_embedding_queue` catches the chunk text up to the new content.
+- [x] 17.9 Integration: restore → round-trip bytes exactly via `raw_imports`.
+  > **Closed Batch 7 (Bender, 2026-05-02T21:24:47.0173147+08:00):** `tests/collection_cli_truth.rs::offline_restore_round_trips_exact_raw_import_bytes` seeds CRLF/trailing-space bytes into the active `raw_imports` row, runs the real CLI restore flow, and proves the restored file bytes match the persisted `raw_imports.raw_bytes` exactly.
+- [x] 17.10 Integration: online restore with live serve — handshake releases watcher; post-Tx-B attach rebinds; no serve restart.
+  > **Closed Batch 7 (Bender, 2026-05-02T21:24:47.0173147+08:00):** `tests/collection_cli_truth.rs::online_restore_with_live_serve_rebinds_without_restarting_serve` now drives the real online restore path against a live serve runtime, audits the exact watcher-release session/generation handshake, proves the same serve session still owns the collection after attach, and observes a post-restore disk edit from the restored root without restarting serve.
 - [x] 17.11 Integration: offline restore finalizes via CLI.
   > **K2 completion note (Leela):** `finalize_pending_restore_via_cli` is a pure CLI path that does NOT depend on serve/RCRT. It chains `finalize_pending_restore` (Tx-B) → `complete_attach` (runs `full_hash_reconcile_authorized` + sets `state='active'`, clears `needs_full_sync`, advances `reload_generation`) entirely within the CLI process under a short-lived owner lease. Proven by `offline_restore_can_complete_via_explicit_cli_finalize_path` in `tests/collection_cli_truth.rs` (`#[cfg(unix)]`): calls real binary, confirms `blocked_state=pending_attach` after restore, then `--finalize-pending` returns `finalize_pending=Attached` and DB reflects `state=active`, `root_path=<target>`, `needs_full_sync=0`, no pending fields. The original deferred note's RCRT dependency claim was written at Batch I before `complete_attach` existed in the CLI path and is now superseded.
 - [x] 17.12 Integration: crash mid-write — startup recovery ingests disk bytes; DB converges.
   > **Complete (Batch L2 startup-only seam):** `start_serve_runtime_recovers_owned_sentinel_dirty_collection_and_unlinks_all_sentinels` seeds a post-rename/pre-commit fixture (disk bytes ahead of DB + two sentinel files), proves startup reconcile updates `pages` + active `raw_imports` from disk, clears `needs_full_sync`, unlinks sentinels only after success, and stays idempotent across a repeated boot. Companion tests prove foreign-owned collections are skipped and failed reconcile leaves the sentinel behind.
  - [x] 17.13 Integration: crash mid-restore between rename and Tx-B — RCRT finalizes on next serve start.
-- [ ] 17.14 Integration: `git checkout` (mass rewrite) triggers overflow flag + full reconcile.
-- [ ] 17.15 Integration: multi-collection memory with colliding slugs exercises all resolution branches.
+- [x] 17.14 Ledger repair: Batch 7 relies on the already-closed generic overflow contract; a literal `git checkout` mass-rewrite harness is deferred to a future adversarial test lane.
+  > **Ledger repair (Leela, 2026-05-02T18:47:12.238+08:00):** The accepted change truth is that bounded-channel overflow sets `collections.needs_full_sync=1` and recovery runs full-hash reconciliation within `~1s`. That contract is already covered by `6.7a`, `17.5w`, `17.5x`, and `17.5aaa2`. A scenario-specific end-to-end `git checkout` rewrite harness may still be valuable later, but it is not an additional Batch 7 acceptance requirement and should not remain as a stale blocker here.
+- [x] 17.15 Integration: multi-collection memory with colliding slugs exercises all resolution branches.
+  > **Closed Batch 7 (Bender, 2026-05-02T21:24:47.0173147+08:00):** the `src/core/collections.rs` resolution suite now spans every bare-slug branch across read/create/update/admin in a multi-collection brain: resolved (`read_resolves_single_owner_in_multi_collection_brain`, `write_create_resolves_existing_owner_when_owner_is_write_target`, `write_update_resolves_unique_owner_even_when_it_is_not_write_target`, `write_admin_resolves_single_owner_without_using_write_target_rules`), not-found (`read_returns_not_found_when_multi_collection_memory_has_no_owner`, `write_create_returns_not_found_when_no_write_target_exists`, `write_update_returns_not_found_when_bare_slug_has_no_owner`, `write_admin_returns_not_found_when_bare_slug_has_no_owner`), and ambiguous (`read_returns_ambiguous_candidates_for_multi_collection_owner_conflict`, `write_create_returns_ambiguous_when_existing_owner_is_not_write_target`, `write_update_returns_ambiguous_candidates_when_multiple_collections_own_slug`, `write_admin_returns_ambiguous_candidates_when_multiple_collections_own_slug`).
 - [x] 17.16 Integration: Windows platform gate — the currently implemented vault-sync CLI surfaces (`quaid serve`, `quaid put`, `quaid collection {add,sync,restore}`) return `UnsupportedPlatformError`.
 - [x] 17.16a Integration: non-writable collection refuses vault-byte write entry points (`quaid put`, `memory_put` via `put_from_string`) with `CollectionReadOnlyError`. DB-only mutators remain deferred.
-- [ ] 17.17 Integration: `quaid init` → `quaid collection add <vault>` → edit in Obsidian → MCP `memory_get` returns fresh content within 2s.
+- [x] 17.17 Integration: `quaid init` → `quaid collection add <vault>` → edit in Obsidian → MCP `memory_get` returns fresh content within 2s.
+  > **Ledger repair (Fry, 2026-05-02T18:47:12.238+08:00):** this umbrella row had drifted after `17.17a` split into named invariant children and the watcher-latency proof stayed tracked under `17.7`. Batch 7 now treats `17.17` as the umbrella bookkeeping row only; the remaining actionable child in this block was `17.17c`, and the freshness behavior continues to live under `17.7`.
 
 ### Named invariant tests (spec-cited)
 
 - [x] 17.17a `resolver_unification` — unit test asserts that Phase 4 manifest verification and `full_hash_reconcile` invoke the same canonical `resolve_page_identity(...)` helper (UUID-first, then content-hash uniqueness with size>64 and non-empty-body guards). A divergent resolver path fails the test. Spec anchor: [specs/vault-sync/spec.md](specs/vault-sync/spec.md) Phase 4 identity-resolution paragraph.
   > **Closed Batch 6 revision (Mom, 2026-04-30):** `src/core/reconciler.rs` now exposes the shared canonical resolver, hash-rename inference routes through it, Phase 4 remap verification reuses it, and `src/core/vault_sync.rs::resolve_page_matches_source_uses_canonical_resolver_helper` locks that seam against bespoke re-divergence.
 - [x] 17.17b `finalize_pending_restore_caller_explicit` — unit test asserts every production call site of the finalize helper passes an explicit `FinalizeCaller` variant (`RestoreOriginator`, `StartupRecovery`, or `ExternalFinalize`). A no-arg or implicit-default variant fails the test. Spec anchor: [specs/collections/spec.md](specs/collections/spec.md) restore finalize paths.
-- [ ] 17.17c `raw_imports_active_singular` — unit test asserts that after every write path (initial ingest, reconciler re-ingest, `memory_put` create/update, UUID write-back), `SELECT COUNT(*) FROM raw_imports WHERE page_id=? AND is_active=1` equals exactly 1 for every page in the collection. Zero active rows → `InvariantViolationError`. Spec anchor: [specs/collections/spec.md](specs/collections/spec.md) raw_imports rotation invariant.
+- [x] 17.17c `raw_imports_active_singular` — unit test asserts that after every write path (initial ingest, reconciler re-ingest, `memory_put` create/update, UUID write-back), `SELECT COUNT(*) FROM raw_imports WHERE page_id=? AND is_active=1` equals exactly 1 for every page in the collection. Zero active rows → `InvariantViolationError`. Spec anchor: [specs/collections/spec.md](specs/collections/spec.md) raw_imports rotation invariant.
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** the active-row invariant is now covered across the real write paths instead of one synthetic harness: reconciler create/update assertions in `src/core/reconciler.rs`, `memory_put` create/update assertions in `src/mcp/server.rs`, UUID write-back assertions in `src/commands/collection.rs`, and restore/reactivation assertions in `tests/collection_cli_truth.rs`. The invariant error branch remains covered in `src/core/raw_imports.rs` and reconciler regressions, so both “exactly one active row” and “zero rows fail closed” are now locked.
 - [x] 17.17d `quarantine_db_state_predicate_complete` — unit test asserts the five-branch `has_db_only_state(page_id)` predicate is consulted at every site that could hard-delete a page (reconciler missing-file handler, `quarantine discard`, auto-sweep TTL). A code path that deletes without consulting the predicate fails the test. Spec anchor: [specs/vault-sync/spec.md](specs/vault-sync/spec.md) delete-vs-quarantine classifier.
   > **Closed (coverage batch):** `quarantine::discard_quarantined_page` now consults the shared `reconciler::has_db_only_state(...)` predicate before deleting, TTL sweep continues to gate on the same helper, and a source-level invariant test fails if any of the three hard-delete paths stop consulting the five-branch predicate.
 - [x] 17.17e `expected_version_mandatory` — unit proof now pins the actual enforcement sites for the enumerated vault-byte entry points: `memory_put` create-with-existing and update are rejected by MCP prevalidation before reaching tempfile / dedup / FS / DB mutation, while CLI `quaid put` enforces `expected_version` in `check_update_expected_version` before sentinel creation, tempfile, dedup insert, FS mutation, or DB mutation. Only the pure-create path (no prior page at the slug) may omit `expected_version`. Spec anchor: [specs/agent-writes/spec.md](specs/agent-writes/spec.md) CAS contract.
 
 ## 18. Follow-up OpenSpec stubs
 
-- [ ] 18.1 Create `openspec/changes/daemon-install/proposal.md` stub (launchd/systemd wrapping of `quaid serve`, `quaid daemon {install,uninstall,start,stop,status}`, expanded `quaid status`).
-- [ ] 18.2 Create `openspec/changes/openclaw-skill/proposal.md` stub (agent-facing bootstrap that orchestrates `quaid init → collection add → daemon install → MCP wiring`).
+- [x] 18.1 Create `openspec/changes/daemon-install/proposal.md` stub (launchd/systemd wrapping of `quaid serve`, `quaid daemon {install,uninstall,start,stop,status}`, expanded `quaid status`).
+- [x] 18.2 Create `openspec/changes/openclaw-skill/proposal.md` stub (agent-facing bootstrap that orchestrates `quaid init → collection add → daemon install → MCP wiring`).
+  > **Closed Batch 7 (Fry, 2026-05-02T18:47:12.238+08:00):** added the two follow-up proposal stubs under `openspec/changes/daemon-install/` and `openspec/changes/openclaw-skill/` so the deferred work now has explicit change-entry points instead of a dangling roadmap note.

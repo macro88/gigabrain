@@ -1,7 +1,6 @@
 // Reconciler: filesystem walk → stat-diff → ingest/quarantine/delete.
 //
-// This module WILL replace `import_dir()` from `migrate.rs` once tasks 5.2–5.5 land.
-// `migrate::import_dir()` remains the live ingest path until then.
+// This module owns collection-backed vault reconciliation and re-ingest.
 //
 // Planned responsibilities:
 // - Cold-start reconciliation on `quaid serve` startup
@@ -2628,12 +2627,6 @@ fn apply_reingest(
         &raw_bytes,
     )?;
     raw_imports::enqueue_embedding_job(conn, page_id)?;
-    record_reconcile_ingest(
-        conn,
-        &parsed.sha256,
-        &absolute_path.to_string_lossy(),
-        &parsed.slug,
-    )?;
 
     Ok(ApplyReingestOutcome { created })
 }
@@ -2725,24 +2718,6 @@ fn parse_vault_file(
         room,
         sha256: sha256_hex(raw_bytes),
     })
-}
-
-fn record_reconcile_ingest(
-    conn: &Connection,
-    hash: &str,
-    path: &str,
-    slug: &str,
-) -> Result<(), ReconcileError> {
-    conn.execute(
-        "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated)
-         VALUES (?1, 'file', ?2, json_array(?3))
-         ON CONFLICT(ingest_key) DO UPDATE SET
-             source_ref = excluded.source_ref,
-             pages_updated = excluded.pages_updated,
-             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        rusqlite::params![hash, path, slug],
-    )?;
-    Ok(())
 }
 
 fn derive_slug_from_path(file_path: &Path, root_path: &Path) -> String {

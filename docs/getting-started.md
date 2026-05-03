@@ -84,24 +84,18 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `memory.db` file with the full v7 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
+This creates a new `memory.db` file with the full v8 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
 
-### 2. Import or attach an existing markdown directory
+### 2. Attach a markdown directory or ingest a single file
 
 ```bash
-quaid import /path/to/notes/ --db ~/.quaid/memory.db
+quaid collection add notes /path/to/notes/ --db ~/.quaid/memory.db
+quaid serve
 ```
 
-Quaid ingests each markdown file, parses frontmatter, splits compiled-truth from timeline, generates embeddings, and writes to the database. Ingest is idempotent — re-running the same file is safe.
+`quaid collection add` performs the initial vault scan, records the collection, and writes pages into the database. On Unix/macOS/Linux, `quaid serve` keeps that collection in sync continuously. For one-off files outside a collection, use `quaid ingest /path/to/file.md`.
 
-> **`v0.9.6` note:** Use collections for ongoing vault sync. The old workflow was `quaid import <path>`. The new workflow is `quaid collection add <name> <path>` and then `quaid serve`, which starts the live watcher automatically on macOS/Linux.
->
-> ```bash
-> quaid collection add notes /path/to/notes
-> quaid serve
-> ```
->
-> Use `quaid import` for one-shot bulk ingest. Use collections when you want Quaid to stay in sync with a markdown or Obsidian vault. On Unix, Batch 3 lets you persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Batch 5 additionally upgrades same-root single-file `quaid put` so the CLI authenticates the live `quaid serve` owner and proxies the write instead of refusing; bulk rewrite flows still stay offline-only. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
+> On Unix, you can persist missing `quaid_id` frontmatter during attach (`quaid collection add <name> <path> --write-quaid-id`) or backfill it later with `quaid collection migrate-uuids <name> [--dry-run]`. Batch 5 additionally upgrades same-root single-file `quaid put` so the CLI authenticates the live `quaid serve` owner and proxies the write instead of refusing. For an OpenClaw setup, see [openclaw-harness.md](openclaw-harness.md).
 
 ### 3. Search
 
@@ -228,7 +222,7 @@ The `original` type is for your own thinking — distinct from compiled external
 
 ### Page types and PARA folder structure
 
-When you run `quaid import`, page types are resolved in three tiers:
+When Quaid ingests markdown (via `quaid ingest` or collection sync), page types are resolved in three tiers:
 
 1. **Frontmatter `type:` field** — if your markdown file includes `type: project` (or any non-blank type) in the YAML frontmatter, that value is used. Frontmatter always wins. Blank (`type: `) or null (`type: null`) values are treated as absent and fall through to tier 2.
 2. **Top-level folder inference** — if no usable `type:` field is present, Quaid infers the type from the first folder in the relative path. This supports the PARA method and common Obsidian vault layouts:
@@ -253,13 +247,27 @@ To override inference, add `type: <your_type>` to the file's YAML frontmatter.
 
 ---
 
-## Environment variable
+## Environment variables
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `QUAID_DB` | `~/.quaid/memory.db` | Path to the active memory database |
+| `QUAID_MODEL` | `small` | Runtime embedding model alias/ID for the `online` build |
+| `QUAID_CHANNEL` | `airgapped` | Shell installer channel; set to `online` for first-use downloads |
 | `QUAID_NO_PROFILE` | `0` | Set to `1` to skip shell profile writes during install |
+| `QUAID_WATCH_DEBOUNCE_MS` | `1500` | Debounce window for watcher-backed collection sync |
+| `QUAID_FULL_HASH_AUDIT_DAYS` | `7` | Interval for the background full-hash audit |
+| `QUAID_QUARANTINE_TTL_DAYS` | `30` | Auto-discard TTL for quarantined pages with no DB-only state |
+| `QUAID_RAW_IMPORTS_KEEP` | `10` | Max inactive `raw_imports` rows retained per page |
+| `QUAID_RAW_IMPORTS_TTL_DAYS` | `90` | Age limit for inactive `raw_imports` rows |
+| `QUAID_RAW_IMPORTS_KEEP_ALL` | unset | Set to `1` to disable inactive `raw_imports` GC |
 | `QUAID_EMBEDDING_CONCURRENCY` | auto (`min(available CPUs, 4)`) | Override how many embedding jobs `quaid serve` drains at once |
+| `QUAID_RENAME_MIN_BYTES` | `64` | Minimum file size for content-hash rename inference |
+| `QUAID_RELOAD_HANDSHAKE_TIMEOUT_SECS` | `30` | Timeout for online restore/remap reload handshakes |
+| `QUAID_DEFERRED_RETRY_SECS` | `30` | Retry window for recovery after a serve supervisor exits |
+| `QUAID_MANIFEST_INCOMPLETE_ESCALATION_SECS` | `1800` | Escalation window for incomplete restore manifests |
+| `QUAID_IGNORE_AUTO_CLEAR_ON_ABSENCE` | unset | Set to `1` to clear cached ignore patterns when `.quaidignore` is absent |
+| `QUAID_RESTORE_STABILITY_MAX_ITERS` | `5` | Max restore stability retries before refusing |
 
 ---
 
@@ -462,7 +470,13 @@ quaid put "work::people/alice" < page.md
 
 ### Quarantine
 
-Pages that are deleted or renamed while holding DB-only state (links, assertions, knowledge gaps, contradictions, or `raw_data`) are quarantined rather than hard-deleted.
+Pages that are deleted or renamed while holding DB-only state are quarantined rather than hard-deleted. The five DB-only-state categories are:
+
+1. programmatic links (`links.source_kind = 'programmatic'`)
+2. non-import assertions
+3. `raw_data`
+4. `contradictions`
+5. `knowledge_gaps`
 
 ```bash
 quaid collection quarantine list work
@@ -473,6 +487,13 @@ quaid collection quarantine discard work <page-slug>
 > Quarantine restore is available on Unix in the current release line. Windows still fails closed on that write surface, so the portable subset remains `list`, `export`, and `discard`.
 
 Auto-sweep TTL (`QUAID_QUARANTINE_TTL_DAYS`, default 30) silently discards clean quarantined pages only — pages with DB-only state are never auto-discarded.
+
+Typical resolution flow:
+
+1. `quaid collection quarantine list <name>` to inspect the queue.
+2. `quaid collection quarantine export <name> --out quarantine.json` before destructive cleanup.
+3. `quaid collection quarantine restore <name> <slug>` when you want the page back in the vault.
+4. `quaid collection quarantine discard <name> <slug>` only after export/review, or `--force` when you intentionally accept data loss.
 
 ---
 

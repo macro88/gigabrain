@@ -3,25 +3,13 @@ use std::path::Path;
 
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
-use sha2::{Digest, Sha256};
 
 use crate::core::{markdown, novelty, page_uuid, palace, raw_imports, vault_sync};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let file = Path::new(path);
     let raw_bytes = fs::read(file)?;
-    let hash = sha256_hex(&raw_bytes);
     let raw = String::from_utf8_lossy(&raw_bytes).into_owned();
-
-    vault_sync::ensure_all_collections_write_allowed(db)
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-
-    // Check ingest_log for existing ingestion (uses canonical ingest_log table from schema.sql)
-    if !force && is_already_ingested(db, &hash)? {
-        println!("Already ingested (SHA-256 match), use --force to re-ingest");
-        return Ok(());
-    }
-
     let (frontmatter, body) = markdown::parse_frontmatter(&raw);
     let (compiled_truth, timeline) = markdown::split_content(&body);
     let summary = markdown::extract_summary(&compiled_truth);
@@ -31,116 +19,169 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .unwrap_or_else(|| "unknown".to_string())
     });
 
-    // Novelty check: skip near-duplicate content unless --force
-    if !force {
-        if let Ok(existing_page) = crate::commands::get::get_page(db, &slug) {
-            match novelty::check_novelty(&compiled_truth, &existing_page, db) {
-                Ok(false) => {
-                    eprintln!("Skipping ingest: content not novel (slug: {slug})");
-                    return Ok(());
-                }
-                Ok(true) => {} // novel content, proceed
-                Err(e) => {
-                    eprintln!("Warning: novelty check failed ({e}), proceeding with ingest");
+    vault_sync::ensure_all_collections_write_allowed(db)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+
+    db.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+    let outcome = (|| -> Result<()> {
+        if !force && is_already_ingested(db, &raw_bytes)? {
+            refresh_source_mapping_for_duplicate(db, &slug, path, &raw_bytes)?;
+            println!("Already ingested (exact bytes match), use --force to re-ingest");
+            return Ok(());
+        }
+
+        // Novelty check: skip near-duplicate content unless --force
+        if !force {
+            if let Ok(existing_page) = crate::commands::get::get_page(db, &slug) {
+                match novelty::check_novelty(&compiled_truth, &existing_page, db) {
+                    Ok(false) => {
+                        eprintln!("Skipping ingest: content not novel (slug: {slug})");
+                        return Ok(());
+                    }
+                    Ok(true) => {} // novel content, proceed
+                    Err(e) => {
+                        eprintln!("Warning: novelty check failed ({e}), proceeding with ingest");
+                    }
                 }
             }
         }
-    }
 
-    let wing = frontmatter
-        .get("wing")
-        .cloned()
-        .unwrap_or_else(|| palace::derive_wing(&slug));
-    let room = palace::derive_room(&compiled_truth);
-    let title = frontmatter
-        .get("title")
-        .cloned()
-        .unwrap_or_else(|| slug.clone());
-    let page_type = frontmatter
-        .get("type")
-        .cloned()
-        .unwrap_or_else(|| "concept".to_string());
-    let existing_uuid: Option<String> = db
-        .query_row("SELECT uuid FROM pages WHERE slug = ?1", [&slug], |row| {
-            row.get(0)
-        })
+        let wing = frontmatter
+            .get("wing")
+            .cloned()
+            .unwrap_or_else(|| palace::derive_wing(&slug));
+        let room = palace::derive_room(&compiled_truth);
+        let title = frontmatter
+            .get("title")
+            .cloned()
+            .unwrap_or_else(|| slug.clone());
+        let page_type = frontmatter
+            .get("type")
+            .cloned()
+            .unwrap_or_else(|| "concept".to_string());
+        let existing_uuid: Option<String> = db
+            .query_row(
+                "SELECT uuid
+                 FROM pages
+                 WHERE collection_id = 1
+                   AND namespace = ''
+                   AND slug = ?1",
+                [&slug],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let page_uuid = page_uuid::resolve_page_uuid(&frontmatter, existing_uuid.as_deref())?;
+        let frontmatter_json = serde_json::to_string(&frontmatter)?;
+
+        db.execute(
+            "INSERT INTO pages \
+                 (slug, uuid, type, title, summary, compiled_truth, timeline, \
+                  frontmatter, wing, room, version) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1) \
+             ON CONFLICT(collection_id, namespace, slug) DO UPDATE SET \
+                 uuid = excluded.uuid, \
+                 type = excluded.type, \
+                 title = excluded.title, \
+                 summary = excluded.summary, \
+                 compiled_truth = excluded.compiled_truth, \
+                 timeline = excluded.timeline, \
+                 frontmatter = excluded.frontmatter, \
+                 wing = excluded.wing, \
+                 room = excluded.room, \
+                 version = pages.version + 1, \
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
+            rusqlite::params![
+                slug,
+                page_uuid,
+                page_type,
+                title,
+                summary,
+                compiled_truth,
+                timeline,
+                frontmatter_json,
+                wing,
+                room
+            ],
+        )?;
+        let page_id: i64 = db.query_row(
+            "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
+            [&slug],
+            |row| row.get(0),
+        )?;
+        raw_imports::rotate_active_raw_import(db, page_id, path, &raw_bytes)?;
+        println!("Ingested {slug}");
+
+        Ok(())
+    })();
+
+    match outcome {
+        Ok(()) => {
+            db.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = db.execute_batch("ROLLBACK;");
+            Err(err)
+        }
+    }
+}
+
+fn is_already_ingested(db: &Connection, raw_bytes: &[u8]) -> Result<bool> {
+    let content_hash = raw_imports::content_hash_hex(raw_bytes);
+    let exact_match: Option<i64> = db
+        .query_row(
+            "SELECT 1
+             FROM raw_imports
+             WHERE content_hash = ?1
+               AND raw_bytes = ?2
+             LIMIT 1",
+            rusqlite::params![content_hash, raw_bytes],
+            |row| row.get(0),
+        )
         .optional()?;
-    let page_uuid = page_uuid::resolve_page_uuid(&frontmatter, existing_uuid.as_deref())?;
-    let frontmatter_json = serde_json::to_string(&frontmatter)?;
-
-    let tx = db.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO pages \
-             (slug, uuid, type, title, summary, compiled_truth, timeline, \
-              frontmatter, wing, room, version) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1) \
-         ON CONFLICT(collection_id, namespace, slug) DO UPDATE SET \
-             uuid = excluded.uuid, \
-             type = excluded.type, \
-             title = excluded.title, \
-             summary = excluded.summary, \
-             compiled_truth = excluded.compiled_truth, \
-             timeline = excluded.timeline, \
-             frontmatter = excluded.frontmatter, \
-             wing = excluded.wing, \
-             room = excluded.room, \
-             version = pages.version + 1, \
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        rusqlite::params![
-            slug,
-            page_uuid,
-            page_type,
-            title,
-            summary,
-            compiled_truth,
-            timeline,
-            frontmatter_json,
-            wing,
-            room
-        ],
-    )?;
-    let page_id: i64 = tx.query_row(
-        "SELECT id FROM pages WHERE collection_id = 1 AND slug = ?1",
-        [&slug],
-        |row| row.get(0),
-    )?;
-    raw_imports::rotate_active_raw_import(&tx, page_id, path, &raw_bytes)?;
-    record_ingest(&tx, &hash, path, &slug)?;
-    tx.commit()?;
-    println!("Ingested {slug}");
-
-    Ok(())
-}
-
-fn is_already_ingested(db: &Connection, hash: &str) -> Result<bool> {
-    let count: i64 = db.query_row(
-        "SELECT COUNT(*) FROM ingest_log WHERE ingest_key = ?1",
-        [hash],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
-}
-
-fn record_ingest(db: &Connection, hash: &str, path: &str, slug: &str) -> Result<()> {
-    db.execute(
-        "INSERT INTO ingest_log (ingest_key, source_type, source_ref, pages_updated) \
-         VALUES (?1, 'file', ?2, json_array(?3)) \
-         ON CONFLICT(ingest_key) DO UPDATE SET \
-             source_ref = excluded.source_ref, \
-             pages_updated = excluded.pages_updated, \
-             completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')",
-        rusqlite::params![hash, path, slug],
-    )?;
-    Ok(())
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
+    if exact_match.is_some() {
+        return Ok(true);
     }
-    hex
+
+    let legacy_match: Option<i64> = db
+        .query_row(
+            "SELECT 1
+             FROM raw_imports
+             WHERE content_hash = ''
+               AND raw_bytes = ?1
+             LIMIT 1",
+            rusqlite::params![raw_bytes],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(legacy_match.is_some())
+}
+
+fn refresh_source_mapping_for_duplicate(
+    db: &Connection,
+    slug: &str,
+    path: &str,
+    raw_bytes: &[u8],
+) -> Result<()> {
+    let content_hash = raw_imports::content_hash_hex(raw_bytes);
+    db.execute(
+        "UPDATE raw_imports
+         SET file_path = ?1
+         WHERE id = (
+             SELECT ri.id
+             FROM raw_imports ri
+             JOIN pages p ON p.id = ri.page_id
+             WHERE p.collection_id = 1
+               AND p.slug = ?2
+               AND ri.is_active = 1
+               AND ri.raw_bytes = ?4
+               AND (ri.content_hash = ?3 OR ri.content_hash = '')
+             ORDER BY ri.created_at DESC, ri.id DESC
+             LIMIT 1
+         )",
+        rusqlite::params![path, slug, content_hash, raw_bytes],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -431,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn ingest_records_resolved_frontmatter_slug_in_pages_updated() {
+    fn ingest_records_resolved_frontmatter_slug_on_active_raw_import() {
         let conn = open_test_db();
         let dir = tempfile::TempDir::new().unwrap();
         let file_path = dir.path().join("2024-01-meeting.md");
@@ -443,26 +484,23 @@ mod tests {
 
         run(&conn, file_path.to_str().unwrap(), false).unwrap();
 
-        let pages_updated: String = conn
+        let stored_path: String = conn
             .query_row(
-                "SELECT pages_updated FROM ingest_log WHERE source_ref = ?1",
-                [file_path.to_str().unwrap()],
+                "SELECT ri.file_path
+                 FROM raw_imports ri
+                 JOIN pages p ON p.id = ri.page_id
+                 WHERE p.slug = 'people/alice' AND ri.is_active = 1",
+                [],
                 |row| row.get(0),
             )
-            .expect("ingest_log row should exist");
+            .expect("active raw_import row should exist");
 
         assert!(
-            pages_updated.contains("people/alice"),
-            "pages_updated should contain the resolved slug, got: {pages_updated}"
-        );
-        assert!(
-            !pages_updated.contains("2024-01-meeting"),
-            "pages_updated should not contain the filename stem, got: {pages_updated}"
+            stored_path.ends_with("2024-01-meeting.md"),
+            "active raw_import should retain the real source path, got: {stored_path}"
         );
     }
 
-    /// Force re-ingest of identical content from a NEW path must refresh the
-    /// ingest_log source_ref so that `lookup_source_path` returns the new path.
     #[test]
     fn force_reingest_from_new_path_refreshes_source_mapping() {
         let conn = open_test_db();
@@ -476,19 +514,18 @@ mod tests {
         .unwrap();
         run(&conn, path_a.to_str().unwrap(), false).unwrap();
 
-        // Verify initial source_ref.
         let initial_ref: String = conn
             .query_row(
-                "SELECT source_ref FROM ingest_log WHERE EXISTS ( \
-                     SELECT 1 FROM json_each(pages_updated) WHERE value = 'people/alice' \
-                 )",
+                "SELECT ri.file_path
+                 FROM raw_imports ri
+                 JOIN pages p ON p.id = ri.page_id
+                 WHERE p.slug = 'people/alice' AND ri.is_active = 1",
                 [],
                 |row| row.get(0),
             )
-            .expect("initial ingest_log row");
+            .expect("initial raw_import row");
         assert_eq!(initial_ref, path_a.to_str().unwrap());
 
-        // Force re-ingest same content from a different path.
         let path_b = dir.path().join("new-location.md");
         fs::write(
             &path_b,
@@ -497,20 +534,20 @@ mod tests {
         .unwrap();
         run(&conn, path_b.to_str().unwrap(), true).unwrap();
 
-        // source_ref must now point to path_b.
         let updated_ref: String = conn
             .query_row(
-                "SELECT source_ref FROM ingest_log WHERE EXISTS ( \
-                     SELECT 1 FROM json_each(pages_updated) WHERE value = 'people/alice' \
-                 )",
+                "SELECT ri.file_path
+                 FROM raw_imports ri
+                 JOIN pages p ON p.id = ri.page_id
+                 WHERE p.slug = 'people/alice' AND ri.is_active = 1",
                 [],
                 |row| row.get(0),
             )
-            .expect("updated ingest_log row");
+            .expect("updated raw_import row");
         assert_eq!(
             updated_ref,
             path_b.to_str().unwrap(),
-            "source_ref must update to the new path after force re-ingest"
+            "active raw_import file_path must update to the new path after force re-ingest"
         );
     }
 

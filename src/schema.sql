@@ -1,4 +1,4 @@
--- memory.db schema — Quaid v7
+-- memory.db schema — Quaid v8
 -- Embedded in binary via include_str!("schema.sql") in src/core/db.rs
 -- Standalone copy for reference and tooling.
 
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS quaid_config (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS collections (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                TEXT    NOT NULL UNIQUE,
+    name                TEXT    NOT NULL UNIQUE CHECK(instr(name, '::') = 0),
     root_path           TEXT    NOT NULL,
     state               TEXT    NOT NULL DEFAULT 'active' CHECK(state IN ('active', 'detached', 'restoring')),
     writable            INTEGER NOT NULL DEFAULT 1,
@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS raw_imports (
     page_id    INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
     import_id  TEXT    NOT NULL,
     is_active  INTEGER NOT NULL DEFAULT 1,
+    content_hash TEXT  NOT NULL DEFAULT '',
     raw_bytes  BLOB    NOT NULL,
     file_path  TEXT    NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -331,23 +332,6 @@ CREATE TABLE IF NOT EXISTS import_manifest (
     page_count  INTEGER NOT NULL,
     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-
--- ============================================================
--- ingest_log: per-file SHA-256 idempotency audit trail.
--- Kept for compatibility with the import/ingest/embed commands;
--- will be removed when the reconciler slice replaces quaid import.
--- ============================================================
-CREATE TABLE IF NOT EXISTS ingest_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    ingest_key   TEXT    NOT NULL UNIQUE,   -- SHA-256 of raw file bytes
-    source_type  TEXT    NOT NULL,          -- 'file' | 'stdin'
-    source_ref   TEXT    NOT NULL DEFAULT '',
-    pages_updated TEXT   NOT NULL DEFAULT '[]',
-    summary      TEXT    NOT NULL DEFAULT '',
-    completed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_ingest_log_key ON ingest_log(ingest_key);
 
 -- ============================================================
 -- file_state: stat-based change detection for vault sync
@@ -400,7 +384,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('version',               '7'),
+    ('version',               '8'),
     ('embedding_model',       'BAAI/bge-small-en-v1.5'),
     ('embedding_dimensions',  '384'),
     ('chunk_strategy',        'section'),

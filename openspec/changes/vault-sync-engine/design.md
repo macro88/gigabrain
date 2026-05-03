@@ -1,10 +1,10 @@
 ## Context
 
-Quaid's current ingest model treats `quaid import <path>` as a one-shot command. It already does SHA-256 idempotency ([src/core/migrate.rs:78-99](src/core/migrate.rs#L78-L99)) and skips unchanged files by hash — so the per-file short-circuit exists. What's missing is the surrounding UX: users must remember to re-run import after editing, there's no collection model, and the `ingest_log` only tracks per-hash idempotency (not per-path stat metadata for fast change detection).
+Quaid's landed ingest model is collection-based. Vault-backed sync flows through `quaid collection add` / `quaid serve`, while `quaid ingest` remains the single-file entry point. Exact-byte duplicate short-circuiting now relies on `raw_imports.raw_bytes`, and active-source paths come from `raw_imports.file_path`.
 
 The viral positioning — "Quaid as THE memory for Claude Code / OpenClaw / Hermes" — requires a frictionless daily experience. QMD's advantage is architectural: a persistent SQLite index, hourly cron-driven refresh with hash-skip short-circuit, no daemon required for queries. We can beat it by adding live file watching to what `quaid serve` is already doing for MCP.
 
-Zero current users means no migration tax. We can reshape the schema and treat the vault as the single source of truth without worrying about preserving old external setups. The end-state removes `quaid import`, but the foundation slice keeps `quaid import` + `ingest_log` as temporary compatibility shims until the reconciler/watcher path is ready to replace them.
+Zero current users means no migration tax. We can reshape the schema and treat the vault as the single source of truth without worrying about preserving old external setups. That end-state is now landed: `quaid import` and `ingest_log` are removed, and the reconciler / watcher path is the only directory-ingest flow.
 
 ## Goals / Non-Goals
 
@@ -482,7 +482,7 @@ Planned final-state deletions (NOT part of the current foundation slice):
 
 
 
-**Decision:** the END-STATE of this change removes `quaid import` from the binary. Until tasks 15.x and 16.1–16.8 land together, the repository intentionally keeps `src/commands/import.rs`, `src/core/migrate.rs::import_dir()`, and the `ingest_log` table as temporary compatibility shims so schema v5 can land without deleting the only working ingest path. There is still no in-place v4-database upgrade, no "import-dir" transitional alias, and no v4→v5 migrator. **Implementation sequencing requirement:** the `quaid import` removal (code deletion in `src/commands/import.rs`, task 15.x) SHALL NOT land before tasks 16.1–16.8 complete — the removal and the caller updates ship together in the same change. A spec-consistency audit test (task 17.17) + a repo-wide grep gate in CI SHALL block merging any commit that removes `import.rs` while any of the listed callers still reference `quaid import` or `import_dir`. This keeps the design truthful about the current foundation slice while preserving the intended final state.
+**Decision (landed):** `quaid import` is removed from the binary. `src/commands/import.rs`, `src/core/migrate.rs::import_dir()`, and the `ingest_log` table are gone. The removal shipped in the same change as the user-facing docs / skills updates, preserving the intended sequencing requirement and leaving collections plus single-file ingest as the only supported ingest surfaces.
 
 **Why this is correct, not a regression:**
 

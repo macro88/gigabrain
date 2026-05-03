@@ -15,11 +15,11 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use quaid::commands::embed;
+use quaid::commands::ingest;
 use quaid::core::db;
-use quaid::core::migrate::import_dir;
 use quaid::core::search::hybrid_search;
 
 // ── Dataset paths ─────────────────────────────────────────────────────────────
@@ -152,8 +152,46 @@ fn mean_ndcg_at_10(results: &[(Vec<String>, HashMap<String, u32>)]) -> f64 {
 
 // ── Importer: BEIR corpus → quaid pages ─────────────────────────────────────
 
+fn collect_markdown_files(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "md") {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    files
+}
+
+fn page_count(conn: &rusqlite::Connection) -> usize {
+    conn.query_row("SELECT COUNT(*) FROM pages", [], |row| row.get::<_, i64>(0))
+        .unwrap() as usize
+}
+
+fn ingest_markdown_tree(conn: &rusqlite::Connection, root: &Path) -> anyhow::Result<usize> {
+    let mut imported = 0usize;
+    for file in collect_markdown_files(root) {
+        let before = page_count(conn);
+        ingest::run(conn, file.to_str().unwrap(), false)?;
+        let after = page_count(conn);
+        imported += after.saturating_sub(before);
+    }
+    Ok(imported)
+}
+
 /// Write BEIR documents as quaid markdown pages to a temp directory,
-/// then bulk-import with `import_dir`.
+/// then ingest them file-by-file through the public single-file ingest path.
 fn import_beir_corpus(
     conn: &rusqlite::Connection,
     docs: &[BeirDoc],
@@ -176,9 +214,9 @@ fn import_beir_corpus(
         fs::write(&path, &content)?;
     }
 
-    let stats = import_dir(conn, dir.path(), false)?;
+    let imported = ingest_markdown_tree(conn, dir.path())?;
     std::mem::forget(dir); // keep files alive during import
-    Ok(stats.imported)
+    Ok(imported)
 }
 
 fn sanitize_slug(id: &str) -> String {

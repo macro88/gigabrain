@@ -5,12 +5,18 @@ mod common_subprocess;
 use quaid::core::db;
 use quaid::core::markdown::{extract_summary, parse_frontmatter, split_content};
 use quaid::core::vault_sync;
+#[cfg(unix)]
+use rusqlite::OpenFlags;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::Digest;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::Duration;
 
 fn open_test_db(path: &Path) -> Connection {
     db::open(path.to_str().expect("utf-8 db path")).expect("open test db")
@@ -92,6 +98,25 @@ fn init_db(dir: &tempfile::TempDir) -> PathBuf {
     let db_path = test_db_path(dir, "test.db");
     drop(open_test_db(&db_path));
     db_path
+}
+
+#[cfg(unix)]
+fn wait_for_db_value<T>(
+    db_path: &Path,
+    timeout: Duration,
+    mut probe: impl FnMut(&Connection) -> Option<T>,
+) -> Option<T> {
+    let started = std::time::Instant::now();
+    while started.elapsed() <= timeout {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open read-only poll db");
+        if let Some(value) = probe(&conn) {
+            return Some(value);
+        }
+        drop(conn);
+        thread::sleep(Duration::from_millis(25));
+    }
+    None
 }
 
 fn insert_collection(conn: &Connection, name: &str, root_path: &Path) -> i64 {
@@ -214,11 +239,12 @@ fn insert_page_with_raw_import(
     .expect("insert page with uuid");
     let page_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO raw_imports (page_id, import_id, is_active, raw_bytes, file_path)
-         VALUES (?1, ?2, 1, ?3, ?4)",
+        "INSERT INTO raw_imports (page_id, import_id, is_active, content_hash, raw_bytes, file_path)
+         VALUES (?1, ?2, 1, ?3, ?4, ?5)",
         params![
             page_id,
             uuid::Uuid::now_v7().to_string(),
+            format!("{:x}", sha2::Sha256::digest(raw_bytes)),
             raw_bytes,
             relative_path
         ],
@@ -2775,4 +2801,244 @@ fn collection_add_write_quaid_id_refuses_same_root_live_owner_before_alias_attac
         )
         .unwrap();
     assert_eq!(alias_count, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn offline_restore_round_trips_exact_raw_import_bytes() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "offline-restore-byte-exact.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let target_root = dir.path().join("restored");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    let raw_bytes = b"---\r\ntitle: Byte Exact  \r\ntype: concept\r\nslug: notes/byte-exact\r\n---\r\nfirst line with trailing spaces   \r\n\r\n- bullet one\r\n- bullet two\r\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/byte-exact",
+        "11111111-1111-7111-8111-111111111111",
+        raw_bytes,
+        "notes/byte-exact.md",
+    );
+    std::fs::write(source_root.join("notes").join("byte-exact.md"), raw_bytes)
+        .expect("seed source note");
+    drop(conn);
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "restore",
+            "work",
+            target_root.to_str().expect("utf-8 target"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "offline restore should succeed for byte-exact proof: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["status"].as_str(), Some("ok"));
+    assert_eq!(parsed["byte_exact"].as_u64(), Some(1));
+
+    let conn = open_test_db(&db_path);
+    let stored_raw_bytes: Vec<u8> = conn
+        .query_row(
+            "SELECT ri.raw_bytes
+             FROM raw_imports ri
+             JOIN pages p ON p.id = ri.page_id
+             WHERE p.collection_id = ?1
+               AND p.slug = 'notes/byte-exact'
+               AND ri.is_active = 1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .expect("load active raw import");
+    assert_eq!(stored_raw_bytes, raw_bytes);
+    assert_eq!(
+        std::fs::read(target_root.join("notes").join("byte-exact.md"))
+            .expect("read restored bytes"),
+        raw_bytes,
+        "restore must materialize the exact active raw_import bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn online_restore_with_live_serve_rebinds_without_restarting_serve() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let db_path = test_db_path(&dir, "online-restore-live-serve.db");
+    let conn = open_test_db(&db_path);
+    let source_root = dir.path().join("source");
+    let target_root = dir.path().join("restored");
+    std::fs::create_dir_all(source_root.join("notes")).expect("create source root");
+    let collection_id = insert_collection(&conn, "work", &source_root);
+    conn.execute(
+        "CREATE TABLE watcher_release_audit (
+             collection_id INTEGER NOT NULL,
+             watcher_session_id TEXT NOT NULL,
+             reload_generation INTEGER NOT NULL
+         )",
+        [],
+    )
+    .expect("create watcher release audit");
+    conn.execute(
+        "CREATE TRIGGER watcher_release_audit_insert
+         AFTER UPDATE ON collections
+         WHEN OLD.watcher_released_at IS NULL AND NEW.watcher_released_at IS NOT NULL
+         BEGIN
+             INSERT INTO watcher_release_audit (collection_id, watcher_session_id, reload_generation)
+             VALUES (NEW.id, NEW.watcher_released_session_id, NEW.watcher_released_generation);
+         END",
+        [],
+    )
+    .expect("create watcher release audit trigger");
+    let raw_bytes =
+        b"---\nmemory_id: 33333333-3333-7333-8333-333333333333\ntitle: Online Restore\ntype: concept\n---\nrestored body before live attach\n";
+    insert_page_with_raw_import(
+        &conn,
+        collection_id,
+        "notes/online",
+        "33333333-3333-7333-8333-333333333333",
+        raw_bytes,
+        "notes/online.md",
+    );
+    std::fs::write(source_root.join("notes").join("online.md"), raw_bytes)
+        .expect("seed source note");
+    drop(conn);
+
+    let runtime =
+        vault_sync::start_serve_runtime(db_path.to_str().expect("utf-8 db path").to_owned())
+            .expect("start serve runtime");
+    thread::sleep(Duration::from_secs(1));
+
+    let output = run_quaid(
+        &db_path,
+        &[
+            "--json",
+            "collection",
+            "restore",
+            "work",
+            target_root.to_str().expect("utf-8 target"),
+            "--online",
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "online restore should succeed against the live serve session: {output:?}"
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["status"].as_str(), Some("ok"));
+    assert!(parsed["command_identity"].as_str().is_some());
+
+    type OnlineRestoreRow = (
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+        i64,
+    );
+    let final_row: OnlineRestoreRow =
+        wait_for_db_value(&db_path, Duration::from_secs(15), |verify| {
+            verify
+                .query_row(
+                    "SELECT c.state,
+                            c.root_path,
+                            c.needs_full_sync,
+                            c.pending_root_path,
+                            c.restore_command_id,
+                            (SELECT COUNT(*) FROM serve_sessions WHERE session_id = ?2 AND session_type = 'serve'),
+                            (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
+                     FROM collections c
+                     WHERE c.id = ?1",
+                    params![collection_id, runtime.session_id.as_str()],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                        ))
+                    },
+                )
+                .ok()
+                .and_then(|row: OnlineRestoreRow| {
+                    (row.0 == "active"
+                        && row.1 == target_root.display().to_string()
+                        && row.2 == 0
+                        && row.3.is_none()
+                        && row.4.is_none()
+                        && row.5 == 1
+                        && row.6 == 1)
+                        .then_some(row)
+                })
+        })
+        .expect("serve runtime never completed the online attach");
+    assert_eq!(final_row.0, "active");
+    assert_eq!(final_row.1, target_root.display().to_string());
+    assert_eq!(final_row.2, 0);
+    assert!(final_row.3.is_none());
+    assert!(final_row.4.is_none());
+    assert_eq!(final_row.5, 1);
+    assert_eq!(final_row.6, 1);
+
+    let conn = open_test_db(&db_path);
+    let release_audit: (i64, Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT COUNT(*), MIN(watcher_session_id), MIN(reload_generation)
+             FROM watcher_release_audit
+             WHERE collection_id = ?1",
+            [collection_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load watcher release audit");
+    assert_eq!(
+        release_audit.0, 1,
+        "handshake should release the watcher exactly once"
+    );
+    assert_eq!(
+        release_audit.1.as_deref(),
+        Some(runtime.session_id.as_str()),
+        "online restore must release the live serve watcher, not a new session"
+    );
+    assert!(release_audit.2.is_some());
+    drop(conn);
+
+    thread::sleep(Duration::from_secs(1));
+
+    std::fs::write(
+        target_root.join("notes").join("online.md"),
+        b"---\nmemory_id: 33333333-3333-7333-8333-333333333333\ntitle: Online Restore\ntype: concept\n---\nupdated after online restore\n",
+    )
+    .expect("write live edit into restored root");
+
+    thread::sleep(Duration::from_secs(3));
+
+    let conn = open_test_db(&db_path);
+    let rebind_row: (String, i64) = conn
+        .query_row(
+            "SELECT p.compiled_truth,
+                    (SELECT COUNT(*) FROM collection_owners WHERE collection_id = ?1 AND session_id = ?2)
+             FROM pages p
+             WHERE p.collection_id = ?1
+               AND p.slug = 'notes/online'",
+            params![collection_id, runtime.session_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load rebound page state");
+    assert!(rebind_row.0.contains("updated after online restore"));
+    assert_eq!(rebind_row.1, 1);
+    drop(conn);
+
+    drop(runtime);
 }

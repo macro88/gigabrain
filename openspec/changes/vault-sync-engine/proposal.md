@@ -1,10 +1,12 @@
 # Vault Sync Engine
 
-> **Pre-release software, zero users, no migration path required.** Quaid has not shipped a tagged public release; `v0.9.x` labels in the README are developer-preview build tags. There are zero external `memory.db` files. A v4→v5 migrator is out of scope. The end-state of this change removes `quaid import`, but the foundation slice keeps `quaid import` + `ingest_log` as temporary compatibility shims until the reconciler/watcher path replaces them.
+> **Pre-release software, zero users, no migration path required.** Quaid has not shipped a tagged public release; `v0.9.x` labels in the README are developer-preview build tags. There are zero external `memory.db` files. A v4→v5 migrator is out of scope. This change has now landed its end-state: `quaid import` and `ingest_log` are removed, and collection sync / single-file ingest are the supported ingest paths.
+>
+> **Status (Leela, 2026-05-02T18:47:12.238+08:00):** The change is complete on this branch, but release status remains deferred until the Batch 7 PR is reviewed, merged to `main`, and post-merge coverage is revalidated on the merged tip.
 
 ## Why
 
-Quaid currently requires users to explicitly run `quaid import <path>` to ingest markdown. There is no live sync between a vault and `memory.db` — edits made in Obsidian don't reach memory until the user remembers to re-import. That friction is why power users still reach for QMD even when Quaid's search quality is better.
+Quaid originally required users to explicitly run `quaid import <path>` to ingest markdown. There was no live sync between a vault and `memory.db` — edits made in Obsidian did not reach memory until the user remembered to re-import. That friction was why power users still reached for QMD even when Quaid's search quality was better.
 
 With zero current users, we can redesign the ingest model cleanly. The fix: make the vault the source of truth and memory a live index of it. `quaid serve` — already required for MCP — hosts a per-collection file watcher, reacts to filesystem events, and keeps `memory.db` in sync continuously.
 
@@ -33,7 +35,7 @@ This change also introduces **collections** — named groupings with their own r
 - **`.quaidignore` is authoritative; `collections.ignore_patterns` is a cached mirror.** On-disk file is truth; DB column is populated on every successful atomic parse. Sync is one-way (file → DB), transactional (all-or-nothing), mtime-free. CLI `ignore add|remove` writes the file; watcher refreshes the mirror.
 - **Live `.quaidignore` reload — atomic parse, last-known-good on failure.** Every non-comment line validated via `globset::Glob::new` BEFORE any effect. Fully-valid parse → refresh mirror + reconcile. Any failing line → mirror UNCHANGED, `ignore_parse_errors` recorded, no reconciliation. Absent file with no prior mirror = empty patterns (defaults only), WARN logged.
 - **Live-serve coordination for restore/remap (lease-based ack).** `serve_sessions` heartbeat table (5s refresh, 15s liveness). Restore/remap without `--online` refuses with `ServeOwnsCollectionError`. `--online` runs a lease-based polled handshake keyed on `(session_id, reload_generation)` — timestamp-only ack is insufficient. Root_fd lifetime is scoped to the collection session, not the serve process.
-- **End-state: `quaid import` removed.** Replaced by `quaid collection add` / `sync`, but the current foundation slice intentionally keeps `quaid import` and `ingest_log` as temporary compatibility shims until §15 lands.
+- **Shipped end-state:** `quaid import` is removed. `quaid collection add` / `sync` and single-file `quaid ingest` are the supported ingest surfaces.
 - **BREAKING:** v5 schema. See `design.md § Schema`. Existing `memory.db` files require re-init.
 
 ## Capabilities
@@ -50,7 +52,7 @@ This change also introduces **collections** — named groupings with their own r
 
 ## Impact
 
-- `src/schema.sql` — v5 foundation schema: new tables (`collections`, `file_state`, `embedding_jobs`, later `serve_sessions`/`collection_owners`), modified `pages`, and a temporary retained `ingest_log` compatibility shim until §15 removes it.
+- `src/schema.sql` — current schema: collection/vault-sync tables plus `raw_imports` retention; `ingest_log` is gone.
 - `src/core/` — new foundation module: `collections.rs`; later slices add `watcher.rs`, `reconciler.rs`, `embedding_worker.rs`, `dedup.rs`, `fs_safety.rs`. `migrate.rs` remains temporarily; `import_dir` is removed only when reconciler lands.
 - `src/commands/` — future: `collection.rs` (add/list/info/sync/remove/restore/quarantine/ignore). `import.rs` remains temporarily in the foundation slice and is removed only in §15 with the doc updates in §16.
 - `src/mcp/server.rs` — collection-aware slug parsing; new `memory_collections` tool.

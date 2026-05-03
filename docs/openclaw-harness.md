@@ -163,7 +163,7 @@ Live results: [benchmark.quaid.app](https://benchmark.quaid.app)
 ## Recommended operating model
 
 - Use `quaid collection add` for vault-backed knowledge sources
-- Use `quaid import` for one-shot bulk ingest only (not live vault sync)
+- Use `quaid ingest` for one-off markdown files outside a live collection
 - Let OpenClaw spawn `quaid serve` — keeps MCP and watcher in one process
 - Run `memory_query` first for agent reasoning; fall back to `memory_search` for exact recall
 - Use `memory_put` only for intentional durable page updates
@@ -182,6 +182,6 @@ Quick summary:
 # Initialize new database
 quaid init ~/.quaid/memory.db
 
-# Import
-quaid import ~/brain-backup
+# Re-ingest the exported markdown
+quaid collection add migrated ~/brain-backup
 ```

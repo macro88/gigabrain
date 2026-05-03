@@ -93,12 +93,6 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Import a markdown directory (infers page types from PARA folder structure)
-    Import {
-        path: String,
-        #[arg(long)]
-        validate_only: bool,
-    },
     /// Export memory to markdown directory
     Export {
         path: String,
@@ -370,10 +364,6 @@ async fn main() -> Result<()> {
             .await
         }
         Commands::Ingest { path, force } => commands::ingest::run(&db, &path, force),
-        Commands::Import {
-            path,
-            validate_only,
-        } => commands::import::run(&db, &path, validate_only),
         Commands::Export {
             path,
             raw,

@@ -16,6 +16,12 @@ use crate::core::ignore_patterns::{self, ParseResult};
 use crate::core::quarantine;
 use crate::core::vault_sync;
 
+fn parse_collection_name_arg(name: &str) -> Result<String, String> {
+    collections::validate_collection_name(name)
+        .map(|_| name.to_owned())
+        .map_err(|err| err.to_string())
+}
+
 #[derive(Subcommand, Debug)]
 pub enum CollectionAction {
     /// Attach a vault as a collection
@@ -23,6 +29,7 @@ pub enum CollectionAction {
     /// Persist quaid_id frontmatter for pages that still lack it
     #[command(name = "migrate-uuids")]
     MigrateUuids {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         dry_run: bool,
@@ -30,7 +37,19 @@ pub enum CollectionAction {
     /// List collections
     List,
     /// Show collection diagnostics
-    Info { name: String },
+    Info {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+    },
+    /// Detach a collection and optionally purge its indexed rows
+    Remove {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        #[arg(long)]
+        purge: bool,
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Manage .quaidignore patterns
     Ignore {
         #[command(subcommand)]
@@ -50,6 +69,7 @@ pub enum CollectionAction {
     /// Clear restore-integrity blocked state
     #[command(name = "restore-reset")]
     RestoreReset {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -57,6 +77,7 @@ pub enum CollectionAction {
     /// Clear reconcile-halted state after manual repair
     #[command(name = "reconcile-reset")]
     ReconcileReset {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -65,6 +86,7 @@ pub enum CollectionAction {
 
 #[derive(Args, Debug)]
 pub struct CollectionAddArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     pub path: PathBuf,
     #[arg(long, conflicts_with = "writable")]
@@ -79,6 +101,7 @@ pub struct CollectionAddArgs {
 
 #[derive(Args, Debug)]
 pub struct CollectionSyncArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     #[arg(long)]
     pub remap_root: Option<PathBuf>,
@@ -90,6 +113,7 @@ pub struct CollectionSyncArgs {
 
 #[derive(Args, Debug)]
 pub struct CollectionRestoreArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     pub target: PathBuf,
     #[arg(long)]
@@ -98,6 +122,7 @@ pub struct CollectionRestoreArgs {
 
 #[derive(Args, Debug)]
 pub struct CollectionAuditArgs {
+    #[arg(value_parser = parse_collection_name_arg)]
     pub name: String,
     #[arg(long = "raw-imports-gc")]
     pub raw_imports_gc: bool,
@@ -106,13 +131,25 @@ pub struct CollectionAuditArgs {
 #[derive(Subcommand, Debug)]
 pub enum CollectionIgnoreAction {
     /// Add a user-authored ignore pattern
-    Add { name: String, pattern: String },
+    Add {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        pattern: String,
+    },
     /// Remove a user-authored ignore pattern
-    Remove { name: String, pattern: String },
+    Remove {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+        pattern: String,
+    },
     /// List cached user-authored ignore patterns
-    List { name: String },
+    List {
+        #[arg(value_parser = parse_collection_name_arg)]
+        name: String,
+    },
     /// Explicitly clear the ignore file and cached mirror
     Clear {
+        #[arg(value_parser = parse_collection_name_arg)]
         name: String,
         #[arg(long)]
         confirm: bool,
@@ -218,6 +255,11 @@ pub fn run(db: &Connection, action: CollectionAction, json: bool) -> Result<()> 
         }
         CollectionAction::List => list(db, json),
         CollectionAction::Info { name } => info(db, &name, json),
+        CollectionAction::Remove {
+            name,
+            purge,
+            confirm,
+        } => remove(db, &name, purge, confirm, json),
         CollectionAction::Ignore { action } => ignore(db, action, json),
         CollectionAction::Quarantine { action } => quarantine_action(db, action, json),
         CollectionAction::Sync(args) => {
@@ -579,6 +621,69 @@ fn info(db: &Connection, name: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn remove(db: &Connection, name: &str, purge: bool, confirm: bool, json: bool) -> Result<()> {
+    let collection = load_collection_by_name(db, name)?;
+    if matches!(collection.state, collections::CollectionState::Restoring) {
+        return Err(anyhow!(vault_sync::VaultSyncError::CollectionRestoring {
+            collection_name: collection.name,
+            state: collection.state.as_str().to_owned(),
+            needs_full_sync: collection.needs_full_sync,
+        }
+        .to_string()));
+    }
+    if purge && !confirm {
+        bail!("collection remove --purge requires --confirm");
+    }
+
+    vault_sync::ensure_no_live_serve_owner_for_root_path(db, &collection.root_path)
+        .map_err(|err| anyhow!(err.to_string()))?;
+
+    let detached_pages: i64 = db.query_row(
+        "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
+        [collection.id],
+        |row| row.get(0),
+    )?;
+
+    let purged_pages = {
+        let tx = db.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM collection_owners WHERE collection_id = ?1",
+            [collection.id],
+        )?;
+        let purged_pages = if purge {
+            tx.execute(
+                "DELETE FROM pages WHERE collection_id = ?1",
+                [collection.id],
+            )? as i64
+        } else {
+            0
+        };
+        tx.execute(
+            "UPDATE collections
+             SET state = 'detached',
+                 active_lease_session_id = NULL,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             WHERE id = ?1",
+            [collection.id],
+        )?;
+        tx.commit()?;
+        purged_pages
+    };
+
+    render_success(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "command": "remove",
+            "collection": collection.name,
+            "state": "detached",
+            "purge": purge,
+            "detached_page_rows": detached_pages,
+            "purged_page_rows": purged_pages
+        }),
+    )
 }
 
 fn build_collection_info_output(
@@ -2393,7 +2498,6 @@ mod tests {
         assert_eq!(collection_page_count(&conn, "work"), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn ignore_mutations_refuse_while_collection_is_restoring() {
         let conn = open_test_db();
@@ -2405,19 +2509,34 @@ mod tests {
         )
         .unwrap();
 
-        let error = run(
-            &conn,
-            CollectionAction::Ignore {
-                action: CollectionIgnoreAction::Add {
-                    name: "work".to_owned(),
-                    pattern: "private/**".to_owned(),
-                },
-            },
-            true,
-        )
-        .unwrap_err();
+        let error = ignore_add(&conn, "work", "private/**", true).unwrap_err();
 
-        assert!(error.to_string().contains("CollectionRestoringError"));
+        let text = error.to_string();
+        assert!(
+            text.contains("CollectionRestoringError"),
+            "expected CollectionRestoringError, got: {text}"
+        );
+        assert!(!root.path().join(".quaidignore").exists());
+    }
+
+    #[test]
+    fn ignore_mutations_refuse_when_collection_needs_full_sync() {
+        let conn = open_test_db();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'active', needs_full_sync = 1 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = ignore_add(&conn, "work", "private/**", true).unwrap_err();
+
+        let text = error.to_string();
+        assert!(
+            text.contains("CollectionRestoringError"),
+            "expected CollectionRestoringError, got: {text}"
+        );
         assert!(!root.path().join(".quaidignore").exists());
     }
 
@@ -3201,6 +3320,127 @@ mod tests {
         let metrics = collection_metrics(&conn, collection_id).unwrap();
         assert_eq!(metrics.queue_depth, 2);
         assert_eq!(metrics.failing_jobs, 1);
+    }
+
+    #[test]
+    fn remove_without_purge_detaches_collection_and_keeps_pages() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/kept",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Kept\n---\nkept\n",
+            "notes/kept.md",
+        );
+
+        remove(&conn, "work", false, false, true).unwrap();
+
+        let (state, page_count): (String, i64) = conn
+            .query_row(
+                "SELECT state, (SELECT COUNT(*) FROM pages WHERE collection_id = ?1)
+                 FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "detached");
+        assert_eq!(page_count, 1);
+    }
+
+    #[test]
+    fn remove_with_purge_requires_confirm() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        insert_collection(&conn, "work", root.path());
+
+        let error = remove(&conn, "work", true, false, true).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("collection remove --purge requires --confirm"));
+    }
+
+    #[test]
+    fn remove_with_purge_deletes_pages_and_detaches_collection() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        let page_id = insert_page_with_raw_import(
+            &conn,
+            collection_id,
+            "notes/purged",
+            &Uuid::now_v7().to_string(),
+            b"---\ntitle: Purged\n---\npurged\n",
+            "notes/purged.md",
+        );
+
+        remove(&conn, "work", true, true, true).unwrap();
+
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pages WHERE collection_id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let raw_import_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM raw_imports WHERE page_id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "detached");
+        assert_eq!(page_count, 0);
+        assert_eq!(raw_import_count, 0);
+    }
+
+    #[test]
+    fn remove_refuses_live_serve_owner_for_same_root() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "INSERT INTO serve_sessions (session_id, pid, host, heartbeat_at)
+             VALUES ('serve-live', 2468, 'remove-host', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO collection_owners (collection_id, session_id) VALUES (?1, 'serve-live')",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = remove(&conn, "work", false, false, true).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("ServeOwnsCollectionError"));
+        assert!(text.contains("owner_pid=2468"));
+        assert!(text.contains("owner_host=remove-host"));
+    }
+
+    #[test]
+    fn remove_refuses_restoring_collection() {
+        let (_dir, conn) = open_test_db_file_any();
+        let root = tempfile::TempDir::new().unwrap();
+        let collection_id = insert_collection(&conn, "work", root.path());
+        conn.execute(
+            "UPDATE collections SET state = 'restoring', needs_full_sync = 1 WHERE id = ?1",
+            [collection_id],
+        )
+        .unwrap();
+
+        let error = remove(&conn, "work", false, false, true).unwrap_err();
+        assert!(error.to_string().contains("CollectionRestoringError"));
     }
 
     #[test]

@@ -129,11 +129,11 @@ Every page in Quaid has both. Agents read and write through 17 MCP tools via std
 # Initialize a new memory database
 quaid init ~/.quaid/memory.db
 
-# Import an existing markdown directory
-quaid import /path/to/notes/
-
 # Attach a live-sync collection (Obsidian vault, etc.)
 quaid collection add work ~/Documents/Obsidian
+
+# Ingest a single markdown file directly
+quaid ingest /path/to/note.md
 
 # Generate or refresh embeddings
 quaid embed
