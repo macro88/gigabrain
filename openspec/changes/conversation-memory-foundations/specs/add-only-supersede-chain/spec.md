@@ -16,7 +16,7 @@ The system SHALL add a nullable `superseded_by INTEGER REFERENCES pages(id)` col
 - **THEN** the write is rejected (the system requires the caller to supersede the current head, not a historical version)
 
 ### Requirement: Partial index makes head-only filtering free
-The system SHALL create a partial index `idx_pages_supersede_head ON pages(kind, superseded_by) WHERE superseded_by IS NULL` so that "select head pages of a given kind" is a single indexed lookup. A second partial index `idx_pages_session ON pages(json_extract(frontmatter, '$.session_id')) WHERE json_extract(frontmatter, '$.session_id') IS NOT NULL` SHALL exist to support session-scoped queries used by extraction (proposal #2) and supersede lookups.
+The system SHALL create a partial index `idx_pages_supersede_head ON pages(type, superseded_by) WHERE superseded_by IS NULL` so that "select head pages of a given page type" is a single indexed lookup. A second guarded partial index `idx_pages_session ON pages(json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id')) WHERE json_valid(frontmatter) AND json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id') IS NOT NULL` SHALL exist to support session-scoped queries used by extraction (proposal #2) and supersede lookups.
 
 #### Scenario: Head-only index exists on a fresh v8 database
 - **WHEN** a fresh v8 database is initialized
@@ -56,7 +56,7 @@ The system's `memory_graph` MCP tool SHALL include `superseded_by` as a navigabl
 - **THEN** the response contains `superseded_by` edges from `A → B` and from `B → C` and identifies `C` as the head
 
 ### Requirement: File-edit-aware supersede preserves history on user edits to extracted facts
-The Phase 4 vault watcher SHALL detect user edits to files under `<vault>/extracted/**/*.md` (or its namespace-scoped equivalent). When the watcher observes a content-hash change for an existing page whose `kind` is one of `decision`, `preference`, `fact`, or `action_item`, the system SHALL: (a) write the prior version of the page as a new archived page with `superseded_by` pointing to the edited file's page row and slug `<original-slug>--archived-<timestamp>`, and (b) treat the edited file's new content as a new head with frontmatter `supersedes: <archived_slug>` and `corrected_via: file_edit`. Whitespace-only edits SHALL be a no-op. The archived page SHALL exist only in the database by default; when `corrections.history_on_disk = true`, the archived content SHALL also be written to `<vault>/extracted/_history/<original-slug>--<timestamp>.md`.
+The Phase 4 vault watcher SHALL detect user edits to files under `<vault>/extracted/**/*.md` (or its namespace-scoped equivalent). When the watcher observes a content-hash change for an existing page whose `type` is one of `decision`, `preference`, `fact`, or `action_item`, the system SHALL: (a) write the prior version of the page as a new archived page with `superseded_by` pointing to the edited file's page row and slug `<original-slug>--archived-<timestamp>`, and (b) treat the edited file's new content as a new head with frontmatter `supersedes: <archived_slug>` and `corrected_via: file_edit`. Whitespace-only edits SHALL be a no-op. The archived page SHALL exist only in the database by default; when `corrections.history_on_disk = true`, the archived content SHALL also be written to `<vault>/extracted/_history/<original-slug>--<timestamp>.md`.
 
 #### Scenario: Editing an extracted preference produces an archived predecessor and a new head
 - **WHEN** a user edits `<vault>/extracted/preferences/foo.md` to change its body, while the existing page is the head of its chain
@@ -74,13 +74,13 @@ The Phase 4 vault watcher SHALL detect user edits to files under `<vault>/extrac
 - **WHEN** a user edits a file outside `extracted/**` (e.g. a regular note or a conversation file)
 - **THEN** the file-edit-aware supersede handler does not fire and the page is updated through the normal vault-sync path
 
-### Requirement: Schema is bumped from v7 to v8 without automatic migration
-The system SHALL bump `SCHEMA_VERSION` (and the persisted `quaid_config.schema_version`) from 7 to 8 atomically with the addition of `pages.superseded_by`, the supersede partial indexes, the `extraction_queue` table, and the `idx_pages_session` partial index. There SHALL NOT be an automatic v7 → v8 migration; existing v7 databases SHALL be rejected by the existing schema-mismatch behaviour with the standard re-init guidance.
+### Requirement: Conversation-memory schema baseline remains v8 without automatic migration
+The system SHALL keep `SCHEMA_VERSION` (and the persisted `quaid_config.schema_version`) at 8 for the remainder of this change. The landed first slice already introduced `pages.superseded_by`, `idx_pages_supersede_head ON pages(type, superseded_by) WHERE superseded_by IS NULL`, the guarded `idx_pages_session` partial index, and the `extraction_queue` table. There SHALL NOT be an automatic pre-v8 → v8 migration; existing pre-v8 databases SHALL be rejected by the existing schema-mismatch behaviour with the standard re-init guidance.
 
 #### Scenario: Fresh v8 init succeeds and reports schema_version 8
 - **WHEN** `quaid init` is run against a non-existent database path
 - **THEN** the resulting database has `quaid_config.schema_version = 8` and contains all four new schema artefacts (`pages.superseded_by`, `idx_pages_supersede_head`, `idx_pages_session`, `extraction_queue` + `idx_extraction_queue_pending`)
 
-#### Scenario: Existing v7 database is rejected
-- **WHEN** the v8 binary opens an existing v7 database
+#### Scenario: Existing pre-v8 database is rejected
+- **WHEN** the v8 binary opens an existing pre-v8 database
 - **THEN** the command fails with the existing schema-mismatch error and does not mutate the database

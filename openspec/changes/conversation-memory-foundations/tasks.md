@@ -1,17 +1,19 @@
-## 1. Pre-release schema reset to v8
+## 1. Landed v8 baseline slice (already in repo)
 
-- [x] 1.1 Update `src/schema.sql`: add `pages.superseded_by INTEGER REFERENCES pages(id)` (nullable)
-- [x] 1.2 Add partial index `idx_pages_supersede_head ON pages(kind, superseded_by) WHERE superseded_by IS NULL`
-- [x] 1.3 Add partial index `idx_pages_session ON pages(json_extract(frontmatter, '$.session_id')) WHERE json_extract(frontmatter, '$.session_id') IS NOT NULL`
-- [x] 1.4 Add `extraction_queue` table with columns and CHECK constraints per spec, plus `idx_extraction_queue_pending ON (status, scheduled_for) WHERE status = 'pending'`
-- [x] 1.5 Seed config defaults in the existing `config` table: `memory.location='vault-subdir'`, `corrections.history_on_disk='false'`, `extraction.max_retries='3'`
-- [x] 1.6 Bump `SCHEMA_VERSION`, `quaid_config.schema_version`, and schema-version tests to `8`
-- [x] 1.7 Verify no v7 → v8 migration or rollback path is added; existing v7 DBs continue to fail with the schema-mismatch/re-init message
-- [x] 1.8 Unit tests: fresh v8 schema accepts all four new artefacts; v7 DB rejected at open; foreign-key reference on `superseded_by` enforced; CHECK constraints on `extraction_queue.trigger_kind` and `.status` enforced
+> **Truth note (Leela, 2026-05-04T07:22:12.881+08:00):** Tasks `1.1`–`1.8` and `2.1` describe the conversation-memory plumbing that is already landed in the live v8 baseline. Remaining implementation work for this change starts at `2.2`; it does not introduce another schema-version bump.
+
+- [x] 1.1 Keep `src/schema.sql` aligned with the landed v8 baseline by retaining `pages.superseded_by INTEGER REFERENCES pages(id)` (nullable)
+- [x] 1.2 Keep partial index `idx_pages_supersede_head ON pages(type, superseded_by) WHERE superseded_by IS NULL`
+- [x] 1.3 Keep the guarded partial index `idx_pages_session ON pages(json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id')) WHERE json_valid(frontmatter) AND json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id') IS NOT NULL`
+- [x] 1.4 Keep the landed `extraction_queue` table with columns and CHECK constraints per spec, plus `idx_extraction_queue_pending ON (status, scheduled_for) WHERE status = 'pending'`
+- [x] 1.5 Keep the landed config defaults in the existing `config` table: `memory.location='vault-subdir'`, `corrections.history_on_disk='false'`, `extraction.max_retries='3'`
+- [x] 1.6 Keep `SCHEMA_VERSION`, `quaid_config.schema_version`, and schema-version tests at `8` (the live baseline for this change)
+- [x] 1.7 Verify no pre-v8 → v8 migration or rollback path is added; existing pre-v8 DBs continue to fail with the schema-mismatch/re-init message
+- [x] 1.8 Unit tests: fresh v8 schema continues to expose the landed artefacts; pre-v8 DB rejected at open; foreign-key reference on `superseded_by` enforced; CHECK constraints on `extraction_queue.trigger_kind` and `.status` enforced
 
 ## 2. ADD-only supersede chain — page-level support
 
-- [x] 2.1 Add `superseded_by: Option<i64>` to `Page` (or equivalent) in `src/core/types.rs`
+- [x] 2.1 Keep `superseded_by: Option<i64>` on `Page` (or equivalent) in `src/core/types.rs` as landed baseline plumbing for the remaining supersede work
 - [ ] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)
 - [ ] 2.3 Reject writes that attempt to supersede an already-superseded (non-head) page; return a typed error to the caller
 - [ ] 2.4 Update `src/core/migrate.rs` import path to round-trip `superseded_by` correctly via frontmatter `supersedes`
@@ -31,7 +33,7 @@
 
 - [ ] 4.1 Add `Turn`, `ConversationFile` types to `src/core/types.rs` (frontmatter struct + ordered turn blocks)
 - [ ] 4.2 Implement `src/core/conversation/format.rs` with `parse(path) -> ConversationFile`, `render(file) -> String`, and a turn-block round-trip helper
-- [ ] 4.3 Define the canonical render shape: frontmatter (`kind`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional metadata fence)
+- [ ] 4.3 Define the canonical render shape: frontmatter (`type`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional metadata fence)
 - [ ] 4.4 Implement multi-day continuation: given a `session_id` and a new turn timestamp, locate the most recent prior day-file (if any) and compute the next ordinal as `MAX(ordinal across all day-files) + 1`
 - [ ] 4.5 Namespace-aware path resolution: `<vault>/<namespace>/conversations/<YYYY-MM-DD>/<session-id>.md` when namespaces are in use
 - [ ] 4.6 Unit tests: parse-render round-trip, frontmatter cursor preservation, ordinal continuation across day-files, namespace path nesting, malformed turn block produces actionable parse error
@@ -74,7 +76,7 @@
 ## 9. `memory_close_action` MCP tool
 
 - [ ] 9.1 Register `memory_close_action` with input `{slug, status, note?}` and output `{updated_at, version}`
-- [ ] 9.2 Validate the target page is `kind: action_item`; otherwise return `KindError`
+- [ ] 9.2 Validate the target page is `type: action_item`; otherwise return `KindError`
 - [ ] 9.3 Update the page's frontmatter `status` in place using the existing optimistic-concurrency machinery (read version, write with `expected_version`, return `ConflictError` on mismatch)
 - [ ] 9.4 If `note` is provided, append it to the page body
 - [ ] 9.5 Tests: open → done transition increments version, KindError on non-action_item, ConflictError on concurrent writer
@@ -85,7 +87,7 @@
 - [ ] 10.2 The handler: write the prior version as a new page with slug `<original-slug>--archived-<timestamp>`, `superseded_by = <new-page-id>`, content equal to prior file content, frontmatter equal to prior frontmatter
 - [ ] 10.3 The new (edited) page becomes a head with frontmatter `supersedes: <archived_slug>` and `corrected_via: file_edit`
 - [ ] 10.4 No-op on whitespace-only changes (compare normalized content hash)
-- [ ] 10.5 Restrict to `kind ∈ {decision, preference, fact, action_item}`; edits to other kinds (notes, conversations, etc.) bypass the handler and use the regular vault-sync path
+- [ ] 10.5 Restrict to `type ∈ {decision, preference, fact, action_item}`; edits to other page types (notes, conversations, etc.) bypass the handler and use the regular vault-sync path
 - [ ] 10.6 When `corrections.history_on_disk = true`, write the archived content to `<vault>/extracted/_history/<original-slug>--<timestamp>.md`
 - [ ] 10.7 Tests (`tests/file_edit_supersede.rs`): edit produces archive + new head with chain pointers; whitespace-only edit is a no-op; non-extracted edit bypasses; opt-in disk history writes the file; archived page is non-head and recoverable via `--include-superseded`
 
