@@ -1,6 +1,6 @@
 ---
 name: draft-pr-truth-refresh
-version: 1.3
+version: 1.4
 author: zapp
 last_updated: 2026-05-04T07:22:12.881+08:00
 ---
@@ -37,6 +37,12 @@ Use this when a draft PR body lags behind newly pushed commits and GitHub report
 - Name the actively landing seam separately (for example `memory_close_action`)
 - Keep any reviewer-pre-gated seam (for example watcher/file-edit/history work) in the explicit non-claims until that gate is cleared
 - This is especially important when the compare view still contains both slices in planning artifacts; otherwise readers will assume the blocked half is already shipping too
+
+### 2b. Collapse back to one remaining seam when approval lands
+
+- Once the active half of a split final wave is approved, remove it from the "current in-flight scope" section right away
+- Restate the one remaining seam as the only active product scope, but keep its reviewer constraints visible if the work is landing under a pre-gate rather than after a brand-new approval memo
+- Keep the non-claim explicit: "active landing seam" is not the same as "already shipped"
 
 ### 3. Triage `dirty` before advising anyone
 
