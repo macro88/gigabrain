@@ -17,6 +17,20 @@ pub fn dispatch_tool(server: &QuaidServer, tool: &str, params: Value) -> Result<
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
             server.memory_put(input).map_err(|e| e.message.to_string())
         }
+        "memory_add_turn" => {
+            let input: MemoryAddTurnInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_add_turn(input)
+                .map_err(|e| e.message.to_string())
+        }
+        "memory_close_session" => {
+            let input: MemoryCloseSessionInput =
+                serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
+            server
+                .memory_close_session(input)
+                .map_err(|e| e.message.to_string())
+        }
         "memory_query" => {
             let input: MemoryQueryInput =
                 serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
@@ -180,6 +194,30 @@ mod tests {
         QuaidServer::new(conn)
     }
 
+    fn make_server_with_vault() -> (tempfile::TempDir, QuaidServer) {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("memory.db");
+        let conn = db::open(db_path.to_str().expect("utf-8 db path")).expect("open db");
+        let vault_root = dir.path().join("vault");
+        std::fs::create_dir_all(&vault_root).expect("create vault");
+        conn.execute(
+            "UPDATE collections
+             SET root_path = ?1,
+                 writable = 1,
+                 is_write_target = 1,
+                 state = 'active'
+             WHERE id = 1",
+            [vault_root.display().to_string()],
+        )
+        .expect("configure default collection");
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .expect("enable extraction");
+        (dir, QuaidServer::new(conn))
+    }
+
     #[test]
     fn dispatch_tool_routes_memory_collections() {
         let server = make_server();
@@ -306,6 +344,38 @@ mod tests {
             _ => "",
         };
         assert!(text.contains("concept/test-put") || result.is_string());
+    }
+
+    #[test]
+    fn dispatch_tool_routes_memory_add_turn_and_close_session() {
+        let (_dir, server) = make_server_with_vault();
+        let add_turn = dispatch_tool(
+            &server,
+            "memory_add_turn",
+            json!({
+                "session_id": "dispatch-session",
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-05-03T09:14:22Z"
+            }),
+        )
+        .expect("memory_add_turn should succeed");
+        assert_eq!(add_turn["turn_id"], json!("dispatch-session:1"));
+        assert_eq!(
+            add_turn["conversation_path"],
+            json!("conversations/2026-05-03/dispatch-session.md")
+        );
+
+        let close = dispatch_tool(
+            &server,
+            "memory_close_session",
+            json!({
+                "session_id": "dispatch-session"
+            }),
+        )
+        .expect("memory_close_session should succeed");
+        assert_eq!(close["extraction_triggered"], json!(true));
+        assert!(close["queue_position"].as_i64().unwrap_or_default() >= 1);
     }
 
     #[test]

@@ -1996,6 +1996,110 @@ mod tests {
     }
 
     #[test]
+    fn memory_add_turn_uses_current_timestamp_when_omitted() {
+        let (dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-now".to_string(),
+                role: "tool".to_string(),
+                content: "ran tool".to_string(),
+                timestamp: None,
+                metadata: Some(json!({"tool_name": "bash"})),
+                namespace: Some("alpha".to_string()),
+            })
+            .unwrap();
+
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert!(payload["conversation_path"]
+            .as_str()
+            .unwrap()
+            .starts_with("alpha/conversations/"));
+        let conversation_path = dir.path().join("vault").join(
+            payload["conversation_path"]
+                .as_str()
+                .unwrap()
+                .replace('/', "\\"),
+        );
+        let parsed = crate::core::conversation::format::parse(&conversation_path).unwrap();
+        assert_eq!(parsed.turns.len(), 1);
+        assert_eq!(parsed.turns[0].role, crate::core::types::TurnRole::Tool);
+        assert!(parsed.turns[0].timestamp.ends_with('Z'));
+        assert_eq!(parsed.turns[0].metadata.as_ref().unwrap()["tool_name"], "bash");
+    }
+
+    #[test]
+    fn memory_add_turn_rejects_non_object_metadata() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let error = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-bad-metadata".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: Some(json!(["not", "an", "object"])),
+                namespace: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+        assert!(error.message.contains("metadata must be a JSON object"));
+    }
+
+    #[test]
+    fn memory_add_turn_rejects_invalid_timestamp_shape() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let error = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-bad-time".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03 09:14:22".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32602));
+        assert!(error.message.contains("invalid timestamp"));
+    }
+
+    #[test]
+    fn extraction_enabled_rejects_invalid_config_value() {
+        let (_dir, conn) = open_test_db();
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'maybe')",
+            [],
+        )
+        .unwrap();
+
+        let error = extraction_enabled(&conn).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("invalid extraction.enabled"));
+    }
+
+    #[test]
+    fn extraction_debounce_ms_rejects_invalid_config_value() {
+        let (_dir, conn) = open_test_db();
+        conn.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.debounce_ms', 'later')",
+            [],
+        )
+        .unwrap();
+
+        let error = extraction_debounce_ms(&conn).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("invalid extraction.debounce_ms"));
+    }
+
+    #[test]
     fn memory_get_returns_not_found_error_code_for_missing_slug() {
         let (_dir, conn) = open_test_db();
         let server = QuaidServer::new(conn);

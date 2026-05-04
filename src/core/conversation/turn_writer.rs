@@ -801,4 +801,34 @@ mod tests {
             TurnWriteError::SessionNotFound { session_id } if session_id == "missing-session"
         ));
     }
+
+    #[test]
+    fn close_session_uses_started_at_for_legacy_closed_file_without_closed_at() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+        let conversation_dir = vault_root.path().join("conversations").join("2026-05-03");
+        fs::create_dir_all(&conversation_dir).unwrap();
+        fs::write(
+            conversation_dir.join("session-legacy.md"),
+            concat!(
+                "---\n",
+                "type: conversation\n",
+                "session_id: session-legacy\n",
+                "date: 2026-05-03\n",
+                "started_at: 2026-05-03T09:14:22Z\n",
+                "status: closed\n",
+                "last_extracted_at: null\n",
+                "last_extracted_turn: 1\n",
+                "---\n\n",
+                "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
+                "done\n"
+            ),
+        )
+        .unwrap();
+
+        let result = close_session(&conn, "session-legacy", None).unwrap();
+
+        assert_eq!(result.closed_at, "2026-05-03T09:14:22Z");
+        assert!(!result.newly_closed);
+    }
 }
