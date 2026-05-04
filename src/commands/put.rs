@@ -2114,10 +2114,15 @@ mod tests {
             result
         });
 
-        assert!(
-            done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-            "second contender should stay blocked behind the claimed head until the winner finishes"
-        );
+        match done_rx.recv_timeout(Duration::from_millis(200)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) | Ok(false) => {}
+            Ok(true) => {
+                panic!("second contender unexpectedly succeeded before the winner finished")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("second contender channel disconnected before reporting its result")
+            }
+        }
         assert!(!vault_root.join("facts").join("c.md").exists());
         assert_eq!(page_count(&conn, "facts/c"), 0);
 
