@@ -249,6 +249,8 @@ fn put_from_string_with_output(
         vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
     vault_sync::ensure_collection_vault_write_allowed(db, resolved.collection_id)
         .map_err(anyhow::Error::new)?;
+    let collection = vault_sync::load_collection_by_id(db, resolved.collection_id)
+        .map_err(anyhow::Error::new)?;
     let slug = resolved.slug.as_str();
     let wing = palace::derive_wing(slug);
     let room = palace::derive_room(&compiled_truth);
@@ -265,7 +267,7 @@ fn put_from_string_with_output(
     let relative_path = slug_to_relative_path(slug);
     let now = now_iso_from(db);
     let (prepared, outcome) = vault_sync::with_write_slug_lock(
-        resolved.collection_id,
+        &collection.root_path,
         &relative_path,
         || -> anyhow::Result<(PreparedPut, PutOutcome)> {
             maybe_block_inside_write_lock(db);

@@ -1587,7 +1587,7 @@ pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
 }
 
 pub fn with_write_slug_lock<T, F>(
-    collection_id: i64,
+    root_path: &str,
     relative_path: &str,
     action: F,
 ) -> Result<T, VaultSyncError>
@@ -1604,7 +1604,7 @@ where
                     registry: "slug_writes",
                 })?;
         slug_writes
-            .entry(format!("{collection_id}:{relative_path}"))
+            .entry(format!("{root_path}:{relative_path}"))
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
@@ -7907,6 +7907,37 @@ mod tests {
         assert!(has_write_dedup(&key).unwrap());
         remove_write_dedup(&key).unwrap();
         assert!(!has_write_dedup(&key).unwrap());
+    }
+
+    #[test]
+    fn write_slug_lock_is_scoped_by_root_path() {
+        init_process_registries().unwrap();
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first = std::thread::spawn(move || {
+            with_write_slug_lock("root-a", "facts/a.md", || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+        });
+
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            with_write_slug_lock("root-b", "facts/a.md", || {
+                done_tx.send(()).unwrap();
+            })
+            .unwrap();
+        });
+
+        done_rx.recv_timeout(Duration::from_millis(200)).unwrap();
+
+        release_tx.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
     }
 
     #[cfg(unix)]
