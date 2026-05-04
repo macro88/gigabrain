@@ -37,29 +37,29 @@
 
 ## 4. Conversation file format
 
-- [ ] 4.1 Add `Turn`, `ConversationFile` types to `src/core/types.rs` (frontmatter struct + ordered turn blocks)
-- [ ] 4.2 Implement `src/core/conversation/format.rs` with `parse(path) -> ConversationFile`, `render(file) -> String`, and a turn-block round-trip helper
-- [ ] 4.3 Define the canonical render shape: frontmatter (`type`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional metadata fence)
-- [ ] 4.4 Implement multi-day continuation: given a `session_id` and a new turn timestamp, locate the most recent prior day-file (if any) and compute the next ordinal as `MAX(ordinal across all day-files) + 1`
-- [ ] 4.5 Namespace-aware path resolution: `<vault>/<namespace>/conversations/<YYYY-MM-DD>/<session-id>.md` when namespaces are in use
-- [ ] 4.6 Unit tests: parse-render round-trip, frontmatter cursor preservation, ordinal continuation across day-files, namespace path nesting, malformed turn block produces actionable parse error
+- [x] 4.1 Add `Turn`, `ConversationFile` types to `src/core/types.rs` (frontmatter struct + ordered turn blocks)
+- [x] 4.2 Implement `src/core/conversation/format.rs` with `parse(path) -> ConversationFile`, `render(file) -> String`, and a turn-block round-trip helper
+- [x] 4.3 Define the canonical render shape: frontmatter (`type`, `session_id`, `date`, `started_at`, `status`, `last_extracted_at`, `last_extracted_turn`) + turn blocks (`## Turn N · role · timestamp` with optional metadata fence)
+- [x] 4.4 Implement multi-day continuation: given a `session_id` and a new turn timestamp, locate the most recent prior day-file (if any) and compute the next ordinal as `MAX(ordinal across all day-files) + 1`
+- [x] 4.5 Namespace-aware path resolution: `<vault>/<namespace>/conversations/<YYYY-MM-DD>/<session-id>.md` when namespaces are in use
+- [x] 4.6 Unit tests: parse-render round-trip, frontmatter cursor preservation, ordinal continuation across day-files, namespace path nesting, malformed turn block produces actionable parse error
 
 ## 5. Turn writer (`memory_add_turn` request path)
 
-- [ ] 5.1 Implement `src/core/conversation/turn_writer.rs::append_turn(session_id, role, content, timestamp, metadata, namespace?) -> Result<TurnWriteResult>`
-- [ ] 5.2 The append: locate or create the target day-file, compute the next ordinal, render the new turn block, append + fsync, return the assigned ordinal and conversation path
-- [ ] 5.3 On first turn for a new session, create the file with full conversation frontmatter (`status: open`, `started_at: <turn timestamp>`, `last_extracted_turn: 0`)
-- [ ] 5.4 Treat `metadata` as an opaque object preserved verbatim in the rendered turn block
-- [ ] 5.5 Property tests: durability (the appended turn is observable on disk before the function returns); concurrent appends to different sessions do not interfere; concurrent appends to the same session serialise (single-writer file lock or equivalent)
+- [x] 5.1 Implement `src/core/conversation/turn_writer.rs::append_turn(session_id, role, content, timestamp, metadata, namespace?) -> Result<TurnWriteResult>`
+- [x] 5.2 The append: locate or create the target day-file, compute the next ordinal, render the new turn block, append + fsync, return the assigned ordinal and conversation path
+- [x] 5.3 On first turn for a new session, create the file with full conversation frontmatter (`status: open`, `started_at: <turn timestamp>`, `last_extracted_turn: 0`)
+- [x] 5.4 Treat `metadata` as an opaque object preserved verbatim in the rendered turn block
+- [x] 5.5 Property tests: durability (the appended turn is observable on disk before the function returns); concurrent appends to different sessions do not interfere; concurrent appends to the same session serialise (single-writer file lock or equivalent)
 
 ## 6. Extraction queue (storage + enqueue)
 
-- [ ] 6.1 Implement `src/core/conversation/queue.rs::enqueue(session_id, conversation_path, trigger_kind, scheduled_for) -> Result<()>` with UPSERT-collapse semantics on `(session_id, status='pending')`
-- [ ] 6.2 Encode the precedence rules: `session_close` overrides any later `debounce` (collapses to earlier `scheduled_for` and `trigger_kind = 'session_close'`); `debounce` extends `scheduled_for` forward but does not override `session_close`
-- [ ] 6.3 Implement `dequeue() -> Option<Job>` that selects the earliest `pending` row with `scheduled_for <= now()`, atomically transitions to `running`, and returns the job — safe under concurrent dequeues
-- [ ] 6.4 Implement `mark_done(job_id)`, `mark_failed(job_id, err)` with `attempts` accounting and the `extraction.max_retries` cap (default 3) before transitioning to `failed`
-- [ ] 6.5 Implement lease expiry: `running` rows whose `scheduled_for + lease_expiry_seconds` has passed (default 300s) become re-eligible for dequeue with `attempts += 1`
-- [ ] 6.6 Tests: UPSERT-collapse under burst, `session_close` precedence, scheduled_for ordering on dequeue, concurrent-dequeue safety, retry/fail transitions, lease expiry recovery, persistence across simulated daemon restart
+- [x] 6.1 Implement `src/core/conversation/queue.rs::enqueue(session_id, conversation_path, trigger_kind, scheduled_for) -> Result<()>` with UPSERT-collapse semantics on `(session_id, status='pending')`
+- [x] 6.2 Encode the precedence rules: `session_close` overrides any later `debounce` (collapses to earlier `scheduled_for` and `trigger_kind = 'session_close'`); `debounce` extends `scheduled_for` forward but does not override `session_close`
+- [x] 6.3 Implement `dequeue() -> Option<Job>` that selects the earliest `pending` row with `scheduled_for <= now()`, atomically transitions to `running`, and returns the job — safe under concurrent dequeues
+- [x] 6.4 Implement `mark_done(job_id)`, `mark_failed(job_id, err)` with `attempts` accounting and the `extraction.max_retries` cap (default 3) before transitioning to `failed`
+- [x] 6.5 Implement lease expiry: `running` rows whose `scheduled_for + lease_expiry_seconds` has passed (default 300s) become re-eligible for dequeue with `attempts += 1`
+- [x] 6.6 Tests: UPSERT-collapse under burst, `session_close` precedence, scheduled_for ordering on dequeue, concurrent-dequeue safety, retry/fail transitions, lease expiry recovery, persistence across simulated daemon restart
 
 ## 7. `memory_add_turn` MCP tool
 
@@ -99,10 +99,10 @@
 
 ## 11. Vault layout configuration
 
-- [ ] 11.1 Add `memory.location` config key with values `vault-subdir` (default) and `dedicated-collection`
-- [ ] 11.2 Path resolver picks the conversation/extracted root based on the config value and the active namespace
-- [ ] 11.3 When `dedicated-collection` is selected, ensure the collection exists (create on first use) and writes go to it instead of the user's main vault
-- [ ] 11.4 Tests: subdir mode writes to main vault; dedicated-collection mode writes to the configured collection; both modes honour namespace nesting
+- [x] 11.1 Add `memory.location` config key with values `vault-subdir` (default) and `dedicated-collection`
+- [x] 11.2 Path resolver picks the conversation/extracted root based on the config value and the active namespace
+- [x] 11.3 When `dedicated-collection` is selected, ensure the collection exists (create on first use) and writes go to it instead of the user's main vault
+- [x] 11.4 Tests: subdir mode writes to main vault; dedicated-collection mode writes to the configured collection; both modes honour namespace nesting
 
 ## 12. End-to-end integration tests
 

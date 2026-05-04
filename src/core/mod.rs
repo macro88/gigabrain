@@ -1,6 +1,7 @@
 pub mod assertions;
 pub mod chunking;
 pub mod collections;
+pub mod conversation;
 pub mod db;
 pub mod file_state;
 pub mod fs_safety;

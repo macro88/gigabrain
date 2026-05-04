@@ -858,6 +858,20 @@ pub fn read_quaid_config(conn: &Connection) -> Result<Option<QuaidConfig>, DbErr
     }))
 }
 
+pub fn read_config_value(conn: &Connection, key: &str) -> Result<Option<String>, DbError> {
+    conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |row| row.get(0))
+        .optional()
+        .map_err(DbError::from)
+}
+
+pub fn read_config_value_or(
+    conn: &Connection,
+    key: &str,
+    default: &str,
+) -> Result<String, DbError> {
+    Ok(read_config_value(conn, key)?.unwrap_or_else(|| default.to_owned()))
+}
+
 fn table_exists(conn: &Connection, name: &str) -> Result<bool, DbError> {
     let exists: Option<i64> = conn
         .query_row(
