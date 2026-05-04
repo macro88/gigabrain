@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use quaid::core::conversation::format::{parse, parse_str, render};
 use quaid::core::conversation::turn_writer::append_turn;
@@ -237,6 +238,70 @@ fn append_turn_rejects_closed_day_file() {
         parse(&path.join("session-1.md")).unwrap().frontmatter.status,
         ConversationStatus::Closed
     );
+}
+
+#[test]
+fn concurrent_appends_to_different_sessions_write_separate_files() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let db_dir = tempfile::TempDir::new().unwrap();
+    let db_path = db_dir.path().join("memory.db");
+    let conn = db::open(db_path.to_str().unwrap()).unwrap();
+    conn.execute(
+        "UPDATE collections
+         SET root_path = ?1,
+             state = 'active'
+         WHERE id = 1",
+        [vault_root.path().display().to_string()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let first_db = db_path.clone();
+    let second_db = db_path.clone();
+    let first = thread::spawn(move || {
+        let conn = db::open(first_db.to_str().unwrap()).unwrap();
+        append_turn(
+            &conn,
+            "session-a",
+            TurnRole::User,
+            "alpha",
+            "2026-05-03T09:14:22Z",
+            None,
+            None,
+        )
+        .unwrap()
+    });
+    let second = thread::spawn(move || {
+        let conn = db::open(second_db.to_str().unwrap()).unwrap();
+        append_turn(
+            &conn,
+            "session-b",
+            TurnRole::Assistant,
+            "beta",
+            "2026-05-03T09:14:23Z",
+            None,
+            None,
+        )
+        .unwrap()
+    });
+
+    let first = first.join().unwrap();
+    let second = second.join().unwrap();
+
+    assert_eq!(first.turn_id, "session-a:1");
+    assert_eq!(second.turn_id, "session-b:1");
+    assert!(vault_root
+        .path()
+        .join("conversations")
+        .join("2026-05-03")
+        .join("session-a.md")
+        .is_file());
+    assert!(vault_root
+        .path()
+        .join("conversations")
+        .join("2026-05-03")
+        .join("session-b.md")
+        .is_file());
 }
 
 #[test]
