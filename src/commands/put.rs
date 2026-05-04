@@ -65,9 +65,11 @@ struct PutTestHooks {
     fail_sentinel_create: bool,
     fail_before_rename: bool,
     fail_rename: bool,
+    fail_commit: bool,
     fail_parent_fsync: bool,
     block_inside_slug_lock: bool,
     block_after_supersede_claim: bool,
+    skip_dirty_mark: bool,
     post_rename_swap: Option<Vec<u8>>,
 }
 
@@ -81,13 +83,16 @@ impl PutTestHooks {
         }
     }
 
-    fn after_rename(&self, target_path: &Path) -> Result<(), vault_sync::VaultSyncError> {
-        let Some(replacement) = self.post_rename_swap.as_ref() else {
-            return Ok(());
-        };
-        let foreign_temp = target_path.with_file_name(format!(".foreign-{}", Uuid::now_v7()));
-        fs::write(&foreign_temp, replacement)?;
-        fs::rename(&foreign_temp, target_path)?;
+    fn after_rename(
+        &self,
+        _db: &Connection,
+        target_path: &Path,
+    ) -> Result<(), vault_sync::VaultSyncError> {
+        if let Some(replacement) = self.post_rename_swap.as_ref() {
+            let foreign_temp = target_path.with_file_name(format!(".foreign-{}", Uuid::now_v7()));
+            fs::write(&foreign_temp, replacement)?;
+            fs::rename(&foreign_temp, target_path)?;
+        }
         Ok(())
     }
 }
@@ -935,7 +940,7 @@ fn persist_with_vault_write(
     }
 
     if let Some(hook) = hooks.as_ref() {
-        hook.after_rename(&target_path)?;
+        hook.after_rename(db, &target_path)?;
     }
 
     let post_rename_stat = match file_state::stat_file_fd(&parent_fd, target_name) {
@@ -978,15 +983,26 @@ fn persist_with_vault_write(
     {
         let _ = tx.rollback();
         clear_failure_tracking(&target_path, &dedup_key);
-        let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
-            db,
-            prepared.collection_id,
-        );
+        let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
         return Err(vault_sync::VaultSyncError::ConcurrentRename {
             collection_id: prepared.collection_id,
             relative_path: relative_path.to_owned(),
             sentinel_path: sentinel_path.display().to_string(),
         });
+    }
+
+    if matches!(hooks.as_ref(), Some(hook) if hook.fail_commit) {
+        let _ = tx.rollback();
+        return Err(handle_post_rename_failure(
+            db,
+            prepared,
+            relative_path,
+            &sentinel_path,
+            &target_path,
+            &dedup_key,
+            "commit",
+            io::Error::other("injected commit failure").to_string(),
+        ));
     }
 
     let outcome = match commit_staged_page_record(
@@ -1169,10 +1185,7 @@ fn handle_post_rename_failure(
     reason: String,
 ) -> vault_sync::VaultSyncError {
     clear_failure_tracking(target_path, dedup_key);
-    let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
-        db,
-        prepared.collection_id,
-    );
+    let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
     vault_sync::VaultSyncError::PostRenameRecoveryPending {
         collection_id: prepared.collection_id,
         relative_path: relative_path.to_owned(),
@@ -1217,6 +1230,25 @@ fn put_test_hooks() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
     HOOKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+#[cfg(all(unix, not(all(test, unix))))]
+fn maybe_mark_collection_needs_full_sync(
+    db: &Connection,
+    collection_id: i64,
+) -> Result<(), vault_sync::VaultSyncError> {
+    vault_sync::mark_collection_needs_full_sync_via_fresh_connection(db, collection_id)
+}
+
+#[cfg(all(test, unix))]
+fn maybe_mark_collection_needs_full_sync(
+    db: &Connection,
+    collection_id: i64,
+) -> Result<(), vault_sync::VaultSyncError> {
+    if matches!(test_hooks_snapshot(db), Some(hooks) if hooks.skip_dirty_mark) {
+        return Ok(());
+    }
+    vault_sync::mark_collection_needs_full_sync_via_fresh_connection(db, collection_id)
+}
+
 #[cfg(not(all(test, unix)))]
 fn maybe_block_inside_write_lock(_db: &Connection) {}
 
@@ -1237,34 +1269,82 @@ struct SupersedeClaimBlockState {
 }
 
 #[cfg(all(test, unix))]
-fn write_lock_blocker() -> &'static (std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar) {
-    static BLOCKER: std::sync::OnceLock<(
-        std::sync::Mutex<WriteLockBlockState>,
-        std::sync::Condvar,
-    )> = std::sync::OnceLock::new();
-    BLOCKER.get_or_init(|| {
-        (
-            std::sync::Mutex::new(WriteLockBlockState::default()),
-            std::sync::Condvar::new(),
-        )
-    })
+fn write_lock_blockers() -> &'static std::sync::Mutex<
+    std::collections::HashMap<
+        String,
+        std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>,
+    >,
+> {
+    static BLOCKERS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                String,
+                std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>,
+            >,
+        >,
+    > = std::sync::OnceLock::new();
+    BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[cfg(all(test, unix))]
-fn supersede_claim_blocker() -> &'static (
+fn write_lock_blocker_for_path(
+    db_path: &str,
+) -> std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)> {
+    write_lock_blockers()
+        .lock()
+        .unwrap()
+        .entry(db_path.to_owned())
+        .or_insert_with(|| {
+            std::sync::Arc::new((
+                std::sync::Mutex::new(WriteLockBlockState::default()),
+                std::sync::Condvar::new(),
+            ))
+        })
+        .clone()
+}
+
+#[cfg(all(test, unix))]
+fn supersede_claim_blockers() -> &'static std::sync::Mutex<
+    std::collections::HashMap<
+        String,
+        std::sync::Arc<(
+            std::sync::Mutex<SupersedeClaimBlockState>,
+            std::sync::Condvar,
+        )>,
+    >,
+> {
+    static BLOCKERS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                String,
+                std::sync::Arc<(
+                    std::sync::Mutex<SupersedeClaimBlockState>,
+                    std::sync::Condvar,
+                )>,
+            >,
+        >,
+    > = std::sync::OnceLock::new();
+    BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(all(test, unix))]
+fn supersede_claim_blocker_for_path(
+    db_path: &str,
+) -> std::sync::Arc<(
     std::sync::Mutex<SupersedeClaimBlockState>,
     std::sync::Condvar,
-) {
-    static BLOCKER: std::sync::OnceLock<(
-        std::sync::Mutex<SupersedeClaimBlockState>,
-        std::sync::Condvar,
-    )> = std::sync::OnceLock::new();
-    BLOCKER.get_or_init(|| {
-        (
-            std::sync::Mutex::new(SupersedeClaimBlockState::default()),
-            std::sync::Condvar::new(),
-        )
-    })
+)> {
+    supersede_claim_blockers()
+        .lock()
+        .unwrap()
+        .entry(db_path.to_owned())
+        .or_insert_with(|| {
+            std::sync::Arc::new((
+                std::sync::Mutex::new(SupersedeClaimBlockState::default()),
+                std::sync::Condvar::new(),
+            ))
+        })
+        .clone()
 }
 
 #[cfg(all(test, unix))]
@@ -1275,7 +1355,9 @@ fn maybe_block_inside_write_lock(db: &Connection) {
     if !hooks.block_inside_slug_lock {
         return;
     }
-    let (state_lock, wakeup) = write_lock_blocker();
+    let db_path = vault_sync::database_path(db).expect("test blocker requires database path");
+    let blocker = write_lock_blocker_for_path(&db_path);
+    let (state_lock, wakeup) = &*blocker;
     let mut state = state_lock.lock().unwrap();
     if state.blocked_once {
         return;
@@ -1303,7 +1385,9 @@ fn maybe_block_after_supersede_claim(db: &Connection, supersedes: Option<&str>) 
     if !hooks.block_after_supersede_claim {
         return;
     }
-    let (state_lock, wakeup) = supersede_claim_blocker();
+    let db_path = vault_sync::database_path(db).expect("test blocker requires database path");
+    let blocker = supersede_claim_blocker_for_path(&db_path);
+    let (state_lock, wakeup) = &*blocker;
     let mut state = state_lock.lock().unwrap();
     if state.blocked_once {
         return;
@@ -1522,20 +1606,23 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn reset_write_lock_blocker() {
-        let (state_lock, _) = write_lock_blocker();
+    fn reset_write_lock_blocker(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, _) = &*blocker;
         *state_lock.lock().unwrap() = WriteLockBlockState::default();
     }
 
     #[cfg(unix)]
-    fn reset_supersede_claim_blocker() {
-        let (state_lock, _) = supersede_claim_blocker();
+    fn reset_supersede_claim_blocker(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, _) = &*blocker;
         *state_lock.lock().unwrap() = SupersedeClaimBlockState::default();
     }
 
     #[cfg(unix)]
-    fn wait_for_write_lock_entry() {
-        let (state_lock, wakeup) = write_lock_blocker();
+    fn wait_for_write_lock_entry(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut state = state_lock.lock().unwrap();
         while !state.entered {
@@ -1554,16 +1641,18 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn release_write_lock_blocker() {
-        let (state_lock, wakeup) = write_lock_blocker();
+    fn release_write_lock_blocker(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let mut state = state_lock.lock().unwrap();
         state.release = true;
         wakeup.notify_all();
     }
 
     #[cfg(unix)]
-    fn wait_for_supersede_claim_entry() {
-        let (state_lock, wakeup) = supersede_claim_blocker();
+    fn wait_for_supersede_claim_entry(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut state = state_lock.lock().unwrap();
         while !state.entered {
@@ -1582,8 +1671,9 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn release_supersede_claim_blocker() {
-        let (state_lock, wakeup) = supersede_claim_blocker();
+    fn release_supersede_claim_blocker(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let mut state = state_lock.lock().unwrap();
         state.release = true;
         wakeup.notify_all();
@@ -2002,7 +2092,7 @@ mod tests {
         let a_disk_before = std::fs::read_to_string(&a_path).unwrap();
         let a_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/a");
 
-        reset_supersede_claim_blocker();
+        reset_supersede_claim_blocker(&db_path);
         guard.set(PutTestHooks {
             block_after_supersede_claim: true,
             ..PutTestHooks::default()
@@ -2019,7 +2109,7 @@ mod tests {
                 None,
             )
         });
-        wait_for_supersede_claim_entry();
+        wait_for_supersede_claim_entry(&db_path);
 
         assert_eq!(page_count(&conn, "facts/b"), 0);
         assert!(!vault_root.join("facts").join("b.md").exists());
@@ -2052,7 +2142,7 @@ mod tests {
         assert!(!vault_root.join("facts").join("c.md").exists());
         assert_eq!(page_count(&conn, "facts/c"), 0);
 
-        release_supersede_claim_blocker();
+        release_supersede_claim_blocker(&db_path);
 
         winner.join().unwrap().unwrap();
         let error = loser.join().unwrap().unwrap_err();
@@ -2259,7 +2349,7 @@ mod tests {
             None,
         )
         .unwrap();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -2276,7 +2366,7 @@ mod tests {
                 Some(1),
             )
         });
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let second_db_path = db_path.clone();
@@ -2298,7 +2388,7 @@ mod tests {
             "same-slug second writer should stay blocked until the first writer releases the slug mutex"
         );
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
 
         first.join().unwrap().unwrap();
         let error = second.join().unwrap().unwrap_err();
@@ -2312,7 +2402,7 @@ mod tests {
     #[test]
     fn different_slug_writes_do_not_share_per_slug_mutex() {
         let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -2329,7 +2419,7 @@ mod tests {
                 None,
             )
         });
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let free_db_path = db_path.clone();
@@ -2351,7 +2441,7 @@ mod tests {
             "different-slug writer should not wait on the blocked slug mutex"
         );
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
 
         blocked.join().unwrap().unwrap();
         free.join().unwrap().unwrap();
@@ -2587,8 +2677,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn commit_busy_retains_sentinel_until_startup_recovery_reconciles() {
-        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+    fn commit_failure_retains_sentinel_until_startup_recovery_reconciles() {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/busy",
@@ -2596,13 +2686,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let blocker = Connection::open(&db_path).unwrap();
-        blocker.busy_timeout(Duration::from_millis(0)).unwrap();
-        blocker
-            .execute_batch(
-                "BEGIN EXCLUSIVE; UPDATE collections SET updated_at = updated_at WHERE id = 1;",
-            )
-            .unwrap();
+        guard.set(PutTestHooks {
+            fail_commit: true,
+            ..PutTestHooks::default()
+        });
 
         let error = put_from_string(
             &conn,
@@ -2620,7 +2707,6 @@ mod tests {
             &sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n"),
         ))
         .unwrap());
-        drop(blocker);
 
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
         let recovered = wait_for_recovered_truth(&db_path, "notes/busy", "New body on disk");
@@ -2634,7 +2720,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn foreign_rename_with_busy_falls_back_to_startup_sentinel_recovery() {
+    fn foreign_rename_without_dirty_mark_falls_back_to_startup_sentinel_recovery() {
         let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
@@ -2643,14 +2729,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let blocker = Connection::open(&db_path).unwrap();
-        blocker.busy_timeout(Duration::from_millis(0)).unwrap();
-        blocker
-            .execute_batch(
-                "BEGIN EXCLUSIVE; UPDATE collections SET updated_at = updated_at WHERE id = 1;",
-            )
-            .unwrap();
         guard.set(PutTestHooks {
+            skip_dirty_mark: true,
             post_rename_swap: Some(
                 b"---\ntitle: Foreign Busy\ntype: note\n---\nForeign winner body\n".to_vec(),
             ),
@@ -2667,7 +2747,6 @@ mod tests {
 
         assert!(error.to_string().contains("ConcurrentRenameError"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
-        drop(blocker);
         drop(guard);
 
         let verify_before_runtime = Connection::open(&db_path).unwrap();
@@ -2904,7 +2983,7 @@ mod tests {
     #[test]
     fn cli_put_holds_short_lived_owner_lease_for_direct_write() {
         let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -2923,7 +3002,7 @@ mod tests {
             )
         });
 
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let lease_snapshot: (i64, i64, Option<String>) = conn
             .query_row(
@@ -2941,7 +3020,7 @@ mod tests {
         assert_eq!(lease_snapshot.1, 1);
         assert!(lease_snapshot.2.is_some());
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
         handle.join().unwrap().unwrap();
 
         let released_snapshot: (i64, i64, Option<String>) = conn

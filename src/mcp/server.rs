@@ -2168,12 +2168,11 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("alpha/conversations/"));
-        let conversation_path = dir.path().join("vault").join(
-            payload["conversation_path"]
-                .as_str()
-                .unwrap()
-                .replace('/', "\\"),
-        );
+        let conversation_path = payload["conversation_path"]
+            .as_str()
+            .unwrap()
+            .split('/')
+            .fold(dir.path().join("vault"), |path, segment| path.join(segment));
         let parsed = crate::core::conversation::format::parse(&conversation_path).unwrap();
         assert_eq!(parsed.turns.len(), 1);
         assert_eq!(parsed.turns[0].role, crate::core::types::TurnRole::Tool);
