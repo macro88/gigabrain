@@ -10,7 +10,7 @@ date: 2026-04-27
 
 Last updated: 2026-04-27 · Source: 23 open issues from beta testers ([github.com/quaid-app/quaid/issues](https://github.com/quaid-app/quaid/issues))
 
-This roadmap synthesises what beta testers are actually telling us. For the release-phase plan and shipped milestones, see [`docs/roadmap.md`](docs/roadmap.md).
+This roadmap synthesises what beta testers are actually telling us. For the release-phase plan and shipped milestones, see [`docs/roadmap_v3.md`](docs/roadmap_v3.md).
 
 ## How to read this roadmap
 
@@ -360,7 +360,7 @@ A handful of things the issues don't settle. Worth a tester poll before committi
 
 **Question 1 — Embedding model default.** §4 Semantic ceiling is 27/50 with bge-small. Does upgrading the airgapped default to bge-base (768d) move the needle enough to justify the binary-size cost? Imagine doubling the embedding-table footprint just to see what we already suspect: that domain paraphrasing is bottlenecked by model capacity. DAB §4 should answer this once Epic 6's model matrix runs.
 
-**Question 2 — LLM-assisted contradiction detection.** Currently deferred per `docs/roadmap.md` — *"the binary stays dumb."* Do we hold that line, or is the +3 points on §7 worth a config-gated opt-in?
+**Question 2 — LLM-assisted contradiction detection.** Currently deferred per `docs/roadmap_v3.md` — *"the binary stays dumb."* Do we hold that line, or is the +3 points on §7 worth a config-gated opt-in?
 
 **Question 3 — REFRAG-style compression** (#76). Worth pursuing only if latency becomes a tester complaint. Nobody is currently reporting it as pain. Defer until signalled.
 

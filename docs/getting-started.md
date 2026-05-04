@@ -1,6 +1,6 @@
 # Getting Started with Quaid
 
-> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.15.0`: it keeps the 17-tool surface, carries Batches 1–4 vault-sync follow-ons already on `main`, and adds Batch 5 authenticated live-serve single-file write proxying for collection-backed vaults on Unix.
+> Quaid is a local-first personal AI memory layer: SQLite + FTS5 + local vector embeddings in one file. This branch prepares `v0.18.0`: it keeps the published `v0.17.0` vault-sync surface, raises the branch MCP surface from 19 tools to 22, and lands the conversation-memory foundations (`memory_add_turn`, `memory_close_session`, `memory_close_action`, conversation day-files, the extraction queue, and supersede-aware retrieval).
 
 ## What it does
 
@@ -15,9 +15,9 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 ## Status
 
-> **Phase 3 is complete, and the vault-sync line is in Batch 5.** This branch prepares `v0.15.0`: it preserves the current 17-tool surface, keeps Batches 1–4 vault-sync follow-ons already shipped, and adds Batch 5 authenticated same-root single-file `quaid put` proxying through a live `quaid serve` owner on Unix, with the reviewed IPC trust boundary and peer-auth checks.
+> **The latest public release is `v0.17.0`, and this branch prepares `v0.18.0`.** The branch keeps the shipped vault-sync work in place, adds the 3 conversation-memory capture tools, and lands the conversation file / queue / supersede plumbing that the follow-on extractor work will build on.
 >
-> Published GitHub Release binaries still come from the latest public tag until the `v0.15.0` workflow completes. See [roadmap.md](roadmap.md) for the full delivery plan.
+> Published GitHub Release binaries and `install.sh` still resolve to `v0.17.0` until the `v0.18.0` tag exists. The background SLM extractor and correction flow are still follow-on work. See [roadmap_v3.md](roadmap_v3.md) for the full delivery plan.
 
 ---
 
@@ -25,14 +25,14 @@ You search it with full-text keywords and semantic queries. Any MCP-compatible A
 
 | Method | Status |
 | ------ | ------ |
-| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect this branch, including the Batch 5 same-root `quaid put` live-proxy / IPC-auth slice |
-| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — use the latest published tag until `v0.15.0` is cut |
+| Build from source (`cargo build --release`) | ✅ Available now — source builds reflect the `v0.18.0` branch state, including conversation-memory foundations and the existing Unix live-write handling |
+| GitHub Release binary (macOS ARM/x86, Linux x86_64/ARM64) | ✅ Available — the latest published tag is `v0.17.0`; it does not include the new conversation-memory tools yet |
 | `npm install -g quaid` | ❌ Not yet published — use binary release or build from source |
 | One-command curl installer | ✅ Available — airgapped by default; set `QUAID_CHANNEL=online` for online |
 
 > **Configurable BGE models.** The `online` build selects `small` (default), `base`, `large`, or `m3` via `QUAID_MODEL` / `--model`. The `airgapped` build embeds BGE-small-en-v1.5.
 >
-> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.15.0` Batch 5 live-serve single-file write proxying before the tag exists.
+> **Pre-release note.** GitHub Releases downloads and `install.sh` resolve against published tags. Build from source if you need the unreleased `v0.18.0` conversation-memory foundations before the tag exists.
 
 ---
 
@@ -69,7 +69,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 
 ## Your first memory store
 
-> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the full branch state described below before `v0.15.0` is published; see [Status](#status) and [Install options](#install-options) above.
+> **Phase 1 commands** are implemented. **Phase 2 commands** (graph, check, gaps) are implemented. **Phase 3 commands** (validate, call, pipe, skills) are implemented. Build from source to use the branch-only conversation-memory foundations before `v0.18.0` is published; see [Status](#status) and [Install options](#install-options) above.
 
 > **Post-install note:** The shell installer (`scripts/install.sh`) automatically adds `PATH` and `QUAID_DB` to your shell profile. If you built from source or used the manual GitHub Releases download, add these to your profile yourself:
 > ```bash
@@ -84,7 +84,7 @@ cross build --release --target aarch64-unknown-linux-musl     # Linux ARM64 (ful
 quaid init ~/.quaid/memory.db
 ```
 
-This creates a new `memory.db` file with the full v8 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, and `embedding_jobs`.
+This creates a new `memory.db` file with the full v8 schema — pages, embeddings, links, assertions, knowledge gaps, collections, `file_state`, `raw_imports`, `embedding_jobs`, and `extraction_queue`.
 
 ### 2. Attach a markdown directory or ingest a single file
 
@@ -178,15 +178,17 @@ The MCP server exposes tools over stdio JSON-RPC 2.0.
 
 > For OpenClaw, put the same server definition under `mcp.servers` in `openclaw.json`. See [openclaw-harness.md](openclaw-harness.md) for the full harness setup, collections-based vault sync, and `memory_collections` health checks.
 
-**Phase 1 tools (core read/write):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
+**Core read/write (5):** `memory_get`, `memory_put`, `memory_query`, `memory_search`, `memory_list`
 
-**Phase 2 tools (intelligence layer):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
+**Conversation capture (3):** `memory_add_turn`, `memory_close_session`, `memory_close_action`
 
-**Phase 3 tools (gaps, stats, raw data):** `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
+**Knowledge + graph (7):** `memory_link`, `memory_link_close`, `memory_backlinks`, `memory_graph`, `memory_check`, `memory_timeline`, `memory_tags`
 
-**vault-sync tools:** `memory_collections` — read-only per-collection status including state, ignore diagnostics, recovery flags, and embedding queue health
+**Gaps, stats, and raw data (4):** `memory_gap`, `memory_gaps`, `memory_stats`, `memory_raw`
 
-All 17 tools remain live on this branch and in the current release line. The `v0.15.0` slice keeps the tool names stable while carrying Batch 3 UUID identity hardening, Batch 4 rename-before-commit completion, and Batch 5 authenticated same-root single-file `quaid put` proxying on Unix. See [spec.md](spec.md#mcp-server) for tool signatures.
+**Collections + namespaces (3):** `memory_collections`, `memory_namespace_create`, `memory_namespace_destroy`
+
+The latest public GitHub Release (`v0.17.0`) exposes the first 19 tools. This branch prepares `v0.18.0` by adding the 3 conversation-memory capture tools plus the queue and supersede plumbing behind them. See [spec.md](spec.md#mcp-server) for tool signatures.
 
 ---
 
@@ -411,7 +413,7 @@ quaid skills doctor   # verify SHA-256 hashes, detect override shadowing
 
 ## vault-sync-engine: Collections and live-sync
 
-> These commands first shipped in `v0.9.6`. This branch carries the `v0.15.0` follow-on: Batches 1–4 vault-sync follow-ons stay in place, while Batch 5 upgrades same-root single-file `quaid put` to proxy through the live serve owner over authenticated per-session IPC on Unix. Bulk rewrites still refuse and stay offline-only.
+> These commands first shipped in `v0.9.6` and remain the published `v0.17.0` vault-sync surface. The `v0.18.0` lane keeps them in place — including same-root single-file `quaid put` proxying on Unix — while adding conversation-memory foundations elsewhere in this guide.
 
 ### Attach a vault
 
@@ -499,6 +501,6 @@ Typical resolution flow:
 
 ## Next steps
 
-- Read [roadmap.md](roadmap.md) to understand what is built vs. what is coming.
+- Read [roadmap_v3.md](roadmap_v3.md) to understand what is built vs. what is coming.
 - Read [contributing.md](contributing.md) to start contributing.
 - Read [spec.md](spec.md) for the full technical specification.

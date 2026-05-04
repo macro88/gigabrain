@@ -60,7 +60,7 @@ quaid/
 ├── docs/                     # User-facing documentation (you are here)
 │   ├── spec.md               # Full technical specification
 │   ├── getting-started.md    # New user / new contributor onboarding
-│   ├── roadmap.md            # Phased delivery plan and status
+│   ├── roadmap_v3.md         # Phased delivery plan and status
 │   └── contributing.md       # This file
 ├── openspec/                 # Structured change proposals
 │   └── changes/              # One directory per proposal

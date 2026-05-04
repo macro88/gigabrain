@@ -4,6 +4,7 @@
 
 ## Learnings
 
+- [2026-05-04T07:22:12.881+08:00] Release-lane truth prep is two coupled checks, not one: bump the version-gated manifest only on the release-bound commit, then audit every public/install surface for moved doc links or stale “upcoming tag” copy so the branch can be tagged without shipping broken release-note pointers.
 - [2026-05-04T07:22:12.881+08:00] `memory_close_action` stayed truest once its MCP surface was tightened back to the spec-sized `{slug, status, note?}` contract and its OCC race proof used an internal pre-write seam, not extra public routing arguments or timing-based concurrency tests.
 - [2026-05-04T07:22:12.881+08:00] Conversation-session Wave 2 needed two tiny but coupled contracts to stay truthful: persist `closed_at` in conversation frontmatter so `memory_close_session` can re-close idempotently without rewriting, and qualify queue `session_id` values with namespace internally so identical session ids do not collapse across namespace-local extraction queues.
 - [2026-05-04T07:22:12.881+08:00] Conversation-memory slice 1 can stay v8 without widening migration scope: keep the existing `pages.type` column, add the new supersede/queue artefacts in-place, and make the `idx_pages_session` expression index `json_valid(frontmatter)`-guarded so malformed-frontmatter rows/tests keep opening instead of failing at insert time.
