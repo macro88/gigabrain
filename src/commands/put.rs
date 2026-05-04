@@ -2813,14 +2813,29 @@ mod tests {
         let cli_conn = Connection::open(&db_path).unwrap();
         cli_conn.busy_timeout(Duration::from_secs(2)).unwrap();
 
-        put_from_cli_string(
-            &cli_conn,
-            "notes/live-owner",
-            "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
-            None,
-            None,
-        )
-        .unwrap();
+        let mut proxied = false;
+        for _ in 0..20 {
+            match put_from_cli_string(
+                &cli_conn,
+                "notes/live-owner",
+                "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
+                None,
+                None,
+            ) {
+                Ok(()) => {
+                    proxied = true;
+                    break;
+                }
+                Err(error) if error.to_string().contains("database is locked") => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => panic!("unexpected live-serve proxy error: {error}"),
+            }
+        }
+        assert!(
+            proxied,
+            "timed out waiting for live-serve proxy write to succeed"
+        );
 
         assert_eq!(
             stdfs::read_to_string(vault_root.join("notes").join("live-owner.md")).unwrap(),

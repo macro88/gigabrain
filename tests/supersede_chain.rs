@@ -20,6 +20,15 @@ fn open_test_db(path: &Path) -> Connection {
     db::open(path.to_str().unwrap()).unwrap()
 }
 
+fn set_default_root(conn: &Connection, root: &Path) {
+    std::fs::create_dir_all(root).unwrap();
+    conn.execute(
+        "UPDATE collections SET root_path = ?1, writable = 1 WHERE id = 1",
+        [root.to_string_lossy().to_string()],
+    )
+    .unwrap();
+}
+
 fn run_quaid(db_path: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(common::quaid_bin());
     common_subprocess::configure_test_command(&mut command);
@@ -77,7 +86,11 @@ fn slugs(rows: &[Value]) -> Vec<String> {
 fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_pointer() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
+    let root = dir.path().join("vault");
     let server = QuaidServer::new(open_test_db(&db_path));
+    let conn = open_test_db(&db_path);
+    set_default_root(&conn, &root);
+    drop(conn);
 
     put_page(
         &server,
@@ -173,7 +186,11 @@ fn supersede_chain_write_rejects_non_head_and_memory_get_returns_successor_point
 fn retrieval_defaults_to_heads_and_include_superseded_restores_history() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("memory.db");
+    let root = dir.path().join("vault");
     let server = QuaidServer::new(open_test_db(&db_path));
+    let conn = open_test_db(&db_path);
+    set_default_root(&conn, &root);
+    drop(conn);
 
     put_page(
         &server,
