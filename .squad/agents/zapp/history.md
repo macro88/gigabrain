@@ -8,6 +8,7 @@
 - [2026-04-29T21:29:11.071+08:00] Pretag release-prep audits for Quaid need four truth checks together: `Cargo.toml` version, `.github/workflows/release.yml` tag gate, public install docs (`README.md`, `docs/getting-started.md`, website install tutorial), and `docs/roadmap.md` deferred-state wording. They can drift independently even when the branch is internally approved.
 - [2026-04-29T21:29:11.071+08:00] Batch-style release docs drift in two directions at once: top-level release messaging can lag on the target version, while roadmap/deferred tables can still describe already-shipped admin commands as future work. The truth pass has to close both gaps in one commit before a release branch is really tag-ready.
 - [2026-04-29T21:29:11.071+08:00] In a release worktree, never assume the checked-out HEAD is the tag target. Compare the intended SHA to `origin/main` and diff the release-critical files (`Cargo.toml`, release workflow, asset manifest, and public install docs) before tagging the exact commit.
+- [2026-05-04T07:22:12.881+08:00] For Quaid release lanes, green local gates are not enough for a truthful draft PR: the branch must be pushed and coherent, public version/tool-count copy must match the real landed scope, and moved-file links like `roadmap.md` / `MIGRATION.md` must either be repaired or preserved.
 
 ## 20260429T173541Z — Team sync
 
@@ -23,4 +24,9 @@
 ## 2026-04-30T00:30:31Z
 - **Action:** Reviewed final coordination updates and approved team workflow
 - **Status:** APPROVED
+## Batch: Orchestration Consolidation
+**Timestamp:** 2026-05-04T00:00:30Z
 
+- Decisions consolidated: inbox merged → decisions.md (8 files)
+- Archive: 5698 lines archived to decisions-archive.md
+- Status: All agents' work reflected in team memory
