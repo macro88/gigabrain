@@ -61,12 +61,12 @@ The worker SHALL transition a claimed job to `status = 'done'` on success or to 
 - **THEN** the stale transition is rejected and the newer lease remains authoritative
 
 ### Requirement: Queue persistence survives daemon restart
-The system SHALL persist `extraction_queue` rows durably (SQLite WAL, the project's existing durability mode). On `quaid serve` restart, `pending` rows SHALL remain in `pending` and SHALL be dequeued in normal order; `running` rows that were claimed by a worker that did not complete SHALL be re-eligible for dequeue after a configurable lease-expiry interval (default `300s`) so that a crashed worker does not orphan a row indefinitely.
+The system SHALL persist `extraction_queue` rows durably (SQLite WAL, the project's existing durability mode). On `quaid serve` restart, `pending` rows SHALL remain in `pending` and SHALL be dequeued in normal order; `running` rows that were claimed by a worker that did not complete SHALL be re-eligible for dequeue after the shipped fixed 300-second lease-expiry interval so that a crashed worker does not orphan a row indefinitely.
 
 #### Scenario: Pending rows survive a daemon restart
 - **WHEN** `quaid serve` is killed while pending rows exist and is then restarted
 - **THEN** the previously pending rows are still present with `status = 'pending'` and are dequeued in normal `scheduled_for` order
 
 #### Scenario: Stale running rows recover after lease expiry
-- **WHEN** a `running` row's `scheduled_for + lease_expiry_seconds` has passed without a `done` or `failed` transition
+- **WHEN** a `running` row's `scheduled_for + 300 seconds` has passed without a `done` or `failed` transition
 - **THEN** the row is re-eligible for dequeue and the next claim transitions it back to `running` with `attempts += 1`

@@ -81,7 +81,7 @@ Whitespace-only edits are a no-op so opening, viewing, and re-saving a file in O
 
 ### Decision 8 — `memory.location = vault-subdir` is the default; `dedicated-collection` is an opt-in.
 
-The brainstorm chose subdirectories in the user's main vault as the default — natural for Obsidian users, supports linking from extracted facts to existing notes, doesn't require a second vault to be set up at install time. `dedicated-collection` is preserved as a config alternative for users who want agent memory isolated from their notes vault. Multi-collection support (Phase 4) makes both straightforward; the only schema implication is that this proposal records the choice in the `config` table.
+The brainstorm chose subdirectories in the user's main vault as the default — natural for Obsidian users, supports linking from extracted facts to existing notes, doesn't require a second vault to be set up at install time. `dedicated-collection` is preserved as a config alternative for users who want agent memory isolated from their notes vault. In this wave, the shipped resolver and tests use that choice for conversation-file placement only; extracted-fact root routing remains follow-on work. Multi-collection support (Phase 4) still makes both eventual layouts straightforward; the only schema implication already landed here is that this proposal records the choice in the `config` table.
 
 ### Decision 9 — Remaining work rides the landed v8 schema baseline.
 

@@ -56,11 +56,13 @@
 
 ## 6. Extraction queue (storage + enqueue)
 
+> **Truth note (Leela, 2026-05-04T07:22:12.881+08:00):** The landed lease-expiry recovery window is a fixed 300-second constant (`DEFAULT_LEASE_EXPIRY_SECONDS`). Only `extraction.max_retries` is configurable in this wave; no lease-expiry config key or runtime read path ships here.
+
 - [x] 6.1 Implement `src/core/conversation/queue.rs::enqueue(session_id, conversation_path, trigger_kind, scheduled_for) -> Result<()>` with UPSERT-collapse semantics on `(session_id, status='pending')`
 - [x] 6.2 Encode the precedence rules: `session_close` overrides any later `debounce` (collapses to earlier `scheduled_for` and `trigger_kind = 'session_close'`); `debounce` extends `scheduled_for` forward but does not override `session_close`
 - [x] 6.3 Implement `dequeue() -> Option<Job>` that selects the earliest `pending` row with `scheduled_for <= now()`, atomically transitions to `running`, and returns the job — safe under concurrent dequeues
 - [x] 6.4 Implement claim-bound `mark_done(job_id, attempts)` / `mark_failed(job_id, attempts, err)` with `attempts` accounting and the `extraction.max_retries` cap (default 3) before transitioning to `failed`
-- [x] 6.5 Implement lease expiry: `running` rows whose `scheduled_for + lease_expiry_seconds` has passed (default 300s) become re-eligible for dequeue with `attempts += 1`
+- [x] 6.5 Implement lease expiry: `running` rows whose `scheduled_for + 300 seconds` has passed become re-eligible for dequeue with `attempts += 1`
 - [x] 6.6 Tests: UPSERT-collapse under burst, `session_close` precedence, scheduled_for ordering on dequeue, concurrent-dequeue safety, retry/fail transitions, lease expiry recovery, persistence across simulated daemon restart
 
 ## 7. `memory_add_turn` MCP tool
@@ -101,10 +103,12 @@
 
 ## 11. Vault layout configuration
 
+> **Truth note (Leela, 2026-05-04T07:22:12.881+08:00):** The landed `memory.location` routing/tests cover conversation paths only. Extracted-root routing remains deferred with the future extracted-fact/file-edit slices.
+
 - [x] 11.1 Add `memory.location` config key with values `vault-subdir` (default) and `dedicated-collection`
-- [x] 11.2 Path resolver picks the conversation/extracted root based on the config value and the active namespace
-- [x] 11.3 When `dedicated-collection` is selected, ensure the collection exists (create on first use) and writes go to it instead of the user's main vault
-- [x] 11.4 Tests: subdir mode writes to main vault; dedicated-collection mode writes to the configured collection; both modes honour namespace nesting
+- [x] 11.2 Path resolver picks the conversation root based on the config value and the active namespace; extracted-root routing remains future-slice work
+- [x] 11.3 When `dedicated-collection` is selected, ensure the collection exists (create on first conversation write) and conversation writes go to it instead of the user's main vault
+- [x] 11.4 Tests: subdir mode writes conversations to the main vault; dedicated-collection mode writes conversation files to the configured collection; both modes honour namespace nesting
 
 ## 12. End-to-end integration tests
 
