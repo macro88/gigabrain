@@ -45,6 +45,8 @@ use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
+#[cfg(unix)]
+use crate::core::conversation::file_edit::is_history_sidecar_path;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -2439,7 +2441,7 @@ fn convert_reconcile_error(
 #[cfg(unix)]
 fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root_path).ok()?;
-    is_markdown_file(relative).then(|| relative.to_path_buf())
+    (is_markdown_file(relative) && !is_history_sidecar_path(relative)).then(|| relative.to_path_buf())
 }
 
 #[cfg(unix)]
@@ -6608,6 +6610,28 @@ mod tests {
         let actions = classify_watch_event(root.path(), event).unwrap();
 
         assert_eq!(actions, vec![WatchEvent::IgnoreFileChanged]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_watch_event_ignores_history_sidecar_paths() {
+        let root = tempfile::TempDir::new().unwrap();
+        let history_path = root
+            .path()
+            .join("extracted")
+            .join("_history")
+            .join("facts--foo--2026-05-04T00-00-00Z.md");
+        fs::create_dir_all(history_path.parent().unwrap()).unwrap();
+        fs::write(&history_path, "archived").unwrap();
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![history_path],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_watch_event(root.path(), event).unwrap();
+
+        assert!(actions.is_empty());
     }
 
     #[cfg(unix)]

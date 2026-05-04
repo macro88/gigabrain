@@ -93,13 +93,13 @@
 
 ## 10. File-edit-aware supersede handler
 
-- [ ] 10.1 Implement `src/core/conversation/file_edit.rs::handle_extracted_edit(prior_page, new_content) -> Result<()>` that is invoked from the existing vault-watcher hook when a content-hash change is observed for a file under `<vault>/extracted/**/*.md`
-- [ ] 10.2 The handler: write the prior version as a new page with slug `<original-slug>--archived-<timestamp>`, `superseded_by = <new-page-id>`, content equal to prior file content, frontmatter equal to prior frontmatter
-- [ ] 10.3 The new (edited) page becomes a head with frontmatter `supersedes: <archived_slug>` and `corrected_via: file_edit`
-- [ ] 10.4 No-op on whitespace-only changes (compare normalized content hash)
-- [ ] 10.5 Restrict to `type ∈ {decision, preference, fact, action_item}`; edits to other page types (notes, conversations, etc.) bypass the handler and use the regular vault-sync path
-- [ ] 10.6 When `corrections.history_on_disk = true`, write the archived content to `<vault>/extracted/_history/<original-slug>--<timestamp>.md`
-- [ ] 10.7 Tests (`tests/file_edit_supersede.rs`): edit produces archive + new head with chain pointers; whitespace-only edit is a no-op; non-extracted edit bypasses; opt-in disk history writes the file; archived page is non-head and recoverable via `--include-superseded`
+- [x] 10.1 Implement `src/core/conversation/file_edit.rs::handle_extracted_edit(prior_page, new_content) -> Result<()>` that is invoked from the existing vault-watcher hook when a content-hash change is observed for a file under `<vault>/extracted/**/*.md`
+- [x] 10.2 The handler: write the prior version as a new page with slug `<original-slug>--archived-<timestamp>`, `superseded_by = <new-page-id>`, content equal to prior file content, frontmatter equal to prior frontmatter
+- [x] 10.3 The new (edited) page becomes a head with frontmatter `supersedes: <archived_slug>` and `corrected_via: file_edit`
+- [x] 10.4 No-op on whitespace-only changes (compare normalized content hash)
+- [x] 10.5 Restrict to `type ∈ {decision, preference, fact, action_item}`; edits to other page types (notes, conversations, etc.) bypass the handler and use the regular vault-sync path
+- [x] 10.6 When `corrections.history_on_disk = true`, write the archived content to `<vault>/extracted/_history/<original-slug>--<timestamp>.md`
+- [x] 10.7 Tests (`tests/file_edit_supersede.rs`): edit produces archive + new head with chain pointers; whitespace-only edit is a no-op; non-extracted edit bypasses; opt-in disk history writes the file; archived page is non-head and recoverable via `--include-superseded`
 
 ## 11. Vault layout configuration
 
@@ -115,5 +115,5 @@
 - [x] 12.1 `tests/conversation_turn_capture.rs`: full flow — add turn, verify file, verify queue, verify ingestion
 - [x] 12.2 Multi-day session test: add turns spanning midnight; verify two day-files exist with continuing ordinals and independent cursors
 - [x] 12.3 Namespace isolation test: add turns under two namespaces with the same session_id; verify two distinct files and no cross-namespace bleed
-- [ ] 12.4 Supersede chain test: write A, write B with `supersedes: A`, write C with `supersedes: B`; verify chain is walkable via `memory_graph` and head-only retrieval returns only C
-- [ ] 12.5 File-edit supersede test: extract path manually creates a fact page (since extraction worker lands in proposal #2, this test simulates by writing a fact via existing page-write surfaces); user edits the file; verify chain integrity
+- [x] 12.4 Supersede chain test: write A, write B with `supersedes: A`, write C with `supersedes: B`; verify chain is walkable via `memory_graph` and head-only retrieval returns only C
+- [x] 12.5 File-edit supersede test: extract path manually creates a fact page (since extraction worker lands in proposal #2, this test simulates by writing a fact via existing page-write surfaces); user edits the file; verify chain integrity
