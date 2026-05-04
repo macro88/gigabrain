@@ -3,8 +3,8 @@ use std::path::Path;
 
 use quaid::commands::get::get_page_by_key;
 use quaid::core::conversation::file_edit::{
-    handle_extracted_edit, is_extracted_path, is_history_sidecar_path, parse_edited_page,
-    HandleExtractedEditOutcome,
+    handle_extracted_edit, is_extracted_path, is_extracted_whitespace_noop,
+    is_history_sidecar_path, parse_edited_page, FileEditError, HandleExtractedEditOutcome,
 };
 use quaid::core::db;
 use quaid::core::file_state;
@@ -402,4 +402,71 @@ fn history_on_disk_writes_sidecar_without_extra_live_page() {
         })
         .unwrap();
     assert_eq!(page_count, 1);
+}
+
+#[test]
+fn whitespace_helper_and_non_head_guard_cover_manual_edit_edges() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("vault");
+    let db_path = dir.path().join("memory.db");
+    let server = QuaidServer::new(open_test_db(&db_path));
+    let conn = open_test_db(&db_path);
+    set_default_root(&conn, &root);
+
+    let original = preference_markdown("preferences/edge", "Edge", "body", None);
+    put_page(&server, "preferences/edge", &original);
+    let page_id = page_id(&conn, "preferences/edge");
+    seed_tracked_file(&conn, &root, "extracted/preferences/edge.md", page_id, &original);
+
+    let whitespace_only =
+        "---\nslug: preferences/edge\ntitle: Edge\ntype: preference\n---\nbody  \n";
+    let live_path = root.join("extracted").join("preferences").join("edge.md");
+    fs::write(&live_path, whitespace_only).unwrap();
+    assert!(
+        is_extracted_whitespace_noop(
+            &conn,
+            1,
+            &root,
+            Path::new("extracted/preferences/edge.md"),
+            page_id,
+        )
+        .unwrap()
+    );
+
+    conn.execute(
+        "INSERT INTO pages
+             (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room, version)
+         VALUES (1, 'preferences/edge-successor', ?1, 'preference', 'Edge successor', '', 'later', '', '{}', 'preferences', '', 1)",
+        [uuid::Uuid::now_v7().to_string()],
+    )
+    .unwrap();
+    let successor_id = conn.last_insert_rowid();
+    conn.execute(
+        "UPDATE pages SET superseded_by = ?1 WHERE id = ?2",
+        rusqlite::params![successor_id, page_id],
+    )
+    .unwrap();
+
+    let prior_page = get_page_by_key(&conn, 1, "preferences/edge").unwrap();
+    let stat = file_state::stat_file(&live_path).unwrap();
+    let edited_page = parse_edited_page(whitespace_only.as_bytes(), &live_path, &root).unwrap();
+    let error = handle_extracted_edit(
+        &conn,
+        1,
+        page_id,
+        Path::new("extracted/preferences/edge.md"),
+        &root,
+        &stat,
+        &prior_page,
+        &edited_page,
+        whitespace_only.as_bytes(),
+    )
+    .unwrap_err();
+
+    match error {
+        FileEditError::NonHeadTarget { successor_slug, .. } => {
+            assert_eq!(successor_slug, "default::preferences/edge-successor");
+        }
+        other => panic!("expected NonHeadTarget, got {other:?}"),
+    }
 }
