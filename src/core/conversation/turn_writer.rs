@@ -16,7 +16,8 @@ use crate::core::conversation::format::{
 use crate::core::db;
 use crate::core::namespace;
 use crate::core::types::{
-    ConversationFile, ConversationFrontmatter, ConversationStatus, Turn, TurnRole, TurnWriteResult,
+    CloseSessionResult, ConversationFile, ConversationFrontmatter, ConversationStatus, Turn,
+    TurnRole, TurnWriteResult,
 };
 
 const DEDICATED_COLLECTION_SUFFIX: &str = "-memory";
@@ -43,6 +44,9 @@ pub enum TurnWriteError {
 
     #[error("conflict: session `{session_id}` is already closed")]
     SessionClosed { session_id: String },
+
+    #[error("session not found: {session_id}")]
+    SessionNotFound { session_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +112,56 @@ pub fn append_turn(
         turn_id: format!("{session_id}:{ordinal}"),
         ordinal,
         conversation_path: slash_path(&path_info.relative_path),
+    })
+}
+
+pub fn close_session(
+    conn: &Connection,
+    session_id: &str,
+    namespace: Option<&str>,
+) -> Result<CloseSessionResult, TurnWriteError> {
+    namespace::validate_optional_namespace(namespace).map_err(|error| TurnWriteError::Config {
+        message: error.to_string(),
+    })?;
+    validate_session_id(session_id)?;
+    let root = resolve_memory_root(conn)?;
+    let lock = session_lock(&root, namespace, session_id)?;
+    let _guard = lock.lock().map_err(|_| TurnWriteError::Config {
+        message: "session lock poisoned".to_owned(),
+    })?;
+    let _file_lock =
+        SessionFileLock::acquire(&session_lock_path(&root.root_path, namespace, session_id))?;
+
+    let Some((full_path, relative_path, mut conversation)) =
+        latest_session_file(&root.root_path, namespace, session_id)?
+    else {
+        return Err(TurnWriteError::SessionNotFound {
+            session_id: session_id.to_owned(),
+        });
+    };
+
+    if conversation.frontmatter.status == ConversationStatus::Closed {
+        let closed_at = conversation
+            .frontmatter
+            .closed_at
+            .clone()
+            .unwrap_or_else(|| conversation.frontmatter.started_at.clone());
+        return Ok(CloseSessionResult {
+            closed_at,
+            conversation_path: slash_path(&relative_path),
+            newly_closed: false,
+        });
+    }
+
+    let closed_at = current_timestamp(conn)?;
+    conversation.frontmatter.status = ConversationStatus::Closed;
+    conversation.frontmatter.closed_at = Some(closed_at.clone());
+    write_conversation_file(&full_path, &conversation)?;
+
+    Ok(CloseSessionResult {
+        closed_at,
+        conversation_path: slash_path(&relative_path),
+        newly_closed: true,
     })
 }
 
@@ -216,22 +270,30 @@ fn write_new_file(
             date: path_info.date.clone(),
             started_at: timestamp.to_owned(),
             status: ConversationStatus::Open,
+            closed_at: None,
             last_extracted_at: None,
             last_extracted_turn: 0,
         },
         turns: vec![turn.clone()],
     };
-    let rendered = format::render(&conversation);
-    let mut file = File::create(full_path)?;
-    file.write_all(rendered.as_bytes())?;
-    file.sync_all()?;
-    Ok(())
+    write_conversation_file(full_path, &conversation)
 }
 
 fn append_turn_block(full_path: &Path, turn: &Turn) -> Result<(), TurnWriteError> {
     let mut file = OpenOptions::new().append(true).open(full_path)?;
     file.write_all(b"\n---\n\n")?;
     file.write_all(format::render_turn_block(turn).as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn write_conversation_file(
+    full_path: &Path,
+    conversation: &ConversationFile,
+) -> Result<(), TurnWriteError> {
+    let rendered = format::render(conversation);
+    let mut file = File::create(full_path)?;
+    file.write_all(rendered.as_bytes())?;
     file.sync_all()?;
     Ok(())
 }
@@ -289,6 +351,60 @@ fn session_snapshot(
         max_ordinal,
         latest_status,
     })
+}
+
+fn latest_session_file(
+    root_path: &Path,
+    namespace: Option<&str>,
+    session_id: &str,
+) -> Result<Option<(PathBuf, PathBuf, ConversationFile)>, TurnWriteError> {
+    let mut conversations_root = root_path.to_path_buf();
+    if let Some(namespace) = namespace.filter(|value| !value.is_empty()) {
+        conversations_root.push(namespace);
+    }
+    conversations_root.push("conversations");
+
+    if !conversations_root.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<(String, PathBuf, PathBuf, ConversationFile)> = None;
+    for entry in fs::read_dir(&conversations_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let relative_path = entry
+            .path()
+            .strip_prefix(root_path)
+            .map_err(|error| TurnWriteError::Config {
+                message: format!("failed to resolve conversation path: {error}"),
+            })?
+            .join(format!("{session_id}.md"));
+        let candidate = root_path.join(&relative_path);
+        if !candidate.exists() {
+            continue;
+        }
+        let conversation = format::parse(&candidate)?;
+        let date = conversation.frontmatter.date.clone();
+        match latest.as_ref() {
+            Some((current_date, ..)) if current_date >= &date => {}
+            _ => {
+                latest = Some((date, candidate, relative_path, conversation));
+            }
+        }
+    }
+
+    Ok(latest.map(|(_, full_path, relative_path, conversation)| {
+        (full_path, relative_path, conversation)
+    }))
+}
+
+fn current_timestamp(conn: &Connection) -> Result<String, TurnWriteError> {
+    conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
+        row.get(0)
+    })
+    .map_err(TurnWriteError::from)
 }
 
 fn session_lock(
@@ -592,5 +708,97 @@ mod tests {
         let error = resolve_memory_root(&conn).unwrap_err();
 
         assert!(error.to_string().contains("unsupported memory.location"));
+    }
+
+    #[test]
+    fn close_session_marks_latest_day_file_closed_and_is_idempotent() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+        append_turn(
+            &conn,
+            "session-close",
+            TurnRole::User,
+            "first day",
+            "2026-05-03T23:59:00Z",
+            None,
+            None,
+        )
+        .unwrap();
+        append_turn(
+            &conn,
+            "session-close",
+            TurnRole::Assistant,
+            "second day",
+            "2026-05-04T00:01:00Z",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let first = close_session(&conn, "session-close", None).unwrap();
+        let second = close_session(&conn, "session-close", None).unwrap();
+        let latest_path = vault_root
+            .path()
+            .join("conversations")
+            .join("2026-05-04")
+            .join("session-close.md");
+        let latest = format::parse(&latest_path).unwrap();
+
+        assert!(first.newly_closed);
+        assert_eq!(first.conversation_path, "conversations/2026-05-04/session-close.md");
+        assert_eq!(latest.frontmatter.status, ConversationStatus::Closed);
+        assert_eq!(latest.frontmatter.closed_at.as_deref(), Some(first.closed_at.as_str()));
+        assert!(!second.newly_closed);
+        assert_eq!(second.closed_at, first.closed_at);
+    }
+
+    #[test]
+    fn close_session_returns_namespaced_path_for_namespaced_session() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+        append_turn(
+            &conn,
+            "session-alpha",
+            TurnRole::User,
+            "hello",
+            "2026-05-03T09:14:22Z",
+            None,
+            Some("alpha"),
+        )
+        .unwrap();
+
+        let closed = close_session(&conn, "session-alpha", Some("alpha")).unwrap();
+
+        assert_eq!(
+            closed.conversation_path,
+            "alpha/conversations/2026-05-03/session-alpha.md"
+        );
+        assert!(
+            format::parse(
+                &vault_root
+                    .path()
+                    .join("alpha")
+                    .join("conversations")
+                    .join("2026-05-03")
+                    .join("session-alpha.md"),
+            )
+            .unwrap()
+            .frontmatter
+            .closed_at
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn close_session_returns_not_found_for_unknown_session() {
+        let vault_root = tempfile::TempDir::new().unwrap();
+        let (_db_dir, conn) = configured_connection(vault_root.path());
+
+        let error = close_session(&conn, "missing-session", None).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TurnWriteError::SessionNotFound { session_id } if session_id == "missing-session"
+        ));
     }
 }

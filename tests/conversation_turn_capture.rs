@@ -4,10 +4,13 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use quaid::commands::ingest;
 use quaid::core::conversation::format::{parse, parse_str, render};
 use quaid::core::conversation::turn_writer::append_turn;
 use quaid::core::db;
 use quaid::core::types::{ConversationStatus, TurnRole};
+use quaid::mcp::server::{MemoryAddTurnInput, MemoryCloseSessionInput, QuaidServer};
+use rmcp::model::{CallToolResult, RawContent};
 use rusqlite::Connection;
 
 fn open_turn_db(root: &Path) -> (tempfile::TempDir, PathBuf, Connection) {
@@ -23,6 +26,23 @@ fn open_turn_db(root: &Path) -> (tempfile::TempDir, PathBuf, Connection) {
     )
     .unwrap();
     (db_dir, db_path, conn)
+}
+
+fn open_turn_server(root: &Path) -> (tempfile::TempDir, PathBuf, QuaidServer) {
+    let (db_dir, db_path, conn) = open_turn_db(root);
+    (db_dir, db_path, QuaidServer::new(conn))
+}
+
+fn extract_text(result: &CallToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|content| match &content.raw {
+            RawContent::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 const APPEND_TURN_HELPER_ENV: &str = "QUAID_TEST_APPEND_TURN_HELPER";
@@ -456,4 +476,339 @@ fn append_turn_serializes_same_session_writers_across_processes() {
     assert_eq!(parsed.turns[0].content, "first child");
     assert_eq!(parsed.turns[1].ordinal, 2);
     assert_eq!(parsed.turns[1].content, "second child");
+}
+
+#[test]
+fn memory_add_turn_full_flow_creates_file_collapses_queue_and_syncs_conversation_page() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, db_path, server) = open_turn_server(vault_root.path());
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+    }
+
+    for (timestamp, role, content) in [
+        ("2026-05-03T09:14:22Z", "user", "hello"),
+        ("2026-05-03T09:14:23Z", "assistant", "hi there"),
+        ("2026-05-03T09:14:24Z", "tool", "ran tool"),
+    ] {
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-e2e".to_string(),
+                role: role.to_string(),
+                content: content.to_string(),
+                timestamp: Some(timestamp.to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(payload["conversation_path"], "conversations/2026-05-03/session-e2e.md");
+    }
+
+    let conversation_path = vault_root
+        .path()
+        .join("conversations")
+        .join("2026-05-03")
+        .join("session-e2e.md");
+    let parsed = parse(&conversation_path).unwrap();
+    assert_eq!(parsed.turns.len(), 3);
+    assert_eq!(parsed.turns[0].ordinal, 1);
+    assert_eq!(parsed.turns[1].ordinal, 2);
+    assert_eq!(parsed.turns[2].ordinal, 3);
+
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        let queue_row: (i64, String, String) = db
+            .query_row(
+                "SELECT COUNT(*), status, conversation_path
+                 FROM extraction_queue
+                 WHERE session_id = 'session-e2e'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(queue_row.0, 1);
+        assert_eq!(queue_row.1, "pending");
+        assert_eq!(queue_row.2, "conversations/2026-05-03/session-e2e.md");
+
+        ingest::run(&db, conversation_path.to_str().unwrap(), true).unwrap();
+        let ingested: (i64, String) = db
+            .query_row(
+                "SELECT COUNT(*), slug
+                 FROM pages
+                 WHERE type = 'conversation'
+                   AND json_extract(IIF(json_valid(frontmatter), frontmatter, '{}'), '$.session_id') = 'session-e2e'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ingested.0, 1);
+        assert_eq!(ingested.1, "session-e2e");
+    }
+}
+
+#[test]
+fn memory_close_session_marks_latest_day_closed_and_overrides_debounce_job() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, db_path, server) = open_turn_server(vault_root.path());
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+    }
+
+    server
+        .memory_add_turn(MemoryAddTurnInput {
+            session_id: "session-close".to_string(),
+            role: "user".to_string(),
+            content: "wrap up".to_string(),
+            timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+            metadata: None,
+            namespace: None,
+        })
+        .unwrap();
+
+    let first = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "session-close".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+    let first_payload: serde_json::Value = serde_json::from_str(&extract_text(&first)).unwrap();
+    let conversation_path = vault_root
+        .path()
+        .join("conversations")
+        .join("2026-05-03")
+        .join("session-close.md");
+    let closed_rendered = fs::read_to_string(&conversation_path).unwrap();
+    let closed_file = parse(&conversation_path).unwrap();
+    assert_eq!(closed_file.frontmatter.status, ConversationStatus::Closed);
+    assert_eq!(
+        closed_file.frontmatter.closed_at.as_deref(),
+        first_payload["closed_at"].as_str()
+    );
+
+    let second = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "session-close".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+    let second_payload: serde_json::Value = serde_json::from_str(&extract_text(&second)).unwrap();
+    assert_eq!(first_payload["closed_at"], second_payload["closed_at"]);
+    assert_eq!(fs::read_to_string(&conversation_path).unwrap(), closed_rendered);
+
+    let db = db::open(db_path.to_str().unwrap()).unwrap();
+    let queue_row: (String, String) = db
+        .query_row(
+            "SELECT trigger_kind, status
+             FROM extraction_queue
+             WHERE session_id = 'session-close'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(queue_row.0, "session_close");
+    assert_eq!(queue_row.1, "pending");
+}
+
+#[test]
+fn memory_close_session_reclose_after_completed_flush_does_not_enqueue_new_job() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, db_path, server) = open_turn_server(vault_root.path());
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+    }
+
+    server
+        .memory_add_turn(MemoryAddTurnInput {
+            session_id: "session-reclose".to_string(),
+            role: "user".to_string(),
+            content: "wrap up".to_string(),
+            timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+            metadata: None,
+            namespace: None,
+        })
+        .unwrap();
+    let first = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "session-reclose".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        let claimed = quaid::core::conversation::queue::dequeue(&db)
+            .unwrap()
+            .expect("pending close job");
+        quaid::core::conversation::queue::mark_done(&db, claimed.id, claimed.attempts).unwrap();
+    }
+
+    let second = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "session-reclose".to_string(),
+            namespace: None,
+        })
+        .unwrap();
+    let first_payload: serde_json::Value = serde_json::from_str(&extract_text(&first)).unwrap();
+    let second_payload: serde_json::Value = serde_json::from_str(&extract_text(&second)).unwrap();
+    assert_eq!(first_payload["closed_at"], second_payload["closed_at"]);
+    assert_eq!(second_payload["extraction_triggered"], false);
+    assert_eq!(second_payload["queue_position"], 0);
+
+    let db = db::open(db_path.to_str().unwrap()).unwrap();
+    let row_counts: (i64, i64) = db
+        .query_row(
+            "SELECT
+                COUNT(*) FILTER (WHERE status = 'done'),
+                COUNT(*) FILTER (WHERE status = 'pending')
+             FROM extraction_queue
+             WHERE session_id = 'session-reclose'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row_counts.0, 1);
+    assert_eq!(row_counts.1, 0);
+}
+
+#[test]
+fn memory_close_session_returns_not_found_for_unknown_session() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, _db_path, server) = open_turn_server(vault_root.path());
+
+    let error = server
+        .memory_close_session(MemoryCloseSessionInput {
+            session_id: "missing".to_string(),
+            namespace: None,
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code.0, -32001);
+    assert!(error.message.contains("NotFoundError"));
+}
+
+#[test]
+fn memory_add_turn_spans_midnight_with_continuing_ordinals_and_independent_cursors() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, _db_path, server) = open_turn_server(vault_root.path());
+
+    server
+        .memory_add_turn(MemoryAddTurnInput {
+            session_id: "session-midnight".to_string(),
+            role: "user".to_string(),
+            content: "day one".to_string(),
+            timestamp: Some("2026-05-03T23:59:59Z".to_string()),
+            metadata: None,
+            namespace: None,
+        })
+        .unwrap();
+    server
+        .memory_add_turn(MemoryAddTurnInput {
+            session_id: "session-midnight".to_string(),
+            role: "assistant".to_string(),
+            content: "day two".to_string(),
+            timestamp: Some("2026-05-04T00:01:00Z".to_string()),
+            metadata: None,
+            namespace: None,
+        })
+        .unwrap();
+
+    let first = parse(
+        &vault_root
+            .path()
+            .join("conversations")
+            .join("2026-05-03")
+            .join("session-midnight.md"),
+    )
+    .unwrap();
+    let second = parse(
+        &vault_root
+            .path()
+            .join("conversations")
+            .join("2026-05-04")
+            .join("session-midnight.md"),
+    )
+    .unwrap();
+
+    assert_eq!(first.turns[0].ordinal, 1);
+    assert_eq!(second.turns[0].ordinal, 2);
+    assert_eq!(first.frontmatter.last_extracted_turn, 0);
+    assert_eq!(second.frontmatter.last_extracted_turn, 0);
+}
+
+#[test]
+fn memory_add_turn_keeps_namespace_isolation_for_same_session_id_across_queue_and_files() {
+    let vault_root = tempfile::TempDir::new().unwrap();
+    let (_db_dir, db_path, server) = open_turn_server(vault_root.path());
+    {
+        let db = db::open(db_path.to_str().unwrap()).unwrap();
+        db.execute(
+            "INSERT OR REPLACE INTO config(key, value) VALUES ('extraction.enabled', 'true')",
+            [],
+        )
+        .unwrap();
+    }
+
+    for namespace in ["alpha", "beta"] {
+        server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "main".to_string(),
+                role: "user".to_string(),
+                content: format!("{namespace} turn"),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: Some(namespace.to_string()),
+            })
+            .unwrap();
+    }
+
+    assert!(vault_root
+        .path()
+        .join("alpha")
+        .join("conversations")
+        .join("2026-05-03")
+        .join("main.md")
+        .is_file());
+    assert!(vault_root
+        .path()
+        .join("beta")
+        .join("conversations")
+        .join("2026-05-03")
+        .join("main.md")
+        .is_file());
+    assert!(!fs::read_to_string(
+        vault_root
+            .path()
+            .join("alpha")
+            .join("conversations")
+            .join("2026-05-03")
+            .join("main.md"),
+    )
+    .unwrap()
+    .contains("beta turn"));
+
+    let db = db::open(db_path.to_str().unwrap()).unwrap();
+    let queued_sessions: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM extraction_queue WHERE status = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(queued_sessions, 2);
 }

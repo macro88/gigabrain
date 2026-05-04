@@ -67,21 +67,21 @@
 
 ## 7. `memory_add_turn` MCP tool
 
-- [ ] 7.1 Register `memory_add_turn` in `src/mcp/server.rs` with input schema `{session_id, role, content, timestamp?, metadata?}` and output `{turn_id, conversation_path, extraction_scheduled_at}`
-- [ ] 7.2 Wire the tool to `turn_writer::append_turn` followed by `queue::enqueue(..., 'debounce', now + extraction.debounce_ms)` when `extraction.enabled = true`
-- [ ] 7.3 When `extraction.enabled = false`, skip enqueue and return `extraction_scheduled_at: null`
-- [ ] 7.4 Map errors: write conflicts on closed sessions return `ConflictError`; unwritable vault returns `ConfigError`
-- [ ] 7.5 Latency test (`tests/turn_latency.rs`): p95 < 50 ms for 100 sequential calls on representative SSD hardware
-- [ ] 7.6 End-to-end test: call `memory_add_turn` three times for a new session; verify file created, three turn blocks present in order, queue contains exactly one collapsed `pending` row
+- [x] 7.1 Register `memory_add_turn` in `src/mcp/server.rs` with input schema `{session_id, role, content, timestamp?, metadata?}` and output `{turn_id, conversation_path, extraction_scheduled_at}`
+- [x] 7.2 Wire the tool to `turn_writer::append_turn` followed by `queue::enqueue(..., 'debounce', now + extraction.debounce_ms)` when `extraction.enabled = true`
+- [x] 7.3 When `extraction.enabled = false`, skip enqueue and return `extraction_scheduled_at: null`
+- [x] 7.4 Map errors: write conflicts on closed sessions return `ConflictError`; unwritable vault returns `ConfigError`
+- [x] 7.5 Latency test (`tests/turn_latency.rs`): p95 < 50 ms for 100 sequential calls on representative SSD hardware
+- [x] 7.6 End-to-end test: call `memory_add_turn` three times for a new session; verify file created, three turn blocks present in order, queue contains exactly one collapsed `pending` row
 
 ## 8. `memory_close_session` MCP tool
 
-- [ ] 8.1 Register `memory_close_session` with input `{session_id}` and output `{closed_at, extraction_triggered, queue_position}`
-- [ ] 8.2 Locate the most recent day-file for the session in the active namespace; update its frontmatter `status` to `closed` and persist
-- [ ] 8.3 Enqueue an immediate `session_close` job (`scheduled_for = now`) so any debounced job is overridden
-- [ ] 8.4 Idempotent re-close: if `status` is already `closed`, return the original `closed_at` without modifying the file
-- [ ] 8.5 Return `NotFoundError` for unknown `session_id` in the active namespace
-- [ ] 8.6 Tests: close transitions status, immediate enqueue overrides debounce, idempotent re-close returns original timestamp, unknown session returns NotFoundError
+- [x] 8.1 Register `memory_close_session` with input `{session_id}` and output `{closed_at, extraction_triggered, queue_position}`
+- [x] 8.2 Locate the most recent day-file for the session in the active namespace; update its frontmatter `status` to `closed` and persist
+- [x] 8.3 Enqueue an immediate `session_close` job (`scheduled_for = now`) so any debounced job is overridden
+- [x] 8.4 Idempotent re-close: if `status` is already `closed`, return the original `closed_at` without modifying the file
+- [x] 8.5 Return `NotFoundError` for unknown `session_id` in the active namespace
+- [x] 8.6 Tests: close transitions status, immediate enqueue overrides debounce, idempotent re-close returns original timestamp, unknown session returns NotFoundError
 
 ## 9. `memory_close_action` MCP tool
 
@@ -112,8 +112,8 @@
 
 ## 12. End-to-end integration tests
 
-- [ ] 12.1 `tests/conversation_turn_capture.rs`: full flow — add turn, verify file, verify queue, verify ingestion
-- [ ] 12.2 Multi-day session test: add turns spanning midnight; verify two day-files exist with continuing ordinals and independent cursors
-- [ ] 12.3 Namespace isolation test: add turns under two namespaces with the same session_id; verify two distinct files and no cross-namespace bleed
+- [x] 12.1 `tests/conversation_turn_capture.rs`: full flow — add turn, verify file, verify queue, verify ingestion
+- [x] 12.2 Multi-day session test: add turns spanning midnight; verify two day-files exist with continuing ordinals and independent cursors
+- [x] 12.3 Namespace isolation test: add turns under two namespaces with the same session_id; verify two distinct files and no cross-namespace bleed
 - [ ] 12.4 Supersede chain test: write A, write B with `supersedes: A`, write C with `supersedes: B`; verify chain is walkable via `memory_graph` and head-only retrieval returns only C
 - [ ] 12.5 File-edit supersede test: extract path manually creates a fact page (since extraction worker lands in proposal #2, this test simulates by writing a fact via existing page-write surfaces); user edits the file; verify chain integrity

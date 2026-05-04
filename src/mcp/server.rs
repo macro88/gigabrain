@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{check, get, link};
 
 use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
+use crate::core::conversation::{queue as conversation_queue, turn_writer};
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
@@ -17,7 +18,7 @@ use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::hybrid_search_canonical_with_namespace;
 use crate::core::supersede;
-use crate::core::types::SearchError;
+use crate::core::types::{ExtractionTriggerKind, SearchError, TurnRole};
 use crate::core::vault_sync;
 
 type DbRef = Arc<Mutex<Connection>>;
@@ -408,6 +409,90 @@ fn map_namespace_error(e: namespace::NamespaceError) -> rmcp::Error {
     }
 }
 
+fn map_turn_write_error(e: turn_writer::TurnWriteError) -> rmcp::Error {
+    match e {
+        turn_writer::TurnWriteError::InvalidSessionId { message } => invalid_params(message),
+        turn_writer::TurnWriteError::SessionClosed { session_id } => rmcp::Error::new(
+            ErrorCode(-32009),
+            format!("ConflictError: session `{session_id}` is already closed"),
+            None,
+        ),
+        turn_writer::TurnWriteError::SessionNotFound { session_id } => rmcp::Error::new(
+            ErrorCode(-32001),
+            format!("NotFoundError: session `{session_id}` not found"),
+            None,
+        ),
+        turn_writer::TurnWriteError::Config { message } => rmcp::Error::new(
+            ErrorCode(-32002),
+            format!("ConfigError: {message}"),
+            None,
+        ),
+        turn_writer::TurnWriteError::Io(error) => rmcp::Error::new(
+            ErrorCode(-32002),
+            format!("ConfigError: {error}"),
+            None,
+        ),
+        turn_writer::TurnWriteError::Sqlite(error) => map_db_error(error),
+        turn_writer::TurnWriteError::Format(error) => {
+            rmcp::Error::new(ErrorCode(-32003), format!("conversation error: {error}"), None)
+        }
+    }
+}
+
+fn map_extraction_queue_error(e: conversation_queue::ExtractionQueueError) -> rmcp::Error {
+    match e {
+        conversation_queue::ExtractionQueueError::Sqlite(error) => map_db_error(error),
+        conversation_queue::ExtractionQueueError::Config { message } => rmcp::Error::new(
+            ErrorCode(-32002),
+            format!("ConfigError: {message}"),
+            None,
+        ),
+        conversation_queue::ExtractionQueueError::StaleLease { job_id, attempts } => {
+            rmcp::Error::new(
+                ErrorCode(-32009),
+                format!("ConflictError: stale extraction lease for job {job_id} attempt {attempts}"),
+                None,
+            )
+        }
+    }
+}
+
+fn validate_turn_timestamp(value: &str) -> Result<(), rmcp::Error> {
+    if value.len() == 20 && is_valid_temporal_value(value) {
+        Ok(())
+    } else {
+        Err(invalid_params(
+            "invalid timestamp: expected YYYY-MM-DDTHH:MM:SSZ".to_owned(),
+        ))
+    }
+}
+
+fn extraction_enabled(db: &Connection) -> Result<bool, rmcp::Error> {
+    let raw = crate::core::db::read_config_value_or(db, "extraction.enabled", "false")
+        .map_err(|error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None))?;
+    match raw.as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(rmcp::Error::new(
+            ErrorCode(-32002),
+            format!("ConfigError: invalid extraction.enabled value: {other}"),
+            None,
+        )),
+    }
+}
+
+fn extraction_debounce_ms(db: &Connection) -> Result<i64, rmcp::Error> {
+    let raw = crate::core::db::read_config_value_or(db, "extraction.debounce_ms", "5000")
+        .map_err(|error| rmcp::Error::new(ErrorCode(-32002), format!("ConfigError: {error}"), None))?;
+    raw.parse::<i64>().map_err(|_| {
+        rmcp::Error::new(
+            ErrorCode(-32002),
+            format!("ConfigError: invalid extraction.debounce_ms value: {raw}"),
+            None,
+        )
+    })
+}
+
 fn parse_temporal_filter(temporal: Option<&str>) -> Result<TemporalFilter, rmcp::Error> {
     match temporal.unwrap_or("active") {
         "active" | "current" => Ok(TemporalFilter::Active),
@@ -448,6 +533,22 @@ pub struct MemoryPutInput {
     /// Expected current version for optimistic concurrency control
     pub expected_version: Option<i64>,
     /// Optional namespace to write into; omitted writes global memory
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryAddTurnInput {
+    pub session_id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MemoryCloseSessionInput {
+    pub session_id: String,
     pub namespace: Option<String>,
 }
 
@@ -635,6 +736,117 @@ impl QuaidServer {
             "superseded_by": successor_slug,
         }))
         .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Append a turn to a conversation session")]
+    pub fn memory_add_turn(
+        &self,
+        #[tool(aggr)] input: MemoryAddTurnInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        validate_content(&input.content)?;
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
+        if let Some(metadata) = input.metadata.as_ref() {
+            if !metadata.is_object() {
+                return Err(invalid_params("metadata must be a JSON object"));
+            }
+        }
+
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let role = input
+            .role
+            .parse::<TurnRole>()
+            .map_err(invalid_params)?;
+        let timestamp = match input.timestamp.as_deref() {
+            Some(timestamp) => {
+                validate_turn_timestamp(timestamp)?;
+                timestamp.to_owned()
+            }
+            None => conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?,
+        };
+
+        let write_result = turn_writer::append_turn(
+            &db,
+            &input.session_id,
+            role,
+            &input.content,
+            &timestamp,
+            input.metadata,
+            input.namespace.as_deref(),
+        )
+        .map_err(map_turn_write_error)?;
+
+        let extraction_scheduled_at = if extraction_enabled(&db)? {
+            let scheduled_for =
+                conversation_queue::scheduled_timestamp_after_ms(&db, extraction_debounce_ms(&db)?)
+                    .map_err(map_extraction_queue_error)?;
+            let queue_session_id =
+                conversation_queue::session_queue_key(input.namespace.as_deref(), &input.session_id);
+            conversation_queue::enqueue(
+                &db,
+                &queue_session_id,
+                &write_result.conversation_path,
+                ExtractionTriggerKind::Debounce,
+                &scheduled_for,
+            )
+            .map_err(map_extraction_queue_error)?;
+            Some(scheduled_for)
+        } else {
+            None
+        };
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "turn_id": write_result.turn_id,
+            "conversation_path": write_result.conversation_path,
+            "extraction_scheduled_at": extraction_scheduled_at,
+        }))
+        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Close a conversation session and trigger extraction")]
+    pub fn memory_close_session(
+        &self,
+        #[tool(aggr)] input: MemoryCloseSessionInput,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        namespace::validate_optional_namespace(input.namespace.as_deref())
+            .map_err(map_namespace_error)?;
+        let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let close_result =
+            turn_writer::close_session(&db, &input.session_id, input.namespace.as_deref())
+                .map_err(map_turn_write_error)?;
+
+        let queue_session_id =
+            conversation_queue::session_queue_key(input.namespace.as_deref(), &input.session_id);
+        let (extraction_triggered, queue_position) = if close_result.newly_closed {
+            let scheduled_for =
+                conversation_queue::current_timestamp(&db).map_err(map_extraction_queue_error)?;
+            conversation_queue::enqueue(
+                &db,
+                &queue_session_id,
+                &close_result.conversation_path,
+                ExtractionTriggerKind::SessionClose,
+                &scheduled_for,
+            )
+            .map_err(map_extraction_queue_error)?;
+            let position = conversation_queue::pending_queue_position(&db, &queue_session_id)
+                .map_err(map_extraction_queue_error)?
+                .unwrap_or(0);
+            (true, position)
+        } else {
+            let position = conversation_queue::pending_queue_position(&db, &queue_session_id)
+                .map_err(map_extraction_queue_error)?
+                .unwrap_or(0);
+            (position > 0, position)
+        };
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "closed_at": close_result.closed_at,
+            "extraction_triggered": extraction_triggered,
+            "queue_position": queue_position,
+        }))
+        .map_err(|error| rmcp::Error::new(ErrorCode(-32003), error.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
@@ -1663,6 +1875,13 @@ mod tests {
         let _tool_methods = (
             QuaidServer::memory_get
                 as fn(&QuaidServer, MemoryGetInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_add_turn
+                as fn(&QuaidServer, MemoryAddTurnInput) -> Result<CallToolResult, rmcp::Error>,
+            QuaidServer::memory_close_session
+                as fn(
+                    &QuaidServer,
+                    MemoryCloseSessionInput,
+                ) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_put
                 as fn(&QuaidServer, MemoryPutInput) -> Result<CallToolResult, rmcp::Error>,
             QuaidServer::memory_query
@@ -1686,6 +1905,94 @@ mod tests {
         );
 
         assert!(info.capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn memory_add_turn_skips_enqueue_when_extraction_is_disabled() {
+        let (_dir, conn) = open_test_db();
+        let server = QuaidServer::new(conn);
+
+        let result = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-disabled".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap();
+
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(payload["turn_id"], "session-disabled:1");
+        assert!(payload["extraction_scheduled_at"].is_null());
+        let db = server.db.lock().unwrap();
+        let queue_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM extraction_queue", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(queue_count, 0);
+    }
+
+    #[test]
+    fn memory_add_turn_returns_conflict_error_for_closed_session() {
+        let (dir, conn) = open_test_db();
+        let conversation_dir = dir.path().join("vault").join("conversations").join("2026-05-03");
+        fs::create_dir_all(&conversation_dir).unwrap();
+        fs::write(
+            conversation_dir.join("session-closed.md"),
+            concat!(
+                "---\n",
+                "type: conversation\n",
+                "session_id: session-closed\n",
+                "date: 2026-05-03\n",
+                "started_at: 2026-05-03T09:14:22Z\n",
+                "status: closed\n",
+                "closed_at: 2026-05-03T09:15:00Z\n",
+                "last_extracted_at: null\n",
+                "last_extracted_turn: 1\n",
+                "---\n\n",
+                "## Turn 1 · user · 2026-05-03T09:14:22Z\n\n",
+                "done\n"
+            ),
+        )
+        .unwrap();
+        let server = QuaidServer::new(conn);
+
+        let error = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-closed".to_string(),
+                role: "assistant".to_string(),
+                content: "late reply".to_string(),
+                timestamp: Some("2026-05-03T09:16:00Z".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32009));
+        assert!(error.message.contains("ConflictError"));
+    }
+
+    #[test]
+    fn memory_add_turn_returns_config_error_for_missing_writable_root() {
+        let (_dir, conn) = open_test_db();
+        conn.execute("UPDATE collections SET root_path = '' WHERE id = 1", [])
+            .unwrap();
+        let server = QuaidServer::new(conn);
+
+        let error = server
+            .memory_add_turn(MemoryAddTurnInput {
+                session_id: "session-config".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                timestamp: Some("2026-05-03T09:14:22Z".to_string()),
+                metadata: None,
+                namespace: None,
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode(-32002));
+        assert!(error.message.contains("ConfigError"));
     }
 
     #[test]

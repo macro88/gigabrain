@@ -84,6 +84,56 @@ pub fn enqueue(
     })
 }
 
+pub fn session_queue_key(namespace: Option<&str>, session_id: &str) -> String {
+    match namespace.filter(|value| !value.is_empty()) {
+        Some(namespace) => format!("{namespace}::{session_id}"),
+        None => session_id.to_owned(),
+    }
+}
+
+pub fn scheduled_timestamp_after_ms(
+    conn: &Connection,
+    offset_ms: i64,
+) -> Result<String, ExtractionQueueError> {
+    conn.query_row(
+        "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', julianday('now') + (?1 / 86400000.0))",
+        [offset_ms],
+        |row| row.get(0),
+    )
+    .map_err(ExtractionQueueError::from)
+}
+
+pub fn pending_queue_position(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<u32>, ExtractionQueueError> {
+    let pending = conn
+        .query_row(
+            "SELECT id, scheduled_for
+             FROM extraction_queue
+             WHERE session_id = ?1 AND status = 'pending'
+             ORDER BY scheduled_for, id
+             LIMIT 1",
+            [session_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+
+    let Some((job_id, scheduled_for)) = pending else {
+        return Ok(None);
+    };
+
+    let position: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM extraction_queue
+         WHERE status = 'pending'
+           AND (scheduled_for < ?1 OR (scheduled_for = ?1 AND id <= ?2))",
+        params![scheduled_for, job_id],
+        |row| row.get(0),
+    )?;
+    Ok(Some(position as u32))
+}
+
 pub fn dequeue(conn: &Connection) -> Result<Option<ExtractionJob>, ExtractionQueueError> {
     recover_expired_leases(conn)?;
     let now = current_timestamp(conn)?;
@@ -215,7 +265,7 @@ fn max_retries(conn: &Connection) -> Result<i64, ExtractionQueueError> {
         })
 }
 
-fn current_timestamp(conn: &Connection) -> Result<String, ExtractionQueueError> {
+pub fn current_timestamp(conn: &Connection) -> Result<String, ExtractionQueueError> {
     conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')", [], |row| {
         row.get(0)
     })
@@ -363,5 +413,47 @@ mod tests {
         let error = max_retries(&conn).unwrap_err();
 
         assert!(error.to_string().contains("invalid extraction.max_retries"));
+    }
+
+    #[test]
+    fn session_queue_key_prefixes_namespace_only_when_present() {
+        assert_eq!(session_queue_key(None, "s1"), "s1");
+        assert_eq!(session_queue_key(Some(""), "s1"), "s1");
+        assert_eq!(session_queue_key(Some("alpha"), "s1"), "alpha::s1");
+    }
+
+    #[test]
+    fn pending_queue_position_counts_jobs_ahead_of_session() {
+        let conn = configured_connection();
+        enqueue(
+            &conn,
+            "first",
+            "conversations/2026-05-03/first.md",
+            ExtractionTriggerKind::Debounce,
+            "2000-01-01T00:00:01Z",
+        )
+        .unwrap();
+        enqueue(
+            &conn,
+            "second",
+            "conversations/2026-05-03/second.md",
+            ExtractionTriggerKind::Debounce,
+            "2000-01-01T00:00:02Z",
+        )
+        .unwrap();
+
+        assert_eq!(pending_queue_position(&conn, "first").unwrap(), Some(1));
+        assert_eq!(pending_queue_position(&conn, "second").unwrap(), Some(2));
+        assert_eq!(pending_queue_position(&conn, "missing").unwrap(), None);
+    }
+
+    #[test]
+    fn scheduled_timestamp_after_ms_returns_iso_timestamp() {
+        let conn = configured_connection();
+
+        let scheduled = scheduled_timestamp_after_ms(&conn, 5000).unwrap();
+
+        assert_eq!(scheduled.len(), 20);
+        assert!(scheduled.ends_with('Z'));
     }
 }

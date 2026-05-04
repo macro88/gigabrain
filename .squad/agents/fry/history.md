@@ -4,6 +4,7 @@
 
 ## Learnings
 
+- [2026-05-04T07:22:12.881+08:00] Conversation-session Wave 2 needed two tiny but coupled contracts to stay truthful: persist `closed_at` in conversation frontmatter so `memory_close_session` can re-close idempotently without rewriting, and qualify queue `session_id` values with namespace internally so identical session ids do not collapse across namespace-local extraction queues.
 - [2026-05-04T07:22:12.881+08:00] Conversation-memory slice 1 can stay v8 without widening migration scope: keep the existing `pages.type` column, add the new supersede/queue artefacts in-place, and make the `idx_pages_session` expression index `json_valid(frontmatter)`-guarded so malformed-frontmatter rows/tests keep opening instead of failing at insert time.
 - [2026-05-04T07:22:12.881+08:00] Supersede-chain writes stay safest when the predecessor flip is centralized in one helper that runs inside the writer transaction after the new page row exists: that keeps `supersedes` frontmatter, `pages.superseded_by`, raw-import rotation, and non-head rejection aligned across both `put` and `ingest`.
 - [2026-04-30T12:07:19.084+08:00] Batch 5 seam map: `start_serve_runtime` owns the right lifecycle hook for `serve_sessions.ipc_path`, but `commands\serve.rs` / `src\mcp\server.rs` still expose only stdio transport and a `QuaidServer` with no session context, so truthful IPC will need a shared server/session seam plus a `whoami` cross-check surface before `quaid put` can proxy safely.

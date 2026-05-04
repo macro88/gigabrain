@@ -94,6 +94,11 @@ pub fn render(file: &ConversationFile) -> String {
     out.push_str("status: ");
     out.push_str(file.frontmatter.status.as_str());
     out.push('\n');
+    if let Some(value) = file.frontmatter.closed_at.as_deref() {
+        out.push_str("closed_at: ");
+        out.push_str(value);
+        out.push('\n');
+    }
     out.push_str("last_extracted_at: ");
     if let Some(value) = file.frontmatter.last_extracted_at.as_deref() {
         out.push_str(value);
@@ -193,6 +198,7 @@ fn parse_frontmatter(
     let mut date = None;
     let mut started_at = None;
     let mut status = None;
+    let mut closed_at = None;
     let mut last_extracted_at = None;
     let mut last_extracted_turn = None;
 
@@ -214,6 +220,13 @@ fn parse_frontmatter(
             "date" => date = Some(value),
             "started_at" => started_at = Some(value),
             "status" => status = Some(value),
+            "closed_at" => {
+                closed_at = if value.is_empty() || value == "null" {
+                    None
+                } else {
+                    Some(value)
+                };
+            }
             "last_extracted_at" => {
                 last_extracted_at = if value.is_empty() || value == "null" {
                     None
@@ -263,6 +276,7 @@ fn parse_frontmatter(
                 message: "missing started_at".to_owned(),
             })?,
             status,
+            closed_at,
             last_extracted_at,
             last_extracted_turn: last_extracted_turn.ok_or_else(|| {
                 ConversationFormatError::InvalidFrontmatter {
@@ -420,6 +434,7 @@ mod tests {
                 date: "2026-05-03".to_owned(),
                 started_at: "2026-05-03T09:14:22Z".to_owned(),
                 status: ConversationStatus::Open,
+                closed_at: None,
                 last_extracted_at: Some("2026-05-03T10:30:18Z".to_owned()),
                 last_extracted_turn: 2,
             },

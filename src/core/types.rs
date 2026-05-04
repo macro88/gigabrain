@@ -159,6 +159,7 @@ pub struct ConversationFrontmatter {
     pub date: String,
     pub started_at: String,
     pub status: ConversationStatus,
+    pub closed_at: Option<String>,
     pub last_extracted_at: Option<String>,
     pub last_extracted_turn: i64,
 }
@@ -257,6 +258,13 @@ pub struct TurnWriteResult {
     pub turn_id: String,
     pub ordinal: i64,
     pub conversation_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloseSessionResult {
+    pub closed_at: String,
+    pub conversation_path: String,
+    pub newly_closed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -532,6 +540,7 @@ mod tests {
                 date: "2026-05-03".to_string(),
                 started_at: "2026-05-03T09:14:22Z".to_string(),
                 status: ConversationStatus::Open,
+                closed_at: None,
                 last_extracted_at: Some("2026-05-03T10:00:00Z".to_string()),
                 last_extracted_turn: 7,
             },
