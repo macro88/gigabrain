@@ -10,6 +10,9 @@
 - [2026-04-29T21:29:11.071+08:00] In a release worktree, never assume the checked-out HEAD is the tag target. Compare the intended SHA to `origin/main` and diff the release-critical files (`Cargo.toml`, release workflow, asset manifest, and public install docs) before tagging the exact commit.
 - [2026-05-04T07:22:12.881+08:00] For Quaid release lanes, green local gates are not enough for a truthful draft PR: the branch must be pushed and coherent, public version/tool-count copy must match the real landed scope, and moved-file links like `roadmap.md` / `MIGRATION.md` must either be repaired or preserved.
 - [2026-05-04T07:22:12.881+08:00] When a branch inherits broader roadmap/spec ancestry than its actually landed implementation slice, a truthful draft PR has to name the exact pushed slice, call out the ancestry noise, and list explicit non-claims so unfinished capabilities are not read as shipped.
+- [2026-05-04T07:22:12.881+08:00] When a draft PR picks up a new landed slice mid-flight, update the body immediately: name the exact pushed commit-backed surface, move the "remaining work starts at" boundary, and keep explicit non-claims so reviewers do not mistake proposal scope for shipped scope.
+- [2026-05-04T07:22:12.881+08:00] GitHub `mergeable_state: dirty` is not just stale by default; confirm with a merge simulation. For conversation-memory work, the minimal coordinator action can be a narrow main refresh plus resolving spec-only add/add conflicts rather than any product rework.
+- [2026-05-04T07:22:12.881+08:00] When a draft PR blocker is cleared by a follow-up fix, refresh the body to say the slice is now approved, name the specific follow-up seam it closed, and keep the larger change pinned to the next unfinished task boundary.
 
 ## 20260429T173541Z — Team sync
 
