@@ -13,6 +13,8 @@
 
 ## 2. ADD-only supersede chain — page-level support
 
+> **Truth note (Mom, 2026-05-04T07:22:12.881+08:00):** Professor's slice-2 rejection is now repaired for `2.3` and `2.5`: Unix write-through preflights `supersedes` before sentinel/tempfile/rename work starts, and tests now prove a rejected non-head supersede leaves the vault and active raw source bytes unchanged while returning the typed supersede conflict.
+
 - [x] 2.1 Keep `superseded_by: Option<i64>` on `Page` (or equivalent) in `src/core/types.rs` as landed baseline plumbing for the remaining supersede work
 - [x] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)
 - [x] 2.3 Reject writes that attempt to supersede an already-superseded (non-head) page; return a typed error to the caller

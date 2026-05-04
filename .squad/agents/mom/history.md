@@ -18,6 +18,10 @@
 - DEFAULT column is schema contract: discriminator early when same table stores two conceptually different row kinds.
 - Error string contracts are bidirectional: all producers and consumers must agree. Enumerate all expectations before choosing format.
 
+## Learnings
+
+- [2026-05-04T07:22:12.881+08:00] On rename-before-commit write paths, typed semantic refusals need a preflight gate before sentinel/tempfile/rename, but the in-transaction check must still stay in place as the race backstop. Honest proof is blocked-state evidence: no new vault file, no new active raw bytes, no recovery escalation.
+
 ---
 
 ## Archived Sessions

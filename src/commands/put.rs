@@ -262,23 +262,35 @@ fn put_from_string_with_output(
         &relative_path,
         || -> anyhow::Result<(PreparedPut, PutOutcome)> {
             maybe_block_inside_write_lock(db);
-            let existing_row: Option<(i64, Option<String>)> = match db
+            let existing_row: Option<(i64, i64, Option<String>)> = match db
                 .prepare(
-                    "SELECT version, uuid
+                    "SELECT id, version, uuid
                      FROM pages
                      WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
                 )?
                 .query_row(
                     rusqlite::params![resolved.collection_id, namespace, slug],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 ) {
                 Ok(v) => Some(v),
                 Err(rusqlite::Error::QueryReturnedNoRows) => None,
                 Err(e) => return Err(e.into()),
             };
+            let current_page_id = existing_row.as_ref().map(|(page_id, _, _)| *page_id);
             let page_uuid = page_uuid::resolve_page_uuid(
                 &frontmatter,
-                existing_row.as_ref().and_then(|(_, uuid)| uuid.as_deref()),
+                existing_row
+                    .as_ref()
+                    .and_then(|(_, _, uuid)| uuid.as_deref()),
+            )?;
+            let supersedes = frontmatter.get("supersedes").cloned();
+            supersede::validate_supersede_target(
+                db,
+                resolved.collection_id,
+                &namespace,
+                current_page_id,
+                slug,
+                supersedes.as_deref(),
             )?;
             let prepared = PreparedPut {
                 collection_id: resolved.collection_id,
@@ -292,11 +304,11 @@ fn put_from_string_with_output(
                 compiled_truth: compiled_truth.clone(),
                 timeline: timeline.clone(),
                 frontmatter_json: serde_json::to_string(&frontmatter)?,
-                supersedes: frontmatter.get("supersedes").cloned(),
+                supersedes,
                 wing: wing.clone(),
                 room: room.clone(),
                 now: now.clone(),
-                current_version: existing_row.map(|(version, _)| version),
+                current_version: existing_row.map(|(_, version, _)| version),
                 sha256: sha256_hex(content.as_bytes()),
             };
             let outcome = persist_with_vault_write(
@@ -1753,6 +1765,64 @@ mod tests {
             .unwrap(),
             0
         );
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_non_head_supersede_rejects_before_write_through_mutation() {
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+
+        let a_path = vault_root.join("facts").join("a.md");
+        let b_path = vault_root.join("facts").join("b.md");
+        let a_disk_before = std::fs::read_to_string(&a_path).unwrap();
+        let b_disk_before = std::fs::read_to_string(&b_path).unwrap();
+        let a_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/a");
+        let b_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/b");
+
+        let error = put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SupersedeConflictError"));
+        assert!(!error.to_string().contains("PostRenameRecoveryPendingError"));
+        assert_eq!(page_count(&conn, "facts/c"), 0);
+        assert!(!vault_root.join("facts").join("c.md").exists());
+        assert_eq!(std::fs::read_to_string(a_path).unwrap(), a_disk_before);
+        assert_eq!(std::fs::read_to_string(b_path).unwrap(), b_disk_before);
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/a"),
+            a_raw_before
+        );
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/b"),
+            b_raw_before
+        );
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/a"), 1);
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/b"), 1);
+        assert_eq!(collection_needs_full_sync(&conn, 1), 0);
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
         assert_eq!(
             superseded_by_for_slug(&conn, "facts/a"),
             Some(page_id_for_slug(&conn, "facts/b"))

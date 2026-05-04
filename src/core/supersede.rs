@@ -70,36 +70,8 @@ pub fn reconcile_supersede_chain(
     page_slug: &str,
     supersedes: Option<&str>,
 ) -> Result<(), SupersedeError> {
-    let desired_target = supersedes
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| resolve_supersede_target(conn, collection_id, namespace, value))
-        .transpose()?;
-
-    if let Some(target) = desired_target.as_ref() {
-        if target.id == page_id {
-            return Err(SupersedeError::SelfReference {
-                slug: page_slug.to_owned(),
-            });
-        }
-
-        let current_successor: Option<i64> = conn
-            .query_row(
-                "SELECT superseded_by FROM pages WHERE id = ?1",
-                [target.id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-        if let Some(successor_id) = current_successor {
-            if successor_id != page_id {
-                return Err(SupersedeError::NonHeadTarget {
-                    slug: target.canonical_slug.clone(),
-                    successor_slug: canonical_slug_by_page_id(conn, successor_id)?,
-                });
-            }
-        }
-    }
+    let desired_target = desired_target(conn, collection_id, namespace, supersedes)?;
+    ensure_target_is_valid(conn, Some(page_id), page_slug, desired_target.as_ref())?;
 
     let existing_predecessor_id: Option<i64> = conn
         .query_row(
@@ -146,6 +118,67 @@ pub fn reconcile_supersede_chain(
                 slug: target.canonical_slug,
                 successor_slug: successor_slug_by_id(conn, successor_id)?
                     .unwrap_or_else(|| page_slug.to_owned()),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_supersede_target(
+    conn: &Connection,
+    collection_id: i64,
+    namespace: &str,
+    current_page_id: Option<i64>,
+    page_slug: &str,
+    supersedes: Option<&str>,
+) -> Result<(), SupersedeError> {
+    let desired_target = desired_target(conn, collection_id, namespace, supersedes)?;
+    ensure_target_is_valid(conn, current_page_id, page_slug, desired_target.as_ref())
+}
+
+fn desired_target(
+    conn: &Connection,
+    collection_id: i64,
+    namespace: &str,
+    supersedes: Option<&str>,
+) -> Result<Option<SupersedeTarget>, SupersedeError> {
+    supersedes
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| resolve_supersede_target(conn, collection_id, namespace, value))
+        .transpose()
+}
+
+fn ensure_target_is_valid(
+    conn: &Connection,
+    current_page_id: Option<i64>,
+    page_slug: &str,
+    desired_target: Option<&SupersedeTarget>,
+) -> Result<(), SupersedeError> {
+    let Some(target) = desired_target else {
+        return Ok(());
+    };
+
+    if current_page_id.is_some_and(|page_id| target.id == page_id) {
+        return Err(SupersedeError::SelfReference {
+            slug: page_slug.to_owned(),
+        });
+    }
+
+    let current_successor: Option<i64> = conn
+        .query_row(
+            "SELECT superseded_by FROM pages WHERE id = ?1",
+            [target.id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(successor_id) = current_successor {
+        if Some(successor_id) != current_page_id {
+            return Err(SupersedeError::NonHeadTarget {
+                slug: target.canonical_slug.clone(),
+                successor_slug: canonical_slug_by_page_id(conn, successor_id)?,
             });
         }
     }
