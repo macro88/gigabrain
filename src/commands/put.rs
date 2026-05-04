@@ -722,6 +722,7 @@ fn persist_with_vault_write(
 }
 
 #[cfg(unix)]
+#[allow(clippy::question_mark)]
 fn persist_with_vault_write(
     db: &Connection,
     prepared: &PreparedPut,
