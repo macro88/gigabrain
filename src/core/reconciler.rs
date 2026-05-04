@@ -2657,8 +2657,20 @@ fn apply_reingest(
         .map_err(|err| ReconcileError::Other(format!("apply_reingest: {err}")))?
         {
             HandleExtractedEditOutcome::Bypass => {}
-            HandleExtractedEditOutcome::WhitespaceNoOp
-            | HandleExtractedEditOutcome::Superseded { .. } => {
+            HandleExtractedEditOutcome::WhitespaceNoOp => {
+                if let Some(old_relative_path) = old_relative_path {
+                    if old_relative_path != relative_path {
+                        file_state::move_file_state(
+                            conn,
+                            collection_id,
+                            &path_to_string(old_relative_path),
+                            &path_to_string(relative_path),
+                        )?;
+                    }
+                }
+                return Ok(ApplyReingestOutcome { created: false });
+            }
+            HandleExtractedEditOutcome::Superseded { .. } => {
                 if let Some(old_relative_path) = old_relative_path {
                     if old_relative_path != relative_path {
                         file_state::delete_file_state(
@@ -3779,6 +3791,113 @@ mod tests {
                 .unwrap();
         assert_eq!(before_file_state.sha256, after_file_state.sha256);
         assert_eq!(before_file_state.mtime_ns, after_file_state.mtime_ns);
+    }
+
+    #[test]
+    fn apply_reingest_rename_only_extracted_whitespace_noop_moves_file_state_to_new_path() {
+        let conn = open_test_db();
+        let root = TempDir::new().unwrap();
+        let collection = insert_collection(&conn, root.path());
+        let old_relative_path = PathBuf::from("extracted/preferences/noop.md");
+        let new_relative_path = PathBuf::from("extracted/preferences/noop-renamed.md");
+        let original = "---\nslug: preferences/noop\ntitle: Noop\ntype: preference\n---\nbody\n";
+        fs::create_dir_all(root.path().join("extracted").join("preferences")).unwrap();
+        fs::write(root.path().join(&old_relative_path), original).unwrap();
+        let original_stat = file_state::stat_file(&root.path().join(&old_relative_path)).unwrap();
+        let original_sha = file_state::hash_file(&root.path().join(&old_relative_path)).unwrap();
+        conn.execute(
+            "INSERT INTO pages
+                 (collection_id, slug, uuid, type, title, summary, compiled_truth, timeline, frontmatter, wing, room)
+             VALUES (?1, 'preferences/noop', ?2, 'preference', 'Noop', 'body', 'body', '', ?3, 'preferences', '')",
+            rusqlite::params![
+                collection.id,
+                page_uuid::generate_uuid_v7(),
+                serde_json::json!({"slug":"preferences/noop","title":"Noop","type":"preference"}).to_string()
+            ],
+        )
+        .unwrap();
+        let page_id = conn.last_insert_rowid();
+        file_state::upsert_file_state(
+            &conn,
+            collection.id,
+            &path_to_string(&old_relative_path),
+            page_id,
+            &original_stat,
+            &original_sha,
+        )
+        .unwrap();
+        raw_imports::rotate_active_raw_import(
+            &conn,
+            page_id,
+            &root.path().join(&old_relative_path).to_string_lossy(),
+            original.as_bytes(),
+        )
+        .unwrap();
+        let before_file_state =
+            file_state::get_file_state(&conn, collection.id, &path_to_string(&old_relative_path))
+                .unwrap()
+                .unwrap();
+        let before_version: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let before_raw_import_rows = total_raw_import_count(&conn, page_id);
+        let before_active_raw_bytes = active_raw_import_bytes(&conn, page_id);
+
+        fs::rename(
+            root.path().join(&old_relative_path),
+            root.path().join(&new_relative_path),
+        )
+        .unwrap();
+        let renamed_stat = file_state::stat_file(&root.path().join(&new_relative_path)).unwrap();
+
+        let outcome = apply_reingest(
+            &conn,
+            collection.id,
+            root.path(),
+            Some(page_id),
+            Some(old_relative_path.as_path()),
+            new_relative_path.as_path(),
+            &renamed_stat,
+        )
+        .unwrap();
+
+        let old_file_state =
+            file_state::get_file_state(&conn, collection.id, &path_to_string(&old_relative_path))
+                .unwrap();
+        let new_file_state =
+            file_state::get_file_state(&conn, collection.id, &path_to_string(&new_relative_path))
+                .unwrap()
+                .expect("renamed whitespace noop must stay tracked at the new path");
+        let after_version: i64 = conn
+            .query_row(
+                "SELECT version FROM pages WHERE id = ?1",
+                [page_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let walked = HashMap::from([(new_relative_path.clone(), renamed_stat.clone())]);
+        let diff = stat_diff_from_walk(&conn, collection.id, root.path(), walked).unwrap();
+
+        assert!(!outcome.created);
+        assert!(old_file_state.is_none());
+        assert_eq!(new_file_state.page_id, page_id);
+        assert_eq!(new_file_state.sha256, before_file_state.sha256);
+        assert_eq!(before_version, after_version);
+        assert_eq!(
+            before_raw_import_rows,
+            total_raw_import_count(&conn, page_id)
+        );
+        assert_eq!(
+            before_active_raw_bytes,
+            active_raw_import_bytes(&conn, page_id)
+        );
+        assert!(diff.new.is_empty());
+        assert!(diff.modified.is_empty());
+        assert!(diff.unchanged.contains(&new_relative_path));
     }
 
     #[cfg(unix)]
