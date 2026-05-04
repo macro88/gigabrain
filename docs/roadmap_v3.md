@@ -9,7 +9,8 @@ aliases: [quaid-roadmap]
 # Quaid Product Roadmap
 
 **Last updated:** May 3, 2026
-**Current release:** v0.17.0
+**Latest public release:** v0.17.0
+**Current release lane:** v0.18.0
 **Benchmark baseline:** DAB v1 213/215 (99%), LoCoMo 0.1%, LongMemEval 0.0%, BEAM 0.0%
 
 ---
@@ -40,7 +41,7 @@ Temporal links, assertions, contradiction detection, progressive retrieval, 16 M
 ### Phase 3 - Skills, Benchmarks, CLI Polish (v0.9.2) ✅
 All 8 skills production-ready, BEIR regression gate, benchmark harnesses (LoCoMo, LongMemEval, BEAM adapters).
 
-### Phase 4 - Vault Sync Engine (v0.9.x → v0.17.0) 🔄 In Progress
+### Phase 4 - Vault Sync Engine (v0.9.x → v0.18.0) 🔄 In Progress
 Multi-collection live filesystem sync. `quaid collection add/sync` replaces `quaid import`.
 Schema v6+, live watcher, write safety, namespace isolation shipped.
 

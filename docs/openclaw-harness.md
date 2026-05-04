@@ -171,7 +171,7 @@ Live results: [benchmark.quaid.app](https://benchmark.quaid.app)
 
 ## Migration from GigaBrain / pre-v0.9.9
 
-Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MIGRATION.md](../MIGRATION.md) for the full migration guide.
+Existing databases (schema v5) are incompatible with v0.9.9 (schema v6). See [MIGRATION.md](MIGRATION.md) for the full migration guide.
 
 Quick summary:
 
