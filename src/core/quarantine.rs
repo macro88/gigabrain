@@ -202,6 +202,7 @@ impl QuarantinedPageRecord {
             slug: self.slug.clone(),
             uuid: self.uuid.clone(),
             page_type: self.page_type.clone(),
+            superseded_by: None,
             title: self.title.clone(),
             summary: self.summary.clone(),
             compiled_truth: self.compiled_truth.clone(),

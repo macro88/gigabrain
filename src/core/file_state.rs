@@ -180,6 +180,23 @@ pub fn upsert_file_state(
     Ok(())
 }
 
+/// Move a tracked file to a new relative path without refreshing its stat/hash snapshot.
+pub fn move_file_state(
+    conn: &Connection,
+    collection_id: i64,
+    from_relative_path: &str,
+    to_relative_path: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE file_state
+         SET relative_path = ?1,
+             last_seen_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE collection_id = ?2 AND relative_path = ?3",
+        rusqlite::params![to_relative_path, collection_id, from_relative_path],
+    )?;
+    Ok(())
+}
+
 /// Delete a `file_state` row (typically on page hard-delete).
 pub fn delete_file_state(
     conn: &Connection,

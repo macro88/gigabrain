@@ -34,6 +34,26 @@ git diff --name-status <target-sha>..origin/main -- \
 
 Why: a parked release worktree can be on a different HEAD than the commit you actually intend to ship. Tag the requested SHA, not "whatever this worktree currently has checked out."
 
+### 1a. Reintegrate side-lane release prep from the remote head
+
+If release-prep work (manifest bump, doc-truth pass, release workflow fixes) landed on side branches while your main checkout is dirty or stale, do **not** merge from the parked checkout. Start from the remote PR branch head in a clean sibling worktree, then replay the side-lane commits there:
+
+```bash
+git fetch origin --prune --tags
+git worktree add ../quaid-v0.18.0-lane -b leela/v0.18.0-lane origin/feat/slm-conversation-mem
+cd ../quaid-v0.18.0-lane
+
+git cherry-pick -x <release-lane-commit>
+git cherry-pick -x <release-doc-truth-commit>
+
+cargo fmt --all -- --check
+cargo test
+
+git push origin HEAD:feat/slm-conversation-mem
+```
+
+If the PR is already ready for review and the product tasks are complete, refresh the PR title/body in the same pass so it no longer claims any product seam is still landing. Remaining work should be framed only as review, CI, and final release-lane completion.
+
 ### 2. Create a named release branch from current HEAD
 
 ```bash

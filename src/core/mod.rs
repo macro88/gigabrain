@@ -1,6 +1,7 @@
 pub mod assertions;
 pub mod chunking;
 pub mod collections;
+pub mod conversation;
 pub mod db;
 pub mod file_state;
 pub mod fs_safety;
@@ -21,5 +22,6 @@ pub mod quarantine;
 pub mod raw_imports;
 pub mod reconciler;
 pub mod search;
+pub mod supersede;
 pub mod types;
 pub mod vault_sync;

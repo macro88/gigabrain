@@ -59,7 +59,7 @@ pub fn get_page_by_key_with_namespace(
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let mut sql = String::from(
         "SELECT slug, uuid, type, title, summary, compiled_truth, timeline, \
-                frontmatter, wing, room, version, created_at, updated_at, \
+                frontmatter, wing, room, superseded_by, version, created_at, updated_at, \
                 truth_updated_at, timeline_updated_at \
            FROM pages WHERE collection_id = ?1 AND slug = ?2",
     );
@@ -104,6 +104,7 @@ pub fn get_page_by_key_with_namespace(
                 )
             })?,
             page_type: row.get(2)?,
+            superseded_by: row.get(10)?,
             title: row.get(3)?,
             summary: row.get(4)?,
             compiled_truth: row.get(5)?,
@@ -111,11 +112,11 @@ pub fn get_page_by_key_with_namespace(
             frontmatter,
             wing: row.get(8)?,
             room: row.get(9)?,
-            version: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
-            truth_updated_at: row.get(13)?,
-            timeline_updated_at: row.get(14)?,
+            version: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
+            truth_updated_at: row.get(14)?,
+            timeline_updated_at: row.get(15)?,
         })
     });
 
@@ -130,6 +131,7 @@ pub fn get_page_by_key_with_namespace(
 
 fn canonicalize_page_for_output(page: Page, resolved: &vault_sync::ResolvedSlug) -> Page {
     let mut page = page;
+    page_uuid::canonicalize_frontmatter_uuid(&mut page.frontmatter, &page.uuid);
     page.slug = resolved.canonical_slug();
     page.frontmatter
         .insert("slug".to_string(), resolved.canonical_slug());
@@ -242,5 +244,47 @@ mod tests {
 
         assert_eq!(page.frontmatter.get("title").unwrap(), "Carol");
         assert_eq!(page.frontmatter.get("type").unwrap(), "person");
+    }
+
+    #[test]
+    fn canonicalize_page_for_output_restores_quaid_id_frontmatter() {
+        let page = Page {
+            slug: "people/alice".to_string(),
+            uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
+            page_type: "person".to_string(),
+            superseded_by: None,
+            title: "Alice".to_string(),
+            summary: "summary".to_string(),
+            compiled_truth: "truth".to_string(),
+            timeline: String::new(),
+            frontmatter: HashMap::from([
+                ("memory_id".to_string(), "legacy".to_string()),
+                ("title".to_string(), "Alice".to_string()),
+            ]),
+            wing: "people".to_string(),
+            room: String::new(),
+            version: 1,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            truth_updated_at: "2026-01-01T00:00:00Z".to_string(),
+            timeline_updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let resolved = vault_sync::ResolvedSlug {
+            collection_id: 1,
+            collection_name: "default".to_string(),
+            slug: "people/alice".to_string(),
+        };
+
+        let page = canonicalize_page_for_output(page, &resolved);
+
+        assert_eq!(
+            page.frontmatter.get("quaid_id").map(String::as_str),
+            Some("01969f11-9448-7d79-8d3f-c68f54761234")
+        );
+        assert!(!page.frontmatter.contains_key("memory_id"));
+        assert_eq!(
+            page.frontmatter.get("slug").map(String::as_str),
+            Some("default::people/alice")
+        );
     }
 }

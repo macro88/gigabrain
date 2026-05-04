@@ -22,16 +22,31 @@ fn namespaced_write_is_visible_to_namespace_global_filter_and_unfiltered_query()
         None,
         None,
         Some("test-ns"),
+        false,
         &conn,
         10,
     )
     .expect("query namespace");
-    let global_only =
-        hybrid_search_canonical_with_namespace("namespaceprobe", None, None, Some(""), &conn, 10)
-            .expect("query global namespace");
-    let unfiltered =
-        hybrid_search_canonical_with_namespace("namespaceprobe", None, None, None, &conn, 10)
-            .expect("query all namespaces");
+    let global_only = hybrid_search_canonical_with_namespace(
+        "namespaceprobe",
+        None,
+        None,
+        Some(""),
+        false,
+        &conn,
+        10,
+    )
+    .expect("query global namespace");
+    let unfiltered = hybrid_search_canonical_with_namespace(
+        "namespaceprobe",
+        None,
+        None,
+        None,
+        false,
+        &conn,
+        10,
+    )
+    .expect("query all namespaces");
 
     assert!(namespaced
         .iter()

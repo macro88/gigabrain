@@ -1,144 +1,19 @@
-# scruffy history
+# scruffy — History Summary
 
-## 20260429T173541Z — Team sync
+**Last Summarized:** 2026-05-04T00:00:30Z
 
-**Scribe update:** Decisions merged (inbox → decisions.md), orchestration logs written, Batch 3 merge lane BLOCKED by codecov/patch.
+**Active Work:** Conversation-memory improvements (truth-repair, slice validation)
 
-## 20260429T132911Z — Session: PR #122 Blocker Fix
+**Status:** Contributing to collaborative batch session
 
-**Status:** COMPLETE
-**Commit:** c5b2b0c
-**PR:** #122 (spec/vault-sync-engine-batch3-v0120)
-
-**Summary:** Cleared Copilot threads, added coverage backfill, pushed c5b2b0c. PR #122 now waiting only on rerun completion.
-
-**Details:**
-- Addressed codecov/patch coverage deficit
-- Cleaned up review thread backlog
-- Branch ready for policy merge
-
-**Next gate:** GitHub CI/workflow rerun
+_Archived history available in history-archive.md_
 
 ## Learnings
 
-- 2026-04-30T06:37:20.531+08:00 — Read-only Batch 4 assessment: the honest local coverage loop is `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` followed by `cargo llvm-cov report --json --output-path target\llvm-cov-report.json`; current baseline is 89.47% total, with `src\core\vault_sync.rs` (83.22% lines) as the main Batch 4 coverage risk.
-- 2026-04-30T06:37:20.531+08:00 — Batch 4 closure truth guard: keep `12.6`, `12.6a`, `12.6b`, and `12.7` open until `quaid put` has real live-owner routing tests, and until bulk UUID write surfaces actually exist; current code still rejects `--write-quaid-id` as deferred and has no `migrate-uuids` subcommand.
-- [2026-04-30T06:37:20Z] Batch 4 coverage baseline decision merged to team ledger. Fresh llvm-cov run required after implementation lands.
-- 2026-04-30T12:07:19.084+08:00 — Batch 5 preflight: the current repo gate is `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` at 90.95% total (24,789 / 27,257), but `src\core\vault_sync.rs` is still only 83.22% (3,193 / 3,837), so new IPC work must ship with near-complete branch coverage in `vault_sync.rs` and `put.rs` or the lane will fall back under 90%.
-- 2026-04-30T12:07:19.084+08:00 — Best Batch 5 test split: keep socket placement, stale-socket cleanup, bind-audit, and server-side peer-refusal proofs as `src\core\vault_sync.rs` unit tests close to `start_serve_runtime`; keep the client-side spoofed-peer / refused-write proof as a subprocess CLI test in `tests\collection_cli_truth.rs`, then re-run llvm-cov summary plus JSON refresh for the truthful gate.
-
-## 2026-04-30T00:30:31Z
-- **Action:** Approved Batch 4 completion and v0.13.0 release status
-- **Status:** APPROVED
-
-**Decisions:**
-
-### Early Seam Coverage Prevents Silent Refactor Failures
-Helper-level tests as integration scaffold. Tests serve double duty: immediate validation of parse/ignore/stat helpers AND early warning system for integration hazards.
-
-### Coverage Delivered
-- parse_slug() routing matrix: all branching cases covered
-- .gbrainignore error-shape contracts: all error codes and line-level reporting fidelity proved
-- file_state stat-diff behavior: ctime/inode-only and mtime/size changes both trigger re-hash
-
-**Validation:** 10 new direct unit tests for coverage seams. All tests pass. Error paths tested and will fail loudly if later changes break contracts.
-
-**Why:** These are touched-surface seams with branchy behavior that future reconciler/watcher work will reuse directly. Guarding them now keeps Batch B credible even before the larger integration paths exist.
-
-**Status:** ✅ COMPLETE. Ready for full reconciler implementation.
-
-## 2026-04-22 Vault Sync Batch C — Re-gate (Approved)
-
-**Session:** Scruffy coverage validation after Leela's targeted repair pass.
-
-**What happened:**
-- Scruffy re-reviewed the repaired Batch C to validate that foundation seams are locked with direct tests, safety-critical stubs explicitly error, and task claims are truthful.
-- Focused on three seams: ile_state::stat_file_fd() (wrapper layer), 
-econciler stubs (error contracts), 	asks.md (truthfulness).
-
-**Key findings:**
-1. **Direct seam coverage locked:** stat_file_fd() directly tested for nofollow preservation and full Unix stat field population. ull_hash_reconcile() and has_db_only_state() directly tested for explicit Err return. stat_diff() foundation behavior (DB rows as "missing") pinned by direct assertion.
-2. **Safety-critical stubs explicitly error:** No more silent success defaults. 
-econcile(), ull_hash_reconcile(), has_db_only_state() all required to return Err("not yet implemented") rather than Ok(empty).
-3. **Task surface truthful:** Unchecked items remain pending; checked items annotated as foundation/scaffold. Deferred walk/hash/apply behavior not claimed complete.
-
-**Validation rerun:**
-- cargo test --quiet ✅
-- GBRAIN_FORCE_HASH_SHIM=1 cargo test --quiet --no-default-features --features bundled,online-model ✅
-
-**Outcome:** APPROVE. Coverage sufficient on touched surface. Safety-critical stub behavior asserted directly. Ready to land.
-
-
-### 2026-04-22 17:02:27 - Vault-Sync Batch E Coverage Lane
-
-**Session:** Lock honest Batch E test coverage on real seams
-
-**Coverage strategy:**
-
-Do not add tests that would accidentally bless incomplete implementation or imply finished behavior. Focus on gbrain_id round-trip fidelity and ingest safety.
-
-**Tests added (and locked):**
-
-1. **gbrain_id frontmatter round-trip:**
-   - parse_frontmatter() preserves gbrain_id
-   - render_page() re-emits when present
-   - import/export round-trip fidelity
-   - serde serialization preserves the field
-
-2. **Ingest non-rewrite behavior:**
-   - Default ingest does not modify source markdown
-   - Generated UUIDs stored in DB only, not in file
-   - Git worktree stays clean after import
-
-3. **Explicit delete-vs-quarantine outcomes:**
-   - Quarantine classification on ambiguous/trivial cases
-   - Delete predicate respects source_kind boundaries
-
-**Tests explicitly NOT added:**
-
-- Rename inference (native events, UUID matching, hash pairing) — these are deferred to Batch F apply pipeline
-- Frontmatter write-back (brain_put UUID preservation) — deferred to later batch
-- Watcher-produced rename events — Group 6 deferred entirely
-
-**Why this matters:**
-
-- gbrain_id is already a data-fidelity guard even before pages.uuid becomes fully non-optional
-- Honest coverage prevents accidental false confidence in incomplete rename logic
-- Round-trip tests survive rename implementation without false-positive regressions
-
-**Validation:**
-
-- cargo test --quiet: all 439 tests pass
-- cargo clippy --quiet -- -D warnings: clean
-- Default model validation: green
-- Online-model validation: green
-
-**Next coverage focus:**
-- Batch F: direct tests for rename inference outcomes (UUID → page_id preservation, hash ambiguity → quarantine)
-- Later: watcher-native event seam once Group 6 lands
-- Batch 1 watcher-reliability coverage map (2026-04-27): the `.quaidignore` lane is now split cleanly: parser-level semantics live in `src/core/ignore_patterns.rs`, while watcher delivery into reload/reconcile is covered directly in `src/core/vault_sync.rs`. The remaining Batch 1 proof debt is overflow recovery timing/gating, native→poll fallback, crash backoff/restart, and watcher-health surfacing. I landed low-conflict guard tests in `src/commands/collection.rs` for the restoring-vs-pending-attach-vs-active-reconcile CLI status split and in `src/core/vault_sync.rs` for `memory_collections.restore_in_progress` only flipping true after a real restore ack (`state='restoring'` + `restore_command_id` + `watcher_released_at`).
-
-## 2026-04-24 Vault-Sync 13.5 Slice Review
-
-Reviewed only the 13.5 MCP read-filter slice on `spec/vault-sync-engine`. `brain_search`, `brain_query`, and `brain_list` now accept optional `collection`, explicit names fail clearly when missing, defaulting follows sole-active-else-write-target, and the CLI/write paths remain unchanged apart from passing the new internal `None` filter parameter. Ran `cargo test --quiet mcp::server`; all scoped MCP server tests passed. Verdict: APPROVE.
-
-## 2026-04-24 Vault-Sync 13.5 Slice Re-review
-
-- Verdict: **APPROVE**
-- The only real hole Nibbler found is now sealed: `brain_query` threads the effective MCP collection filter into `progressive_retrieve()`, `outbound_neighbours()` enforces that filter in SQL during `depth="auto"` expansion, and the new direct MCP regression test proves a filtered query cannot leak across collections through linked-page expansion. The rest of the 13.5 surface stays narrow and honest: `brain_search`, `brain_query`, and `brain_list` still share the same read-filter/default resolver, while CLI paths continue to pass `None` and no write-path or wider-scope claims were added.
-- **Proof seam narrowness guards data-loss surfaces (2026-04-25):** Watcher/quarantine coverage audit landed two epoch-regression proofs and one lifecycle source-invariant proof without widening into restore. The hard-delete guard coverage (every delete path consults DB-only-state) is the highest-value remaining gap. The watcher overflow fallback path (TrySendError::Full branch) is secondary. Restore tests remain deferred until Fry lands no-replace install + post-unlink fsync durability proofs.
-- Reconciler/fs-safety lane check at head `7804234` (2026-04-25): current head already contains coordinator commit `03d932e`, so the clustered Unix-lane expectation repairs are present in source with no further Scruffy test edits needed. `src/core/reconciler.rs` now matches the reconciler truth seam (`walked/new == 2` for the real file plus the non-symlink file under the real directory, modified-page compiled truth is asserted with `trim_end()`, the dirty-recheck test still pins fresh-connection TOCTOU ordering, and the 500-file chunk test truthfully expects zero committed pages because invalid `gbrain_id` is rejected during pre-apply tree scanning before any chunk transaction opens); `src/core/fs_safety.rs` also keeps the symlink-root error kind tolerant across Unix kernels (`InvalidInput | NotADirectory`).
-
-
-- Batch 1 coverage audit complete (2026-04-27T23:51:40Z): Guard tests landed with low conflict. Honest >90% coverage cannot be claimed due to pending implementation-coupled proof for tasks 6.7a, 6.9, 6.10, 6.11. Coverage audit recorded in .squad/orchestration-log/2026-04-27T23-51-40Z-scruffy.md.
-- Batch 1 coverage lift (2026-04-28): the honest Windows coverage command is `cargo llvm-cov --lib --tests --summary-only`, not the bare default invocation. After repairing CLI binary discovery for coverage runs (`tests/common/mod.rs`) and stale lib tests in `src/commands/call.rs` / `src/commands/timeline.rs`, the repo measures **84.51%** line coverage (`20,190 / 23,891`), still **1,312 covered lines short** of a 90% gate. The remaining gap is concentrated in `src/commands/collection.rs` (46.07%), `src/core/reconciler.rs` (59.71%), and `src/core/vault_sync.rs` (77.90%), so Batch 1 is not truthfully shippable from this lane without a dedicated backfill sprint across those three files.
-- Coverage-safe CLI tests (2026-04-28): subprocess tests that invoke `quaid` should resolve the binary through `tests/common/mod.rs::quaid_bin()` rather than raw `env!("CARGO_BIN_EXE_quaid")`. `cargo llvm-cov` on this Windows lane leaves some integration suites with a missing direct env path even though sibling `target\llvm-cov-target\debug\deps\quaid.exe` exists; the fallback helper keeps `tests/collection_cli_truth.rs`, `tests/quarantine_revision_fixes.rs`, and `tests/search_hardening.rs` runnable under both plain `cargo test` and coverage runs.
-
-## Learnings
-
-- 2026-04-29T21:29:11.071+08:00 — Batch 3 revalidation at `67f4091`: compile blockers in `src\core\vault_sync.rs` no longer reproduce under `cargo check --all-targets` or the Windows `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` rerun, but the Windows coverage gate still fails at 88.97% line / 88.07% region. The checked `17.5ww` / `17.5ww2` / `17.5ww3` proofs remain Unix-gated (`#[cfg(unix)]`) in both `tests\collection_cli_truth.rs` and `src\commands\collection.rs`, so this lane cannot honestly certify those task claims by itself.
-- 2026-04-29T21:29:11.071+08:00 — To move the Windows lane honestly, prioritize cross-platform helper tests in `src\commands\collection.rs`, `src\core\reconciler.rs`, and `src\core\vault_sync.rs` over trying to fake Unix-only success paths. When checked tasks stay Unix-proven, annotate `openspec\changes\vault-sync-engine\tasks.md` so the Windows gate stays truthful even after coverage turns green.
-- 2026-04-29T21:29:11.071+08:00 — Superseded by the later Batch 3 repair set on this branch: cross-platform helper coverage landed after `67f4091`, and the merge-lane PR now truthfully claims the Windows validation lane clears the requested >90% line-coverage bar.
-- 2026-04-29T21:29:11.071+08:00 — Merge-lane review blockers were cheapest to clear by tightening error wording to the parser's real contract (`quaid_id` or legacy `memory_id`) and by replacing a source-text ordering assertion with an observable no-rewrite invariant under same-root live-owner refusal. That keeps the ownership/lease seam closed without reopening production hooks just to satisfy review feedback.
-- 2026-04-30T06:37:20.531+08:00 — Batch 4 Windows coverage recheck: a cross-platform MCP OCC happy-path test (`memory_put_update_with_expected_version_returns_updated_status_and_persists_body`) plus two live-owner lease seam tests in `src\core\vault_sync.rs` are safe and pass, but the honest Windows `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` rerun still lands at 89.34% line coverage. The remaining Batch 4 proof debt is still implementation-coupled: `quaid put` has no pre-write live-owner refusal seam for `12.6a`, and `insert_write_dedup()` still returns `Ok(())` on duplicate inserts, so the `12.7` concurrent-dedup failure mode cannot be tested truthfully yet.
-- 2026-04-30T08:30:31.626+08:00 — Batch 4 `12.7` re-review: the worktree now defines the missing dedup contract honestly. `VaultSyncError::DuplicateWriteDedup` is live in `src\core\vault_sync.rs`, `insert_write_dedup()` fails closed on duplicate keys, and `src\commands\put.rs` uses a dedicated cleanup path that preserves the pre-existing registry entry while still unlinking the tempfile and sentinel. The new helper/unit/source-seam tests cover the duplicate-entry branch without pretending integration choreography beyond the landed seam, and validation stayed green under `cargo check --all-targets --quiet`, `cargo test --quiet -j 1`, and `cargo llvm-cov --lib --tests --summary-only --no-clean -j 1` (91.10% line coverage). Verdict from this lane: `12.7` can close now.
+- 2026-05-04T07:22:12.881+08:00 — Supersede/retrieval coverage needs branch-specific proofs beyond the happy-path integration: exact-slug head filtering, progressive expansion filtering, and graph supersede edges each need their own test seam, or coverage claims overstate the slice.
+- 2026-05-04T07:22:12.881+08:00 — On this Windows/stable lane, the honest post-`d98e010` check is `cargo test -j 1` plus `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1`: repo line coverage still clears 90%, but llvm-cov branch mode is nightly-only and the deterministic supersede-race proof in `src\commands\put.rs` stays Unix-gated, so report that limitation instead of overstating branch-proof coverage.
+- 2026-05-04T07:22:12.881+08:00 — For conversation-memory foundations, coverage moves fastest when the proof splits three ways: parser/render round-trips in-module, file-append durability/day-rollover in a focused integration test, and queue semantics in a separate SQLite-backed integration test. That keeps the changed seams honest without dragging MCP wiring into the slice before it exists.
+- 2026-05-04T07:22:12.881+08:00 — After Mom's Wave 1 revision commit `5c88104`, the honest Windows rerecheck is still `cargo test -j 1` plus `RUST_TEST_THREADS=1 cargo llvm-cov --lib --tests --summary-only -j 1`: repo-wide line coverage holds at 90.01%, and the new lease-attempt, cross-process append lock, and explicit `json turn-metadata` fence seams already have direct tests, so no extra padding tests should be invented.
+- 2026-05-04T07:22:12.881+08:00 — For namespaced conversation queues, the durable proof is to key pending extraction rows by an internal `<namespace>::<session_id>` composite while leaving the on-disk session files namespace-local. That closes queue-collapse bleed without changing the public session id contract.
+- 2026-05-04T07:22:12.881+08:00 — For MCP OCC surfaces like `memory_close_action`, the cleanest conflict proof is a thin public handler over a private helper with a pre-write seam; the test can land the competing write on the same connection, assert `ConflictError`, and verify the stale caller's status/note never persisted. On this lane, `cargo test -j 1` plus `cargo llvm-cov --lib --tests --summary-only -j 1` kept honest line coverage at 90.06%.
+- 2026-05-04T07:22:12.881+08:00 — For extracted file-edit coverage, the honest proof is a two-step chain test: first manual edit creates one archived predecessor, second manual edit proves the code relinks the older predecessor to the new archive instead of forking history. Pair that with a reserved `_history` sidecar assertion so on-disk archives never masquerade as live extracted pages.

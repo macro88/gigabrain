@@ -1,0 +1,65 @@
+---
+name: draft-pr-truth-refresh
+version: 1.4
+author: zapp
+last_updated: 2026-05-04T07:22:12.881+08:00
+---
+
+# Draft PR truth refresh
+
+Use this when a draft PR body lags behind newly pushed commits and GitHub reports `mergeable_state: dirty`.
+
+## When to apply
+
+- A new commit lands after the draft PR body was written
+- The PR body still describes an older slice or an older "remaining work starts at" boundary
+- GitHub shows `DIRTY` / `CONFLICTING` and you need to know whether that is a real merge conflict or stale metadata
+
+## Pattern
+
+### 1. Verify the pushed slice first
+
+- Read the PR head SHA
+- Inspect the exact head commit and the touched files/tests
+- If a follow-up fix is what turned the slice from "blocked" to "approved," name that seam directly instead of repeating the older blocked status
+- Update the body to name only the pushed, verified surface
+- Move any "remaining work starts at" marker to the current task boundary
+
+### 2. Separate shipped scope from non-claims
+
+- Name the exact code paths, flags, tools, and tests that landed
+- Keep an explicit list of what is still not claimed
+- If branch ancestry makes the compare view broader than the landed slice, say so directly
+
+### 2a. Split the last wave when reviewer gates split it
+
+- If the remaining product wave no longer moves as one unit, do not keep talking about it as a single in-flight block
+- Name the actively landing seam separately (for example `memory_close_action`)
+- Keep any reviewer-pre-gated seam (for example watcher/file-edit/history work) in the explicit non-claims until that gate is cleared
+- This is especially important when the compare view still contains both slices in planning artifacts; otherwise readers will assume the blocked half is already shipping too
+
+### 2b. Collapse back to one remaining seam when approval lands
+
+- Once the active half of a split final wave is approved, remove it from the "current in-flight scope" section right away
+- Restate the one remaining seam as the only active product scope, but keep its reviewer constraints visible if the work is landing under a pre-gate rather than after a brand-new approval memo
+- Keep the non-claim explicit: "active landing seam" is not the same as "already shipped"
+
+### 3. Triage `dirty` before advising anyone
+
+- Check GitHub's mergeability status
+- Run a merge simulation against current `main`
+- Recompute the exact conflict file list on each refresh; do not reuse yesterday's count, because spec-only add/add conflicts can grow or shrink while the truthful product scope stays the same
+- If conflicts reproduce, report the smallest next action as "refresh from main and resolve these files"
+- If conflicts do not reproduce, treat it as likely stale metadata and avoid overstating the problem
+
+### 4. Keep the coordinator action minimal
+
+- Do not widen the PR scope just to make the body feel complete
+- Do not mark the PR ready unless that was explicitly requested
+- Tell the coordinator whether the conflict is product code or docs/spec-only
+
+## Anti-patterns
+
+- Claiming a feature because it is proposed, not because it is on the pushed branch
+- Leaving stale non-claims after a landing commit changes the true scope
+- Calling `mergeable_state: dirty` "probably stale" without reproducing the merge result

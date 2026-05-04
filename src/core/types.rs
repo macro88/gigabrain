@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,6 +17,7 @@ pub struct Page {
     pub uuid: String,
     #[serde(rename = "type")]
     pub page_type: String,
+    pub superseded_by: Option<i64>,
     pub title: String,
     pub summary: String,
     pub compiled_truth: String,
@@ -146,6 +149,214 @@ impl SearchMergeStrategy {
     }
 }
 
+// ── Conversation ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationFrontmatter {
+    #[serde(rename = "type")]
+    pub file_type: String,
+    pub session_id: String,
+    pub date: String,
+    pub started_at: String,
+    pub status: ConversationStatus,
+    pub closed_at: Option<String>,
+    pub last_extracted_at: Option<String>,
+    pub last_extracted_turn: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationFile {
+    pub frontmatter: ConversationFrontmatter,
+    pub turns: Vec<Turn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Turn {
+    pub ordinal: i64,
+    pub role: TurnRole,
+    pub timestamp: String,
+    pub content: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+}
+
+impl TurnRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+        }
+    }
+}
+
+impl fmt::Display for TurnRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TurnRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "user" => Ok(Self::User),
+            "assistant" => Ok(Self::Assistant),
+            "system" => Ok(Self::System),
+            "tool" => Ok(Self::Tool),
+            other => Err(format!("invalid turn role: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStatus {
+    Open,
+    Closed,
+}
+
+impl ConversationStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+impl fmt::Display for ConversationStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ConversationStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "open" => Ok(Self::Open),
+            "closed" => Ok(Self::Closed),
+            other => Err(format!("invalid conversation status: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnWriteResult {
+    pub turn_id: String,
+    pub ordinal: i64,
+    pub conversation_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloseSessionResult {
+    pub closed_at: String,
+    pub conversation_path: String,
+    pub newly_closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractionJob {
+    pub id: i64,
+    pub session_id: String,
+    pub conversation_path: String,
+    pub trigger_kind: ExtractionTriggerKind,
+    pub enqueued_at: String,
+    pub scheduled_for: String,
+    pub attempts: i64,
+    pub last_error: Option<String>,
+    pub status: ExtractionJobStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionTriggerKind {
+    Debounce,
+    SessionClose,
+    Manual,
+}
+
+impl ExtractionTriggerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Debounce => "debounce",
+            Self::SessionClose => "session_close",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+impl fmt::Display for ExtractionTriggerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ExtractionTriggerKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "debounce" => Ok(Self::Debounce),
+            "session_close" => Ok(Self::SessionClose),
+            "manual" => Ok(Self::Manual),
+            other => Err(format!("invalid extraction trigger kind: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionJobStatus {
+    Pending,
+    Running,
+    Done,
+    Failed,
+}
+
+impl ExtractionJobStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for ExtractionJobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ExtractionJobStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            other => Err(format!("invalid extraction job status: {other}")),
+        }
+    }
+}
+
 // ── Errors ────────────────────────────────────────────────────
 
 /// Optimistic concurrency control error.
@@ -202,7 +413,10 @@ pub enum DbError {
 
 #[cfg(test)]
 mod tests {
-    use super::Page;
+    use super::{
+        ConversationFile, ConversationFrontmatter, ConversationStatus, ExtractionJob,
+        ExtractionJobStatus, ExtractionTriggerKind, Page, Turn, TurnRole,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -211,6 +425,7 @@ mod tests {
             slug: "people/alice".to_string(),
             uuid: "01969f11-9448-7d79-8d3f-c68f54761234".to_string(),
             page_type: "person".to_string(),
+            superseded_by: Some(42),
             title: "Alice".to_string(),
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
@@ -239,12 +454,14 @@ mod tests {
                 round_trip.slug,
                 round_trip.title,
                 round_trip.version,
+                round_trip.superseded_by,
                 round_trip.frontmatter.get("tags").cloned(),
             ),
             (
                 "people/alice".to_string(),
                 "Alice".to_string(),
                 7,
+                Some(42),
                 Some("operator, founder".to_string()),
             )
         );
@@ -256,6 +473,7 @@ mod tests {
             slug: "people/alice".to_string(),
             uuid: "0195c7c0-2d06-7df0-bf59-acde48001122".to_string(),
             page_type: "person".to_string(),
+            superseded_by: None,
             title: "Alice".to_string(),
             summary: "Operator".to_string(),
             compiled_truth: "Alice runs ops.".to_string(),
@@ -283,5 +501,94 @@ mod tests {
             round_trip.frontmatter.get("quaid_id").map(String::as_str),
             Some("0195c7c0-2d06-7df0-bf59-acde48001122")
         );
+    }
+
+    #[test]
+    fn page_serde_defaults_missing_superseded_by_for_legacy_payloads() {
+        let page: Page = serde_json::from_str(
+            r#"{
+                "slug":"people/alice",
+                "uuid":"0195c7c0-2d06-7df0-bf59-acde48001122",
+                "type":"person",
+                "title":"Alice",
+                "summary":"Operator",
+                "compiled_truth":"Alice runs ops.",
+                "timeline":"",
+                "frontmatter":{"title":"Alice"},
+                "wing":"people",
+                "room":"",
+                "version":7,
+                "created_at":"2026-04-15T00:00:00Z",
+                "updated_at":"2026-04-15T00:00:00Z",
+                "truth_updated_at":"2026-04-15T00:00:00Z",
+                "timeline_updated_at":"2026-04-15T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(page.superseded_by, None);
+        assert_eq!(page.slug, "people/alice");
+        assert_eq!(page.page_type, "person");
+    }
+
+    #[test]
+    fn conversation_file_serde_roundtrip_preserves_turn_metadata_and_cursor() {
+        let file = ConversationFile {
+            frontmatter: ConversationFrontmatter {
+                file_type: "conversation".to_string(),
+                session_id: "s1".to_string(),
+                date: "2026-05-03".to_string(),
+                started_at: "2026-05-03T09:14:22Z".to_string(),
+                status: ConversationStatus::Open,
+                closed_at: None,
+                last_extracted_at: Some("2026-05-03T10:00:00Z".to_string()),
+                last_extracted_turn: 7,
+            },
+            turns: vec![Turn {
+                ordinal: 8,
+                role: TurnRole::Assistant,
+                timestamp: "2026-05-03T10:01:00Z".to_string(),
+                content: "Done.".to_string(),
+                metadata: Some(serde_json::json!({
+                    "tool_name": "bash",
+                    "importance": "high"
+                })),
+            }],
+        };
+
+        let json = serde_json::to_string(&file).unwrap();
+        let round_trip: ConversationFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round_trip.frontmatter.last_extracted_turn, 7);
+        assert_eq!(round_trip.turns[0].role, TurnRole::Assistant);
+        assert_eq!(
+            round_trip.turns[0].metadata,
+            Some(serde_json::json!({
+                "tool_name": "bash",
+                "importance": "high"
+            }))
+        );
+    }
+
+    #[test]
+    fn extraction_job_serde_roundtrip_preserves_status_and_trigger_kind() {
+        let job = ExtractionJob {
+            id: 5,
+            session_id: "s1".to_string(),
+            conversation_path: "conversations/2026-05-03/s1.md".to_string(),
+            trigger_kind: ExtractionTriggerKind::SessionClose,
+            enqueued_at: "2026-05-03T10:00:00Z".to_string(),
+            scheduled_for: "2026-05-03T10:00:00Z".to_string(),
+            attempts: 2,
+            last_error: Some("timeout".to_string()),
+            status: ExtractionJobStatus::Running,
+        };
+
+        let json = serde_json::to_string(&job).unwrap();
+        let round_trip: ExtractionJob = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round_trip.trigger_kind, ExtractionTriggerKind::SessionClose);
+        assert_eq!(round_trip.status, ExtractionJobStatus::Running);
+        assert_eq!(round_trip.last_error.as_deref(), Some("timeout"));
     }
 }

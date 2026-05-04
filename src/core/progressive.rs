@@ -23,9 +23,18 @@ pub fn progressive_retrieve(
     budget: usize,
     depth: u32,
     collection_filter: Option<i64>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    progressive_retrieve_with_namespace(initial, budget, depth, collection_filter, None, conn)
+    progressive_retrieve_with_namespace(
+        initial,
+        budget,
+        depth,
+        collection_filter,
+        None,
+        include_superseded,
+        conn,
+    )
 }
 
 /// Namespace-aware variant of [`progressive_retrieve`].
@@ -35,8 +44,17 @@ pub fn progressive_retrieve_with_namespace(
     depth: u32,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    let initial = if include_superseded {
+        initial
+    } else {
+        initial
+            .into_iter()
+            .filter(|result| page_is_head(&result.slug, conn))
+            .collect()
+    };
     if initial.is_empty() || depth == 0 {
         return Ok(initial);
     }
@@ -69,7 +87,13 @@ pub fn progressive_retrieve_with_namespace(
         let mut next_frontier: Vec<String> = Vec::new();
 
         for slug in &frontier {
-            let neighbours = outbound_neighbours(slug, collection_filter, namespace_filter, conn)?;
+            let neighbours = outbound_neighbours(
+                slug,
+                collection_filter,
+                namespace_filter,
+                include_superseded,
+                conn,
+            )?;
             for neighbour in neighbours {
                 if !seen.insert(neighbour.slug.clone()) {
                     continue;
@@ -107,6 +131,19 @@ fn token_cost(slug: &str, conn: &Connection) -> usize {
     .unwrap_or(0)
 }
 
+fn page_is_head(slug: &str, conn: &Connection) -> bool {
+    let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
+        return false;
+    };
+
+    conn.query_row(
+        "SELECT superseded_by IS NULL FROM pages WHERE collection_id = ?1 AND slug = ?2",
+        rusqlite::params![collection_id, resolved_slug],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
 /// Fetch outbound link targets from a page, returning them as SearchResults.
 ///
 /// When `collection_filter` is `Some(id)`, only target pages belonging to that
@@ -116,6 +153,7 @@ fn outbound_neighbours(
     slug: &str,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let Some((collection_id, resolved_slug)) = resolve_slug_key(conn, slug) else {
@@ -150,9 +188,14 @@ fn outbound_neighbours(
                         WHERE p1_ns.collection_id = p1.collection_id \
                           AND p1_ns.slug = p1.slug \
                           AND p1_ns.namespace = ?4))))) \
-           AND (?4 IS NULL \
-                OR (?4 = '' AND p2.namespace = '') \
-                OR (?4 != '' AND (p2.namespace = ?4 OR p2.namespace = '')))"
+            AND (?4 IS NULL \
+                 OR (?4 = '' AND p2.namespace = '') \
+                 OR (?4 != '' AND (p2.namespace = ?4 OR p2.namespace = ''))){}",
+        if include_superseded {
+            ""
+        } else {
+            " AND p2.superseded_by IS NULL"
+        }
     );
     let mut stmt = conn.prepare_cached(&sql).map_err(SearchError::from)?;
 
@@ -234,6 +277,21 @@ mod tests {
         .unwrap();
     }
 
+    fn supersede_page(conn: &Connection, predecessor_slug: &str, successor_slug: &str) {
+        let successor_id: i64 = conn
+            .query_row(
+                "SELECT id FROM pages WHERE slug = ?1",
+                [successor_slug],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE pages SET superseded_by = ?1 WHERE slug = ?2",
+            rusqlite::params![successor_id, predecessor_slug],
+        )
+        .unwrap();
+    }
+
     fn make_result(slug: &str) -> SearchResult {
         SearchResult {
             slug: slug.to_owned(),
@@ -248,7 +306,7 @@ mod tests {
     #[test]
     fn empty_initial_returns_empty() {
         let conn = open_test_db();
-        let result = progressive_retrieve(vec![], 4000, 2, None, &conn).unwrap();
+        let result = progressive_retrieve(vec![], 4000, 2, None, false, &conn).unwrap();
         assert!(result.is_empty());
     }
 
@@ -262,7 +320,7 @@ mod tests {
         insert_link(&conn, "a", "b");
 
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial.clone(), 100_000, 0, None, &conn).unwrap();
+        let result = progressive_retrieve(initial.clone(), 100_000, 0, None, false, &conn).unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].slug, "a");
@@ -281,7 +339,7 @@ mod tests {
 
         // Budget = 150 tokens: a (100) fits, b (100) would exceed 200 > 150
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial, 150, 3, None, &conn).unwrap();
+        let result = progressive_retrieve(initial, 150, 3, None, false, &conn).unwrap();
 
         assert_eq!(result.len(), 1, "b should not fit in the budget");
         assert_eq!(result[0].slug, "a");
@@ -299,7 +357,7 @@ mod tests {
 
         // depth=1 with huge budget: should get a + b but NOT c
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial, 100_000, 1, None, &conn).unwrap();
+        let result = progressive_retrieve(initial, 100_000, 1, None, false, &conn).unwrap();
         let slugs: HashSet<&str> = result.iter().map(|r| r.slug.as_str()).collect();
 
         assert!(slugs.contains("a"));
@@ -318,10 +376,40 @@ mod tests {
         insert_link(&conn, "b", "shared");
 
         let initial = vec![make_result("a"), make_result("b")];
-        let result = progressive_retrieve(initial, 100_000, 1, None, &conn).unwrap();
+        let result = progressive_retrieve(initial, 100_000, 1, None, false, &conn).unwrap();
 
         let shared_count = result.iter().filter(|r| r.slug == "shared").count();
         assert_eq!(shared_count, 1, "shared page should appear exactly once");
+    }
+
+    #[test]
+    fn expansion_skips_superseded_neighbours_unless_requested() {
+        let conn = open_test_db();
+        insert_page(&conn, "a", &"x".repeat(40));
+        insert_page(&conn, "b-old", &"y".repeat(40));
+        insert_page(&conn, "b-new", &"z".repeat(40));
+        insert_link(&conn, "a", "b-old");
+        supersede_page(&conn, "b-old", "b-new");
+
+        let default_result =
+            progressive_retrieve(vec![make_result("a")], 100_000, 1, None, false, &conn).unwrap();
+        let historical_result =
+            progressive_retrieve(vec![make_result("a")], 100_000, 1, None, true, &conn).unwrap();
+
+        assert_eq!(
+            default_result
+                .iter()
+                .map(|result| result.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert_eq!(
+            historical_result
+                .iter()
+                .map(|result| result.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b-old"]
+        );
     }
 
     // ── Additional: multi-hop expansion works ────────────────
@@ -335,7 +423,7 @@ mod tests {
         insert_link(&conn, "b", "c");
 
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial, 100_000, 2, None, &conn).unwrap();
+        let result = progressive_retrieve(initial, 100_000, 2, None, false, &conn).unwrap();
         let slugs: HashSet<&str> = result.iter().map(|r| r.slug.as_str()).collect();
 
         assert!(slugs.contains("a"));
@@ -359,7 +447,7 @@ mod tests {
 
         // Request depth 10 — capped at 3, so e (4 hops away) should not appear
         let initial = vec![make_result("a")];
-        let result = progressive_retrieve(initial, 100_000, 10, None, &conn).unwrap();
+        let result = progressive_retrieve(initial, 100_000, 10, None, false, &conn).unwrap();
         let slugs: HashSet<&str> = result.iter().map(|r| r.slug.as_str()).collect();
 
         assert!(slugs.contains("d"), "d is 3 hops away, should appear");

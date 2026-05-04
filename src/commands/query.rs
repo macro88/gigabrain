@@ -27,6 +27,7 @@ pub async fn run(
     token_budget: u32,
     wing: Option<String>,
     namespace: Option<&str>,
+    include_superseded: bool,
     json: bool,
 ) -> Result<()> {
     crate::core::namespace::validate_optional_namespace(namespace)
@@ -37,6 +38,7 @@ pub async fn run(
         wing.as_deref(),
         None,
         namespace,
+        include_superseded,
         db,
         limit as usize,
     )?;
@@ -56,8 +58,16 @@ pub async fn run(
         } else {
             read_token_budget(db)
         };
-        progressive_retrieve_with_namespace(results.clone(), budget, 3, None, namespace, db)
-            .unwrap_or(results)
+        progressive_retrieve_with_namespace(
+            results.clone(),
+            budget,
+            3,
+            None,
+            namespace,
+            include_superseded,
+            db,
+        )
+        .unwrap_or(results)
     } else {
         results
     };
@@ -192,6 +202,7 @@ mod tests {
             1000,
             None,
             None,
+            false,
             true,
         )
         .await;
@@ -211,6 +222,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         )
         .await;
         assert!(result.is_ok());
@@ -221,7 +233,7 @@ mod tests {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
         // depth="auto" triggers read_token_budget + progressive_retrieve path
-        let result = run(&conn, "anything", "auto", 5, 0, None, None, false).await;
+        let result = run(&conn, "anything", "auto", 5, 0, None, None, false, false).await;
         assert!(result.is_ok());
     }
 
@@ -229,7 +241,7 @@ mod tests {
     async fn run_with_explicit_token_budget_uses_it() {
         use crate::core::db;
         let conn = db::open(":memory:").unwrap();
-        let result = run(&conn, "query", "auto", 5, 2000, None, None, true).await;
+        let result = run(&conn, "query", "auto", 5, 2000, None, None, false, true).await;
         assert!(result.is_ok());
     }
 
@@ -247,7 +259,18 @@ mod tests {
         )
         .unwrap();
         // Multi-word query → exact_slug_query returns None → FTS5 path → finds the page
-        let result = run(&conn, "xqzfoo xqzbar", "none", 5, 10_000, None, None, false).await;
+        let result = run(
+            &conn,
+            "xqzfoo xqzbar",
+            "none",
+            5,
+            10_000,
+            None,
+            None,
+            false,
+            false,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -262,7 +285,18 @@ mod tests {
             [],
         )
         .unwrap();
-        let result = run(&conn, "xqzjson xqzbaz", "none", 5, 10_000, None, None, true).await;
+        let result = run(
+            &conn,
+            "xqzjson xqzbaz",
+            "none",
+            5,
+            10_000,
+            None,
+            None,
+            false,
+            true,
+        )
+        .await;
         assert!(result.is_ok());
     }
 }

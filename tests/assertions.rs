@@ -93,6 +93,7 @@ fn extract_on_missing_page_returns_page_not_found() {
         slug: "people/ghost".to_string(),
         uuid: "01969f11-9448-7d79-8d3f-c68f54761299".to_string(),
         page_type: "person".to_string(),
+        superseded_by: None,
         title: "Ghost".to_string(),
         summary: String::new(),
         compiled_truth: "## Assertions\nAlice works at Acme.\n".to_string(),

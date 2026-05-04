@@ -5,7 +5,8 @@ This proposal lands the foundations layer for Phase 5 of `docs/roadmap_v3.md`. T
 Current state shaping this change:
 
 - Phase 4 already provides multi-collection vault sync with a live filesystem watcher (`#137` namespace isolation already shipped). Conversation files and extracted-fact files can ride the existing watcher rather than introducing a new one.
-- The `pages` table is the single page store. Existing typed kinds (e.g. `note`) are unaffected; this change adds `conversation`, `decision`, `preference`, `fact`, and `action_item` as recognised kinds — with this proposal only writing `conversation` pages directly. Fact pages are produced in proposal #2.
+- The `pages` table is the single page store. Existing page types (for example `project`) are unaffected; this change adds `conversation`, `decision`, `preference`, `fact`, and `action_item` to the planned surface, with this proposal only writing `conversation` pages directly. Fact pages are produced in proposal #2.
+- The repo is already on schema v8. The landed first slice from this change already added `pages.superseded_by`, `idx_pages_supersede_head` on `pages.type`, the guarded `idx_pages_session`, `extraction_queue`, config defaults, and `Page.superseded_by`; remaining work starts at task `2.2` and does not introduce another schema-version bump.
 - The repo's no-auto-migration policy applies. The product is pre-release; existing dev databases re-init under the standard schema-mismatch message.
 - LoCoMo and LongMemEval are at 0.1% / 0.0% today. The benchmark lift bet is in proposal #2 (the SLM does the actual fact extraction); this proposal only ensures the input plumbing and storage shape can support it.
 
@@ -16,7 +17,7 @@ Current state shaping this change:
 - Accept conversation turns from any caller through `memory_add_turn`, with synchronous response and a request-path latency budget that keeps p95 < 50 ms.
 - Define a markdown-on-disk conversation file format that Obsidian users can read and edit naturally (per the brainstorm decision: turns live in the vault, not in a SQL-only `conversation_turns` table).
 - Provide an extraction job queue with UPSERT-collapse semantics so a flurry of turn-adds debounces to a single pending job per session.
-- Introduce an ADD-only supersede chain that all four fact kinds (and any other page kind) can use, plus the head-only retrieval default that makes "latest in chain" the natural answer.
+- Introduce an ADD-only supersede chain that all four fact page types (and any other page type) can use, plus the head-only retrieval default that makes "latest in chain" the natural answer.
 - Make user edits to extracted-fact files in Obsidian preserve history rather than silently overwrite the prior page.
 - Cleanly defer Phi-3.5, the extraction worker, fact-page writing, and the `memory_correct` correction dialogue to proposal #2.
 
@@ -27,7 +28,7 @@ Current state shaping this change:
 - The `memory_correct` and `memory_correct_continue` MCP tools and the `correction_sessions` table. All in proposal #2.
 - Cross-namespace fact recall. Namespace isolation is a hard product boundary by design (`#137`).
 - Synchronous fact extraction on the request path. Deliberate choice — `memory_close_session` exists precisely so a caller that wants "extract before I move on" can force a flush.
-- Automatic schema migration. v7 → v8 is a pre-release schema reset.
+- A further schema-version bump beyond the already-landed v8 baseline. Remaining work in this change rides the current v8 schema.
 - DAB §8 Conversation Memory benchmark gate. Tracked under proposal #2.
 
 ## Decisions
@@ -56,11 +57,11 @@ The chain lives in the `pages` table itself: a nullable `superseded_by INTEGER R
 
 Why this shape: reuses an indexed scalar lookup that's free at query time (one partial index, `idx_pages_supersede_head`), and a recursive CTE handles "walk the chain". A separate version table would duplicate page rows for marginal benefit. Mutating in place was rejected during brainstorm because it loses the temporal data LoCoMo-style queries need.
 
-Type-specific structured frontmatter keys (`about`, `chose`, `what`) — defined in proposal #2's fact-writing surface — drive supersede detection. This proposal makes the chain itself work for any page kind; proposal #2 wires extraction into it.
+Type-specific structured frontmatter keys (`about`, `chose`, `what`) — defined in proposal #2's fact-writing surface — drive supersede detection. This proposal makes the chain itself work for any page type; proposal #2 wires extraction into it.
 
-### Decision 5 — `memory_close_action` is the only in-place mutation on fact kinds.
+### Decision 5 — `memory_close_action` is the only in-place mutation on fact page types.
 
-Action items have lifecycle (`open` → `done` / `cancelled`), not just supersede. Modelling lifecycle as a supersede chain ("status: open" → "status: done" → "status: cancelled") would be confusing and bloat the chain with mechanical state changes. `memory_close_action` is therefore special: it updates `status` in place via the existing optimistic-concurrency path and bumps `version`. Direct file edits to `extracted/action-items/*.md` still go through file-edit-aware supersede (Decision 7), but `memory_close_action` is the supported programmatic path for routine `open → done` transitions.
+Action items have lifecycle (`open` → `done` / `cancelled`), not just supersede. Modelling lifecycle as a supersede chain ("status: open" → "status: done" → "status: cancelled") would be confusing and bloat the chain with mechanical state changes. `memory_close_action` is therefore special: it updates `status` in place via the existing optimistic-concurrency path and bumps `version`. Direct file edits to `extracted/action-items/*.md` still go through file-edit-aware supersede (Decision 7), but `memory_close_action` is the supported programmatic path for routine `open → done` transitions on `type: action_item` pages.
 
 ### Decision 6 — Head-only is the retrieval default; opt into history.
 
@@ -80,11 +81,11 @@ Whitespace-only edits are a no-op so opening, viewing, and re-saving a file in O
 
 ### Decision 8 — `memory.location = vault-subdir` is the default; `dedicated-collection` is an opt-in.
 
-The brainstorm chose subdirectories in the user's main vault as the default — natural for Obsidian users, supports linking from extracted facts to existing notes, doesn't require a second vault to be set up at install time. `dedicated-collection` is preserved as a config alternative for users who want agent memory isolated from their notes vault. Multi-collection support (Phase 4) makes both straightforward; the only schema implication is that this proposal records the choice in the `config` table.
+The brainstorm chose subdirectories in the user's main vault as the default — natural for Obsidian users, supports linking from extracted facts to existing notes, doesn't require a second vault to be set up at install time. `dedicated-collection` is preserved as a config alternative for users who want agent memory isolated from their notes vault. In this wave, the shipped resolver and tests use that choice for conversation-file placement only; extracted-fact root routing remains follow-on work. Multi-collection support (Phase 4) still makes both eventual layouts straightforward; the only schema implication already landed here is that this proposal records the choice in the `config` table.
 
-### Decision 9 — Schema reset v7 → v8 with no migration.
+### Decision 9 — Remaining work rides the landed v8 schema baseline.
 
-Pre-release product, no users to migrate, existing no-auto-migration policy. v7 dev databases are rejected with the standard schema-mismatch error and must be re-initialised. Bumping atomically with all four schema artefacts (`pages.superseded_by`, `idx_pages_supersede_head`, `idx_pages_session`, `extraction_queue` + `idx_extraction_queue_pending`) keeps the v8 shape consistent.
+Pre-release product, no users to migrate, existing no-auto-migration policy. The first plumbing slice of this change is already present in the live repo at schema v8: `pages.superseded_by`, `idx_pages_supersede_head` on `pages.type`, the guarded `idx_pages_session`, `extraction_queue` + `idx_extraction_queue_pending`, config defaults, and `Page.superseded_by`. Remaining work in this proposal keeps that v8 shape intact rather than bumping the schema again. Pre-v8 dev databases are still rejected with the standard schema-mismatch error and must be re-initialised.
 
 ## Risks / Trade-offs
 
@@ -94,19 +95,19 @@ Pre-release product, no users to migrate, existing no-auto-migration policy. v7 
 | Session-id collision across distinct contexts merges unrelated turns into one file. | Session ids are namespace-local; we document caller responsibility for uniqueness. We don't enforce — that's the caller's job. |
 | Multi-day session lookback window doesn't cross day boundaries. | Documented limitation. Cross-day "as we discussed yesterday" references are rare in practice. Phase 6 entity extraction will partially compensate. |
 | User edits a conversation file (not an extracted fact) and breaks frontmatter parsing. | Vault sync already handles parse errors gracefully; the watcher logs and skips. The cursor is recalculated on next successful parse. |
-| Schema bump v7 → v8 forces dev DB re-init. | Pre-release policy; documented. The schema-mismatch error message already includes re-init guidance. |
+| Pre-v8 dev DBs still require re-init against the landed v8 baseline. | Pre-release policy; documented. The schema-mismatch error message already includes re-init guidance. |
 | `extraction_queue` grows unbounded over time. | A janitor in `quaid serve` (introduced under proposal #2 alongside the worker) prunes `done` rows older than N days. For this proposal we ship the table; pruning lands with the worker. |
 | File-edit-aware supersede misfires on whitespace edits. | Whitespace-only edits are explicitly a no-op (Decision 7). The hash check uses normalized content. |
 
 ## Migration Plan
 
-This is a pre-release schema reset, not a migration:
+This change now builds on an already-landed v8 baseline, so there is no new schema-version migration step in the remaining work:
 
-1. Bump `SCHEMA_VERSION` and `quaid_config.schema_version` to 8 in `src/core/db.rs`.
-2. Update `src/schema.sql` to v8 with the new column, indices, and table.
-3. Existing v7 dev databases fail at open time with the standard schema-mismatch message, which already includes the `quaid init` + `quaid import` re-init recipe.
-4. There is no backfill: pages written under v7 do not get `superseded_by` retroactively. They are simply heads (NULL) by virtue of the column's default.
-5. Rollback strategy: revert the schema bump and the schema.sql changes. There is no data to roll back because there is no migration.
+1. Keep `SCHEMA_VERSION` and `quaid_config.schema_version` at 8 in `src/core/db.rs`.
+2. Keep `src/schema.sql` aligned with the landed v8 conversation-memory baseline: `pages.superseded_by`, `idx_pages_supersede_head` on `pages.type`, the guarded `idx_pages_session`, `extraction_queue`, and the related config defaults.
+3. Existing pre-v8 dev databases fail at open time with the standard schema-mismatch message, which already includes the `quaid init` + `quaid import` re-init recipe.
+4. There is no backfill step in the remaining work: rows already written under v8 stay as-is, and older dev databases still re-init instead of migrating.
+5. Rollback of the remaining work does not change the version boundary; any future schema bump would need its own proposal.
 
 ## Open Questions
 

@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 #[cfg(unix)]
 use crate::core::fs_safety;
+use crate::core::supersede;
 use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sync};
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,7 @@ struct PreparedPut {
     compiled_truth: String,
     timeline: String,
     frontmatter_json: String,
+    supersedes: Option<String>,
     wing: String,
     room: String,
     now: String,
@@ -50,6 +52,12 @@ struct PutOutcome {
     version: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StagedPageRecord {
+    page_id: i64,
+    outcome: PutOutcome,
+}
+
 #[cfg(unix)]
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
@@ -57,8 +65,11 @@ struct PutTestHooks {
     fail_sentinel_create: bool,
     fail_before_rename: bool,
     fail_rename: bool,
+    fail_commit: bool,
     fail_parent_fsync: bool,
     block_inside_slug_lock: bool,
+    block_after_supersede_claim: bool,
+    skip_dirty_mark: bool,
     post_rename_swap: Option<Vec<u8>>,
 }
 
@@ -72,13 +83,16 @@ impl PutTestHooks {
         }
     }
 
-    fn after_rename(&self, target_path: &Path) -> Result<(), vault_sync::VaultSyncError> {
-        let Some(replacement) = self.post_rename_swap.as_ref() else {
-            return Ok(());
-        };
-        let foreign_temp = target_path.with_file_name(format!(".foreign-{}", Uuid::now_v7()));
-        fs::write(&foreign_temp, replacement)?;
-        fs::rename(&foreign_temp, target_path)?;
+    fn after_rename(
+        &self,
+        _db: &Connection,
+        target_path: &Path,
+    ) -> Result<(), vault_sync::VaultSyncError> {
+        if let Some(replacement) = self.post_rename_swap.as_ref() {
+            let foreign_temp = target_path.with_file_name(format!(".foreign-{}", Uuid::now_v7()));
+            fs::write(&foreign_temp, replacement)?;
+            fs::rename(&foreign_temp, target_path)?;
+        }
         Ok(())
     }
 }
@@ -240,6 +254,8 @@ fn put_from_string_with_output(
         vault_sync::resolve_slug_for_op(db, slug_input, op_kind).map_err(anyhow::Error::new)?;
     vault_sync::ensure_collection_vault_write_allowed(db, resolved.collection_id)
         .map_err(anyhow::Error::new)?;
+    let collection = vault_sync::load_collection_by_id(db, resolved.collection_id)
+        .map_err(anyhow::Error::new)?;
     let slug = resolved.slug.as_str();
     let wing = palace::derive_wing(slug);
     let room = palace::derive_room(&compiled_truth);
@@ -256,27 +272,39 @@ fn put_from_string_with_output(
     let relative_path = slug_to_relative_path(slug);
     let now = now_iso_from(db);
     let (prepared, outcome) = vault_sync::with_write_slug_lock(
-        resolved.collection_id,
+        &collection.root_path,
         &relative_path,
         || -> anyhow::Result<(PreparedPut, PutOutcome)> {
             maybe_block_inside_write_lock(db);
-            let existing_row: Option<(i64, Option<String>)> = match db
+            let existing_row: Option<(i64, i64, Option<String>)> = match db
                 .prepare(
-                    "SELECT version, uuid
+                    "SELECT id, version, uuid
                      FROM pages
                      WHERE collection_id = ?1 AND namespace = ?2 AND slug = ?3",
                 )?
                 .query_row(
                     rusqlite::params![resolved.collection_id, namespace, slug],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 ) {
                 Ok(v) => Some(v),
                 Err(rusqlite::Error::QueryReturnedNoRows) => None,
                 Err(e) => return Err(e.into()),
             };
+            let current_page_id = existing_row.as_ref().map(|(page_id, _, _)| *page_id);
             let page_uuid = page_uuid::resolve_page_uuid(
                 &frontmatter,
-                existing_row.as_ref().and_then(|(_, uuid)| uuid.as_deref()),
+                existing_row
+                    .as_ref()
+                    .and_then(|(_, _, uuid)| uuid.as_deref()),
+            )?;
+            let supersedes = frontmatter.get("supersedes").cloned();
+            supersede::validate_supersede_target(
+                db,
+                resolved.collection_id,
+                &namespace,
+                current_page_id,
+                slug,
+                supersedes.as_deref(),
             )?;
             let prepared = PreparedPut {
                 collection_id: resolved.collection_id,
@@ -290,10 +318,11 @@ fn put_from_string_with_output(
                 compiled_truth: compiled_truth.clone(),
                 timeline: timeline.clone(),
                 frontmatter_json: serde_json::to_string(&frontmatter)?,
+                supersedes,
                 wing: wing.clone(),
                 room: room.clone(),
                 now: now.clone(),
-                current_version: existing_row.map(|(version, _)| version),
+                current_version: existing_row.map(|(_, version, _)| version),
                 sha256: sha256_hex(content.as_bytes()),
             };
             let outcome = persist_with_vault_write(
@@ -515,15 +544,11 @@ fn now_iso_from(db: &Connection) -> String {
     .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn persist_page_record(
-    db: &Connection,
+fn stage_page_record(
+    tx: &rusqlite::Transaction<'_>,
     prepared: &PreparedPut,
-    raw_bytes: &[u8],
-    relative_path: &str,
-    file_stat: Option<&file_state::FileStat>,
     expected_version: Option<i64>,
-) -> Result<PutOutcome, rusqlite::Error> {
-    let tx = db.unchecked_transaction()?;
+) -> Result<StagedPageRecord, rusqlite::Error> {
     let (created, version) = match prepared.current_version {
         None => {
             tx.execute(
@@ -620,21 +645,68 @@ fn persist_page_record(
         |row| row.get(0),
     )?;
 
+    supersede::reconcile_supersede_chain(
+        tx,
+        prepared.collection_id,
+        &prepared.namespace,
+        page_id,
+        &prepared.slug,
+        prepared.supersedes.as_deref(),
+    )
+    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
+
+    Ok(StagedPageRecord {
+        page_id,
+        outcome: PutOutcome { created, version },
+    })
+}
+
+fn commit_staged_page_record(
+    tx: rusqlite::Transaction<'_>,
+    prepared: &PreparedPut,
+    staged: StagedPageRecord,
+    raw_bytes: &[u8],
+    relative_path: &str,
+    file_stat: Option<&file_state::FileStat>,
+) -> Result<PutOutcome, rusqlite::Error> {
+    supersede::reconcile_supersede_chain(
+        &tx,
+        prepared.collection_id,
+        &prepared.namespace,
+        staged.page_id,
+        &prepared.slug,
+        prepared.supersedes.as_deref(),
+    )
+    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
+
     if let Some(file_stat) = file_stat {
         file_state::upsert_file_state(
             &tx,
             prepared.collection_id,
             relative_path,
-            page_id,
+            staged.page_id,
             file_stat,
             &prepared.sha256,
         )?;
     }
-    raw_imports::rotate_active_raw_import(&tx, page_id, relative_path, raw_bytes)?;
-    raw_imports::enqueue_embedding_job(&tx, page_id)?;
+    raw_imports::rotate_active_raw_import(&tx, staged.page_id, relative_path, raw_bytes)?;
+    raw_imports::enqueue_embedding_job(&tx, staged.page_id)?;
     tx.commit()?;
 
-    Ok(PutOutcome { created, version })
+    Ok(staged.outcome)
+}
+
+fn persist_page_record(
+    db: &Connection,
+    prepared: &PreparedPut,
+    raw_bytes: &[u8],
+    relative_path: &str,
+    file_stat: Option<&file_state::FileStat>,
+    expected_version: Option<i64>,
+) -> Result<PutOutcome, rusqlite::Error> {
+    let tx = db.unchecked_transaction()?;
+    let staged = stage_page_record(&tx, prepared, expected_version)?;
+    commit_staged_page_record(tx, prepared, staged, raw_bytes, relative_path, file_stat)
 }
 
 #[cfg(not(unix))]
@@ -657,6 +729,7 @@ fn persist_with_vault_write(
 }
 
 #[cfg(unix)]
+#[allow(clippy::question_mark)]
 fn persist_with_vault_write(
     db: &Connection,
     prepared: &PreparedPut,
@@ -687,10 +760,7 @@ fn persist_with_vault_write(
         prepared.collection_id,
     );
     let sentinel_path = recovery_dir.join(&sentinel_name);
-    let dedup_key = format!(
-        "{}:{}:{}",
-        prepared.collection_id, relative_path, prepared.sha256
-    );
+    let dedup_key = write_dedup_key(&target_path, &prepared.sha256);
     vault_sync::check_update_expected_version(
         prepared.collection_id,
         relative_path,
@@ -717,10 +787,23 @@ fn persist_with_vault_write(
         &relative_path_buf,
         &parent_fd,
     )?;
+    let tx = match db.unchecked_transaction() {
+        Ok(tx) => tx,
+        Err(error) => return Err(error.into()),
+    };
+    let staged = match stage_page_record(&tx, prepared, expected_version) {
+        Ok(staged) => staged,
+        Err(error) => {
+            let _ = tx.rollback();
+            return Err(error.into());
+        }
+    };
+    maybe_block_after_supersede_claim(db, prepared.supersedes.as_deref());
     create_recovery_sentinel(prepared, &recovery_dir, &sentinel_name, hooks.as_ref())?;
     let target_name_os = match relative_path_buf.file_name() {
         Some(name) => name,
         None => {
+            let _ = tx.rollback();
             let _ = remove_recovery_sentinel(&recovery_dir, &sentinel_name);
             return Err(vault_sync::VaultSyncError::InvariantViolation {
                 message: format!("slug={} produced no filename", prepared.slug),
@@ -732,6 +815,7 @@ fn persist_with_vault_write(
     let temp_file = match create_tempfile(&parent_fd, &temp_name, raw_bytes) {
         Ok(temp_file) => temp_file,
         Err(error) => {
+            let _ = tx.rollback();
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
@@ -746,6 +830,7 @@ fn persist_with_vault_write(
     let temp_identity = file_identity(&temp_file)?;
     if let Ok(existing) = fs_safety::stat_at_nofollow(&parent_fd, target_name) {
         if existing.is_symlink() {
+            let _ = tx.rollback();
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
@@ -760,6 +845,7 @@ fn persist_with_vault_write(
 
     if let Some(hook) = hooks.as_ref() {
         if let Err(error) = hook.before_rename(&target_path) {
+            let _ = tx.rollback();
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
@@ -773,6 +859,7 @@ fn persist_with_vault_write(
     }
 
     if let Err(error) = vault_sync::insert_write_dedup(&dedup_key) {
+        let _ = tx.rollback();
         cleanup_pre_rename_without_dedup_clear(
             &parent_fd,
             &temp_name,
@@ -782,6 +869,7 @@ fn persist_with_vault_write(
         return Err(error);
     }
     if let Err(error) = vault_sync::remember_self_write_path(&target_path, &prepared.sha256) {
+        let _ = tx.rollback();
         let _ = cleanup_pre_rename(
             &parent_fd,
             &temp_name,
@@ -796,6 +884,7 @@ fn persist_with_vault_write(
     if let Some(hook) = hooks.as_ref() {
         if hook.fail_rename {
             let error = io::Error::other("injected rename failure");
+            let _ = tx.rollback();
             let _ = cleanup_pre_rename(
                 &parent_fd,
                 &temp_name,
@@ -809,6 +898,7 @@ fn persist_with_vault_write(
     }
 
     if let Err(error) = fs_safety::renameat_parent_fd(&parent_fd, &temp_name, target_name) {
+        let _ = tx.rollback();
         let _ = cleanup_pre_rename(
             &parent_fd,
             &temp_name,
@@ -822,6 +912,7 @@ fn persist_with_vault_write(
 
     if let Some(hook) = hooks.as_ref() {
         if hook.fail_parent_fsync {
+            let _ = tx.rollback();
             return Err(handle_post_rename_failure(
                 db,
                 prepared,
@@ -835,6 +926,7 @@ fn persist_with_vault_write(
         }
     }
     if let Err(error) = sync_fd(&parent_fd) {
+        let _ = tx.rollback();
         return Err(handle_post_rename_failure(
             db,
             prepared,
@@ -848,12 +940,13 @@ fn persist_with_vault_write(
     }
 
     if let Some(hook) = hooks.as_ref() {
-        hook.after_rename(&target_path)?;
+        hook.after_rename(db, &target_path)?;
     }
 
     let post_rename_stat = match file_state::stat_file_fd(&parent_fd, target_name) {
         Ok(stat) => stat,
         Err(error) => {
+            let _ = tx.rollback();
             return Err(handle_post_rename_failure(
                 db,
                 prepared,
@@ -870,6 +963,7 @@ fn persist_with_vault_write(
     let final_hash = match file_state::hash_file(&target_path) {
         Ok(hash) => hash,
         Err(error) => {
+            let _ = tx.rollback();
             return Err(handle_post_rename_failure(
                 db,
                 prepared,
@@ -887,11 +981,9 @@ fn persist_with_vault_write(
         || post_rename_stat.inode != Some(temp_identity.inode)
         || final_hash != prepared.sha256
     {
+        let _ = tx.rollback();
         clear_failure_tracking(&target_path, &dedup_key);
-        let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
-            db,
-            prepared.collection_id,
-        );
+        let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
         return Err(vault_sync::VaultSyncError::ConcurrentRename {
             collection_id: prepared.collection_id,
             relative_path: relative_path.to_owned(),
@@ -899,13 +991,27 @@ fn persist_with_vault_write(
         });
     }
 
-    let outcome = match persist_page_record(
-        db,
+    if matches!(hooks.as_ref(), Some(hook) if hook.fail_commit) {
+        let _ = tx.rollback();
+        return Err(handle_post_rename_failure(
+            db,
+            prepared,
+            relative_path,
+            &sentinel_path,
+            &target_path,
+            &dedup_key,
+            "commit",
+            io::Error::other("injected commit failure").to_string(),
+        ));
+    }
+
+    let outcome = match commit_staged_page_record(
+        tx,
         prepared,
+        staged,
         raw_bytes,
         relative_path,
         Some(&post_rename_stat),
-        expected_version,
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -935,6 +1041,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+#[cfg(unix)]
+fn write_dedup_key(target_path: &Path, sha256: &str) -> String {
+    format!("{}:{sha256}", target_path.display())
 }
 
 #[cfg(unix)]
@@ -1074,10 +1185,7 @@ fn handle_post_rename_failure(
     reason: String,
 ) -> vault_sync::VaultSyncError {
     clear_failure_tracking(target_path, dedup_key);
-    let _ = vault_sync::mark_collection_needs_full_sync_via_fresh_connection(
-        db,
-        prepared.collection_id,
-    );
+    let _ = maybe_mark_collection_needs_full_sync(db, prepared.collection_id);
     vault_sync::VaultSyncError::PostRenameRecoveryPending {
         collection_id: prepared.collection_id,
         relative_path: relative_path.to_owned(),
@@ -1122,6 +1230,25 @@ fn put_test_hooks() -> &'static std::sync::Mutex<std::collections::HashMap<Strin
     HOOKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+#[cfg(all(unix, not(all(test, unix))))]
+fn maybe_mark_collection_needs_full_sync(
+    db: &Connection,
+    collection_id: i64,
+) -> Result<(), vault_sync::VaultSyncError> {
+    vault_sync::mark_collection_needs_full_sync_via_fresh_connection(db, collection_id)
+}
+
+#[cfg(all(test, unix))]
+fn maybe_mark_collection_needs_full_sync(
+    db: &Connection,
+    collection_id: i64,
+) -> Result<(), vault_sync::VaultSyncError> {
+    if matches!(test_hooks_snapshot(db), Some(hooks) if hooks.skip_dirty_mark) {
+        return Ok(());
+    }
+    vault_sync::mark_collection_needs_full_sync_via_fresh_connection(db, collection_id)
+}
+
 #[cfg(not(all(test, unix)))]
 fn maybe_block_inside_write_lock(_db: &Connection) {}
 
@@ -1134,17 +1261,69 @@ struct WriteLockBlockState {
 }
 
 #[cfg(all(test, unix))]
-fn write_lock_blocker() -> &'static (std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar) {
-    static BLOCKER: std::sync::OnceLock<(
-        std::sync::Mutex<WriteLockBlockState>,
-        std::sync::Condvar,
-    )> = std::sync::OnceLock::new();
-    BLOCKER.get_or_init(|| {
-        (
-            std::sync::Mutex::new(WriteLockBlockState::default()),
-            std::sync::Condvar::new(),
-        )
-    })
+#[derive(Debug, Default)]
+struct SupersedeClaimBlockState {
+    blocked_once: bool,
+    entered: bool,
+    release: bool,
+}
+
+#[cfg(all(test, unix))]
+type WriteLockBlocker = std::sync::Arc<(std::sync::Mutex<WriteLockBlockState>, std::sync::Condvar)>;
+
+#[cfg(all(test, unix))]
+type WriteLockBlockerMap = std::sync::Mutex<std::collections::HashMap<String, WriteLockBlocker>>;
+
+#[cfg(all(test, unix))]
+type SupersedeClaimBlocker = std::sync::Arc<(
+    std::sync::Mutex<SupersedeClaimBlockState>,
+    std::sync::Condvar,
+)>;
+
+#[cfg(all(test, unix))]
+type SupersedeClaimBlockerMap =
+    std::sync::Mutex<std::collections::HashMap<String, SupersedeClaimBlocker>>;
+
+#[cfg(all(test, unix))]
+fn write_lock_blockers() -> &'static WriteLockBlockerMap {
+    static BLOCKERS: std::sync::OnceLock<WriteLockBlockerMap> = std::sync::OnceLock::new();
+    BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(all(test, unix))]
+fn write_lock_blocker_for_path(db_path: &str) -> WriteLockBlocker {
+    write_lock_blockers()
+        .lock()
+        .unwrap()
+        .entry(db_path.to_owned())
+        .or_insert_with(|| {
+            std::sync::Arc::new((
+                std::sync::Mutex::new(WriteLockBlockState::default()),
+                std::sync::Condvar::new(),
+            ))
+        })
+        .clone()
+}
+
+#[cfg(all(test, unix))]
+fn supersede_claim_blockers() -> &'static SupersedeClaimBlockerMap {
+    static BLOCKERS: std::sync::OnceLock<SupersedeClaimBlockerMap> = std::sync::OnceLock::new();
+    BLOCKERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(all(test, unix))]
+fn supersede_claim_blocker_for_path(db_path: &str) -> SupersedeClaimBlocker {
+    supersede_claim_blockers()
+        .lock()
+        .unwrap()
+        .entry(db_path.to_owned())
+        .or_insert_with(|| {
+            std::sync::Arc::new((
+                std::sync::Mutex::new(SupersedeClaimBlockState::default()),
+                std::sync::Condvar::new(),
+            ))
+        })
+        .clone()
 }
 
 #[cfg(all(test, unix))]
@@ -1155,7 +1334,39 @@ fn maybe_block_inside_write_lock(db: &Connection) {
     if !hooks.block_inside_slug_lock {
         return;
     }
-    let (state_lock, wakeup) = write_lock_blocker();
+    let db_path = vault_sync::database_path(db).expect("test blocker requires database path");
+    let blocker = write_lock_blocker_for_path(&db_path);
+    let (state_lock, wakeup) = &*blocker;
+    let mut state = state_lock.lock().unwrap();
+    if state.blocked_once {
+        return;
+    }
+    state.blocked_once = true;
+    state.entered = true;
+    wakeup.notify_all();
+    while !state.release {
+        state = wakeup.wait(state).unwrap();
+    }
+}
+
+#[cfg(not(all(test, unix)))]
+#[allow(dead_code)]
+fn maybe_block_after_supersede_claim(_db: &Connection, _supersedes: Option<&str>) {}
+
+#[cfg(all(test, unix))]
+fn maybe_block_after_supersede_claim(db: &Connection, supersedes: Option<&str>) {
+    if supersedes.is_none() {
+        return;
+    }
+    let Some(hooks) = test_hooks_snapshot(db) else {
+        return;
+    };
+    if !hooks.block_after_supersede_claim {
+        return;
+    }
+    let db_path = vault_sync::database_path(db).expect("test blocker requires database path");
+    let blocker = supersede_claim_blocker_for_path(&db_path);
+    let (state_lock, wakeup) = &*blocker;
     let mut state = state_lock.lock().unwrap();
     if state.blocked_once {
         return;
@@ -1374,14 +1585,23 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn reset_write_lock_blocker() {
-        let (state_lock, _) = write_lock_blocker();
+    fn reset_write_lock_blocker(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, _) = &*blocker;
         *state_lock.lock().unwrap() = WriteLockBlockState::default();
     }
 
     #[cfg(unix)]
-    fn wait_for_write_lock_entry() {
-        let (state_lock, wakeup) = write_lock_blocker();
+    fn reset_supersede_claim_blocker(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, _) = &*blocker;
+        *state_lock.lock().unwrap() = SupersedeClaimBlockState::default();
+    }
+
+    #[cfg(unix)]
+    fn wait_for_write_lock_entry(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut state = state_lock.lock().unwrap();
         while !state.entered {
@@ -1400,8 +1620,39 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn release_write_lock_blocker() {
-        let (state_lock, wakeup) = write_lock_blocker();
+    fn release_write_lock_blocker(db_path: &str) {
+        let blocker = write_lock_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
+        let mut state = state_lock.lock().unwrap();
+        state.release = true;
+        wakeup.notify_all();
+    }
+
+    #[cfg(unix)]
+    fn wait_for_supersede_claim_entry(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = state_lock.lock().unwrap();
+        while !state.entered {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for supersede claim entry"
+            );
+            let (next_state, timeout) = wakeup.wait_timeout(state, remaining).unwrap();
+            state = next_state;
+            assert!(
+                !timeout.timed_out() || state.entered,
+                "timed out waiting for supersede claim entry"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn release_supersede_claim_blocker(db_path: &str) {
+        let blocker = supersede_claim_blocker_for_path(db_path);
+        let (state_lock, wakeup) = &*blocker;
         let mut state = state_lock.lock().unwrap();
         state.release = true;
         wakeup.notify_all();
@@ -1509,6 +1760,23 @@ mod tests {
             ))
         })
         .ok()
+    }
+
+    fn superseded_by_for_slug(conn: &Connection, slug: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT superseded_by FROM pages WHERE slug = ?1",
+            [slug],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    fn page_id_for_slug(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
+        .unwrap()
     }
 
     // ── create ─────────────────────────────────────────────────
@@ -1652,6 +1920,276 @@ mod tests {
         );
     }
 
+    #[test]
+    fn create_successor_updates_both_ends_of_supersede_chain_atomically() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nOriginal fact\n",
+            None,
+        )
+        .unwrap();
+
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nUpdated fact\n",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+        assert_eq!(superseded_by_for_slug(&conn, "facts/b"), None);
+        assert_eq!(
+            conn.query_row::<String, _, _>(
+                "SELECT compiled_truth FROM pages WHERE slug = 'facts/a'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+            "Original fact"
+        );
+    }
+
+    #[test]
+    fn superseding_non_head_page_is_rejected_without_partial_write() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+
+        let error = put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SupersedeConflictError"));
+        assert_eq!(
+            conn.query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM pages WHERE slug = 'facts/c'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_non_head_supersede_rejects_before_write_through_mutation() {
+        let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+
+        let a_path = vault_root.join("facts").join("a.md");
+        let b_path = vault_root.join("facts").join("b.md");
+        let a_disk_before = std::fs::read_to_string(&a_path).unwrap();
+        let b_disk_before = std::fs::read_to_string(&b_path).unwrap();
+        let a_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/a");
+        let b_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/b");
+
+        let error = put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SupersedeConflictError"));
+        assert!(!error.to_string().contains("PostRenameRecoveryPendingError"));
+        assert_eq!(page_count(&conn, "facts/c"), 0);
+        assert!(!vault_root.join("facts").join("c.md").exists());
+        assert_eq!(std::fs::read_to_string(a_path).unwrap(), a_disk_before);
+        assert_eq!(std::fs::read_to_string(b_path).unwrap(), b_disk_before);
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/a"),
+            a_raw_before
+        );
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/b"),
+            b_raw_before
+        );
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/a"), 1);
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/b"), 1);
+        assert_eq!(collection_needs_full_sync(&conn, 1), 0);
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_supersede_contenders_claim_head_before_write_through_and_loser_never_hits_disk() {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+
+        let a_path = vault_root.join("facts").join("a.md");
+        let a_disk_before = std::fs::read_to_string(&a_path).unwrap();
+        let a_raw_before = active_raw_import_bytes_for_slug(&conn, "facts/a");
+
+        reset_supersede_claim_blocker(&db_path);
+        guard.set(PutTestHooks {
+            block_after_supersede_claim: true,
+            ..PutTestHooks::default()
+        });
+
+        let winner_db_path = db_path.clone();
+        let winner = thread::spawn(move || {
+            let conn = Connection::open(&winner_db_path).unwrap();
+            conn.busy_timeout(Duration::from_secs(2)).unwrap();
+            put_from_string(
+                &conn,
+                "facts/b",
+                "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+                None,
+            )
+        });
+        wait_for_supersede_claim_entry(&db_path);
+
+        assert_eq!(page_count(&conn, "facts/b"), 0);
+        assert!(!vault_root.join("facts").join("b.md").exists());
+        assert!(!vault_root.join("facts").join("c.md").exists());
+        assert_eq!(std::fs::read_to_string(&a_path).unwrap(), a_disk_before);
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/a"),
+            a_raw_before
+        );
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let loser_db_path = db_path.clone();
+        let loser = thread::spawn(move || {
+            let conn = Connection::open(&loser_db_path).unwrap();
+            conn.busy_timeout(Duration::from_secs(2)).unwrap();
+            let result = put_from_string(
+                &conn,
+                "facts/c",
+                "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
+                None,
+            );
+            done_tx.send(result.is_ok()).unwrap();
+            result
+        });
+
+        match done_rx.recv_timeout(Duration::from_millis(200)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) | Ok(false) => {}
+            Ok(true) => {
+                panic!("second contender unexpectedly succeeded before the winner finished")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("second contender channel disconnected before reporting its result")
+            }
+        }
+        assert!(!vault_root.join("facts").join("c.md").exists());
+        assert_eq!(page_count(&conn, "facts/c"), 0);
+
+        release_supersede_claim_blocker(&db_path);
+
+        winner.join().unwrap().unwrap();
+        let _error = loser.join().unwrap().unwrap_err();
+
+        let b_path = vault_root.join("facts").join("b.md");
+        assert_eq!(std::fs::read_to_string(&a_path).unwrap(), a_disk_before);
+        assert_eq!(
+            std::fs::read_to_string(&b_path).unwrap(),
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n"
+        );
+        assert!(!vault_root.join("facts").join("c.md").exists());
+        assert_eq!(
+            active_raw_import_bytes_for_slug(&conn, "facts/a"),
+            a_raw_before
+        );
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/a"), 1);
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/b"), 1);
+        assert_eq!(active_raw_import_count_for_slug(&conn, "facts/c"), 0);
+        assert_eq!(page_count(&conn, "facts/c"), 0);
+        assert_eq!(collection_needs_full_sync(&conn, 1), 0);
+        assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+    }
+
+    #[test]
+    fn multi_step_supersede_chain_stays_linked() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/b\n---\nC\n",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/b"),
+            Some(page_id_for_slug(&conn, "facts/c"))
+        );
+        assert_eq!(superseded_by_for_slug(&conn, "facts/c"), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn unix_update_without_expected_version_conflicts_before_sentinel_creation() {
@@ -1793,7 +2331,7 @@ mod tests {
             None,
         )
         .unwrap();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -1810,7 +2348,7 @@ mod tests {
                 Some(1),
             )
         });
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let second_db_path = db_path.clone();
@@ -1832,7 +2370,7 @@ mod tests {
             "same-slug second writer should stay blocked until the first writer releases the slug mutex"
         );
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
 
         first.join().unwrap().unwrap();
         let error = second.join().unwrap().unwrap_err();
@@ -1846,7 +2384,7 @@ mod tests {
     #[test]
     fn different_slug_writes_do_not_share_per_slug_mutex() {
         let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -1863,7 +2401,7 @@ mod tests {
                 None,
             )
         });
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let free_db_path = db_path.clone();
@@ -1885,7 +2423,7 @@ mod tests {
             "different-slug writer should not wait on the blocked slug mutex"
         );
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
 
         blocked.join().unwrap().unwrap();
         free.join().unwrap().unwrap();
@@ -1917,10 +2455,9 @@ mod tests {
             .join("sentinel-failure.md")
             .exists());
         assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/sentinel-failure.md",
-            sha256_hex(b"---\ntitle: Sentinel Failure\ntype: note\n---\nBody\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("sentinel-failure.md"),
+            &sha256_hex(b"---\ntitle: Sentinel Failure\ntype: note\n---\nBody\n"),
         ))
         .unwrap());
     }
@@ -1934,10 +2471,9 @@ mod tests {
             ..PutTestHooks::default()
         });
         let body = "---\ntitle: Pre Rename\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/pre-rename.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("pre-rename.md"),
+            &sha256_hex(body.as_bytes()),
         );
 
         let error = put_from_string(&conn, "notes/pre-rename", body, None).unwrap_err();
@@ -1958,10 +2494,9 @@ mod tests {
             ..PutTestHooks::default()
         });
         let body = "---\ntitle: Rename Failure\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/rename-failure.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("rename-failure.md"),
+            &sha256_hex(body.as_bytes()),
         );
 
         let error = put_from_string(&conn, "notes/rename-failure", body, None).unwrap_err();
@@ -1978,10 +2513,9 @@ mod tests {
     fn duplicate_dedup_entry_refuses_before_rename_without_mutating_disk_or_db() {
         let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let body = "---\ntitle: Duplicate Dedup\ntype: note\n---\nBody\n";
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/duplicate-dedup.md",
-            sha256_hex(body.as_bytes())
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("duplicate-dedup.md"),
+            &sha256_hex(body.as_bytes()),
         );
         vault_sync::insert_write_dedup(&dedup_key).unwrap();
 
@@ -1993,6 +2527,21 @@ mod tests {
         assert_eq!(recovery_sentinel_count(&db_path, 1), 0);
         assert!(vault_sync::has_write_dedup(&dedup_key).unwrap());
         vault_sync::remove_write_dedup(&dedup_key).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_dedup_keys_are_scoped_by_target_path() {
+        let key_a = write_dedup_key(Path::new("/tmp/quaid-a/notes/shared.md"), "same-hash");
+        let key_b = write_dedup_key(Path::new("/tmp/quaid-b/notes/shared.md"), "same-hash");
+
+        assert_ne!(key_a, key_b);
+        vault_sync::insert_write_dedup(&key_a).unwrap();
+        vault_sync::insert_write_dedup(&key_b).unwrap();
+        assert!(vault_sync::has_write_dedup(&key_a).unwrap());
+        assert!(vault_sync::has_write_dedup(&key_b).unwrap());
+        vault_sync::remove_write_dedup(&key_a).unwrap();
+        vault_sync::remove_write_dedup(&key_b).unwrap();
     }
 
     #[cfg(unix)]
@@ -2058,10 +2607,9 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=fsync-parent"));
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
-        let dedup_key = format!(
-            "1:{}:{}",
-            "notes/fsync-parent.md",
-            sha256_hex(b"---\ntitle: Parent Fsync\ntype: note\n---\nNew body\n")
+        let dedup_key = write_dedup_key(
+            &vault_root.join("notes").join("fsync-parent.md"),
+            &sha256_hex(b"---\ntitle: Parent Fsync\ntype: note\n---\nNew body\n"),
         );
         assert_eq!(
             read_page(&conn, "notes/fsync-parent").unwrap().3,
@@ -2102,18 +2650,17 @@ mod tests {
         assert_eq!(collection_needs_full_sync(&conn, 1), 1);
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
         assert!(vault_root.join("notes").join("concurrent.md").exists());
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/concurrent.md",
-            sha256_hex(b"---\ntitle: Concurrent\ntype: note\n---\nLocal body\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("concurrent.md"),
+            &sha256_hex(b"---\ntitle: Concurrent\ntype: note\n---\nLocal body\n"),
         ))
         .unwrap());
     }
 
     #[cfg(unix)]
     #[test]
-    fn commit_busy_retains_sentinel_until_startup_recovery_reconciles() {
-        let (_guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
+    fn commit_failure_retains_sentinel_until_startup_recovery_reconciles() {
+        let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
             "notes/busy",
@@ -2121,13 +2668,10 @@ mod tests {
             None,
         )
         .unwrap();
-        let blocker = Connection::open(&db_path).unwrap();
-        blocker.busy_timeout(Duration::from_millis(0)).unwrap();
-        blocker
-            .execute_batch(
-                "BEGIN EXCLUSIVE; UPDATE collections SET updated_at = updated_at WHERE id = 1;",
-            )
-            .unwrap();
+        guard.set(PutTestHooks {
+            fail_commit: true,
+            ..PutTestHooks::default()
+        });
 
         let error = put_from_string(
             &conn,
@@ -2140,13 +2684,11 @@ mod tests {
         assert!(error.to_string().contains("PostRenameRecoveryPendingError"));
         assert!(error.to_string().contains("stage=commit"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
-        assert!(!vault_sync::has_write_dedup(&format!(
-            "1:{}:{}",
-            "notes/busy.md",
-            sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n")
+        assert!(!vault_sync::has_write_dedup(&write_dedup_key(
+            &vault_root.join("notes").join("busy.md"),
+            &sha256_hex(b"---\ntitle: Busy\ntype: note\n---\nNew body on disk\n"),
         ))
         .unwrap());
-        drop(blocker);
 
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
         let recovered = wait_for_recovered_truth(&db_path, "notes/busy", "New body on disk");
@@ -2160,7 +2702,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn foreign_rename_with_busy_falls_back_to_startup_sentinel_recovery() {
+    fn foreign_rename_without_dirty_mark_falls_back_to_startup_sentinel_recovery() {
         let (guard, _dir, db_path, conn, _vault_root) = open_test_db_with_vault_guarded();
         put_from_string(
             &conn,
@@ -2169,14 +2711,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let blocker = Connection::open(&db_path).unwrap();
-        blocker.busy_timeout(Duration::from_millis(0)).unwrap();
-        blocker
-            .execute_batch(
-                "BEGIN EXCLUSIVE; UPDATE collections SET updated_at = updated_at WHERE id = 1;",
-            )
-            .unwrap();
         guard.set(PutTestHooks {
+            skip_dirty_mark: true,
             post_rename_swap: Some(
                 b"---\ntitle: Foreign Busy\ntype: note\n---\nForeign winner body\n".to_vec(),
             ),
@@ -2193,7 +2729,6 @@ mod tests {
 
         assert!(error.to_string().contains("ConcurrentRenameError"));
         assert_eq!(recovery_sentinel_count(&db_path, 1), 1);
-        drop(blocker);
         drop(guard);
 
         let verify_before_runtime = Connection::open(&db_path).unwrap();
@@ -2268,20 +2803,39 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn cli_put_proxies_through_live_serve_socket() {
-        let _env_lock = env_mutation_lock().lock().unwrap();
+        let _env_lock = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let runtime_root = secure_runtime_root();
         let _xdg = EnvVarGuard::set("XDG_RUNTIME_DIR", runtime_root.path().to_str().unwrap());
         let (_guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
         let runtime = vault_sync::start_serve_runtime(db_path.clone()).unwrap();
+        let cli_conn = Connection::open(&db_path).unwrap();
+        cli_conn.busy_timeout(Duration::from_secs(2)).unwrap();
 
-        put_from_cli_string(
-            &conn,
-            "notes/live-owner",
-            "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
-            None,
-            None,
-        )
-        .unwrap();
+        let mut proxied = false;
+        for _ in 0..20 {
+            match put_from_cli_string(
+                &cli_conn,
+                "notes/live-owner",
+                "---\ntitle: Live owner\ntype: note\n---\nProxied\n",
+                None,
+                None,
+            ) {
+                Ok(()) => {
+                    proxied = true;
+                    break;
+                }
+                Err(error) if error.to_string().contains("database is locked") => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => panic!("unexpected live-serve proxy error: {error}"),
+            }
+        }
+        assert!(
+            proxied,
+            "timed out waiting for live-serve proxy write to succeed"
+        );
 
         assert_eq!(
             stdfs::read_to_string(vault_root.join("notes").join("live-owner.md")).unwrap(),
@@ -2314,7 +2868,9 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn cli_put_refuses_same_uid_socket_spoof_with_pid_mismatch() {
-        let _env_lock = env_mutation_lock().lock().unwrap();
+        let _env_lock = env_mutation_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let runtime_root = secure_runtime_root();
         let socket_dir = runtime_root.path().join("quaid");
         let socket_path = socket_dir.join("serve-live.sock");
@@ -2430,7 +2986,7 @@ mod tests {
     #[test]
     fn cli_put_holds_short_lived_owner_lease_for_direct_write() {
         let (guard, _dir, db_path, conn, vault_root) = open_test_db_with_vault_guarded();
-        reset_write_lock_blocker();
+        reset_write_lock_blocker(&db_path);
         guard.set(PutTestHooks {
             block_inside_slug_lock: true,
             ..PutTestHooks::default()
@@ -2449,7 +3005,7 @@ mod tests {
             )
         });
 
-        wait_for_write_lock_entry();
+        wait_for_write_lock_entry(&db_path);
 
         let lease_snapshot: (i64, i64, Option<String>) = conn
             .query_row(
@@ -2467,7 +3023,7 @@ mod tests {
         assert_eq!(lease_snapshot.1, 1);
         assert!(lease_snapshot.2.is_some());
 
-        release_write_lock_blocker();
+        release_write_lock_blocker(&db_path);
         handle.join().unwrap().unwrap();
 
         let released_snapshot: (i64, i64, Option<String>) = conn
@@ -2514,6 +3070,8 @@ mod tests {
             "fs_safety::open_root_fd(Path::new(&collection.root_path))",
             "fs_safety::walk_to_parent_create_dirs(&root_fd, &relative_path_buf)",
             "vault_sync::check_fs_precondition_with_parent_fd(",
+            "let tx = match db.unchecked_transaction()",
+            "let staged = match stage_page_record(&tx, prepared, expected_version)",
             "create_recovery_sentinel(",
             "create_tempfile(&parent_fd, &temp_name, raw_bytes)",
             "fs_safety::stat_at_nofollow(&parent_fd, target_name)",
@@ -2521,7 +3079,7 @@ mod tests {
             "fs_safety::renameat_parent_fd(&parent_fd, &temp_name, target_name)",
             "sync_fd(&parent_fd)",
             "file_state::stat_file_fd(&parent_fd, target_name)",
-            "let outcome = match persist_page_record(",
+            "let outcome = match commit_staged_page_record(",
             "let _ = vault_sync::remove_write_dedup(&dedup_key);",
         ];
         let mut last_index = 0;

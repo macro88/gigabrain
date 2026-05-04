@@ -65,7 +65,7 @@ quaid/
 ├── docs/                     # User-facing documentation (you are here)
 │   ├── spec.md               # Full technical specification
 │   ├── getting-started.md    # New user / new contributor onboarding
-│   ├── roadmap.md            # Phased delivery plan and status
+│   ├── roadmap_v3.md         # Phased delivery plan and status
 │   └── contributing.md       # This file
 ├── openspec/                 # Structured change proposals
 │   └── changes/              # One directory per proposal
@@ -309,6 +309,6 @@ To override a default skill locally, drop a `SKILL.md` in your working directory
 ## Getting help
 
 - Full technical spec: [docs/spec.md](spec.md)
-- Phased delivery plan: [docs/roadmap.md](roadmap.md)
+- Phased delivery plan: [docs/roadmap_v3.md](roadmap_v3.md)
 - Agent instructions: [AGENTS.md](../AGENTS.md) and [CLAUDE.md](../CLAUDE.md)
 - Open an issue on GitHub for bugs or feature requests.

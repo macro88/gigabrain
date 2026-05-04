@@ -68,6 +68,8 @@ enum Commands {
         namespace: Option<String>,
         #[arg(long, default_value = "10")]
         limit: u32,
+        #[arg(long, default_value_t = false)]
+        include_superseded: bool,
         /// Pass the query verbatim to FTS5 without sanitization (for expert FTS5 syntax: quoted phrases, boolean operators, wildcards)
         #[arg(long, default_value_t = false)]
         raw: bool,
@@ -86,6 +88,8 @@ enum Commands {
         wing: Option<String>,
         #[arg(long)]
         namespace: Option<String>,
+        #[arg(long, default_value_t = false)]
+        include_superseded: bool,
     },
     /// Ingest a source document
     Ingest {
@@ -333,6 +337,7 @@ async fn main() -> Result<()> {
             wing,
             namespace,
             limit,
+            include_superseded,
             raw,
         } => commands::search::run(
             &db,
@@ -340,6 +345,7 @@ async fn main() -> Result<()> {
             wing,
             namespace.as_deref().or(Some("")),
             limit,
+            include_superseded,
             cli.json,
             raw,
         ),
@@ -350,6 +356,7 @@ async fn main() -> Result<()> {
             token_budget,
             wing,
             namespace,
+            include_superseded,
         } => {
             commands::query::run(
                 &db,
@@ -359,6 +366,7 @@ async fn main() -> Result<()> {
                 token_budget,
                 wing,
                 namespace.as_deref().or(Some("")),
+                include_superseded,
                 cli.json,
             )
             .await

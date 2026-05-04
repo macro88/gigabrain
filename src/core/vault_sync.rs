@@ -45,6 +45,8 @@ use crate::commands::{get::get_page_by_key, put};
 use crate::core::collections::{
     self, Collection, CollectionError, CollectionState, OpKind, SlugResolution,
 };
+#[cfg(unix)]
+use crate::core::conversation::file_edit::is_history_sidecar_path;
 #[cfg(all(test, unix))]
 use crate::core::db;
 #[cfg(unix)]
@@ -1585,7 +1587,7 @@ pub fn has_write_dedup(key: &str) -> Result<bool, VaultSyncError> {
 }
 
 pub fn with_write_slug_lock<T, F>(
-    collection_id: i64,
+    root_path: &str,
     relative_path: &str,
     action: F,
 ) -> Result<T, VaultSyncError>
@@ -1602,7 +1604,7 @@ where
                     registry: "slug_writes",
                 })?;
         slug_writes
-            .entry(format!("{collection_id}:{relative_path}"))
+            .entry(format!("{root_path}:{relative_path}"))
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     };
@@ -2439,7 +2441,8 @@ fn convert_reconcile_error(
 #[cfg(unix)]
 fn relative_markdown_path(root_path: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root_path).ok()?;
-    is_markdown_file(relative).then(|| relative.to_path_buf())
+    (is_markdown_file(relative) && !is_history_sidecar_path(relative))
+        .then(|| relative.to_path_buf())
 }
 
 #[cfg(unix)]
@@ -6612,6 +6615,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn classify_watch_event_ignores_history_sidecar_paths() {
+        let root = tempfile::TempDir::new().unwrap();
+        let history_path = root
+            .path()
+            .join("extracted")
+            .join("_history")
+            .join("facts--foo--2026-05-04T00-00-00Z.md");
+        fs::create_dir_all(history_path.parent().unwrap()).unwrap();
+        fs::write(&history_path, "archived").unwrap();
+        let event = NotifyEvent {
+            kind: NotifyEventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            paths: vec![history_path],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_watch_event(root.path(), event).unwrap();
+
+        assert!(actions.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ignore_file_change_reloads_mirror_and_triggers_reconcile() {
         let (_dir, _db_path, conn) = open_test_db_file();
         let root = tempfile::TempDir::new().unwrap();
@@ -7882,6 +7907,37 @@ mod tests {
         assert!(has_write_dedup(&key).unwrap());
         remove_write_dedup(&key).unwrap();
         assert!(!has_write_dedup(&key).unwrap());
+    }
+
+    #[test]
+    fn write_slug_lock_is_scoped_by_root_path() {
+        init_process_registries().unwrap();
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first = std::thread::spawn(move || {
+            with_write_slug_lock("root-a", "facts/a.md", || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+        });
+
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            with_write_slug_lock("root-b", "facts/a.md", || {
+                done_tx.send(()).unwrap();
+            })
+            .unwrap();
+        });
+
+        done_rx.recv_timeout(Duration::from_millis(200)).unwrap();
+
+        release_tx.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
     }
 
     #[cfg(unix)]

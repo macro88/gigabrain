@@ -18,6 +18,13 @@
 - DEFAULT column is schema contract: discriminator early when same table stores two conceptually different row kinds.
 - Error string contracts are bidirectional: all producers and consumers must agree. Enumerate all expectations before choosing format.
 
+## Learnings
+
+- [2026-05-04T07:22:12.881+08:00] On rename-before-commit write paths, typed semantic refusals need a preflight gate before sentinel/tempfile/rename, but the in-transaction check must still stay in place as the race backstop. Honest proof is blocked-state evidence: no new vault file, no new active raw bytes, no recovery escalation.
+- [2026-05-04T07:22:12.881+08:00] When a leased queue row can be re-claimed, `job_id` stops being an ownership proof. Bind `done`/`failed` transitions to the dequeue generation already carried by the row (here: `attempts`) or a stale worker can close a newer lease after expiry.
+- [2026-05-04T07:22:12.881+08:00] Watcher-driven archive-on-edit stays linear if the old head becomes the archive row and any existing predecessor is rewired onto that archive before the live head is updated. Whitespace-only saves need two proofs together: the handler must refuse to churn page/raw/file-state rows, and diff/full-hash classification must also suppress the same path so the no-op stays quiet on the next reconcile.
+- [2026-05-04T07:22:12.881+08:00] A rename-only extracted whitespace no-op still needs a tracked-path handoff. If the early return deletes the old `file_state` row without moving it to the new path, the page becomes untracked even though page/raw state stayed unchanged.
+
 ---
 
 ## Archived Sessions
