@@ -14,20 +14,20 @@
 ## 2. ADD-only supersede chain — page-level support
 
 - [x] 2.1 Keep `superseded_by: Option<i64>` on `Page` (or equivalent) in `src/core/types.rs` as landed baseline plumbing for the remaining supersede work
-- [ ] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)
-- [ ] 2.3 Reject writes that attempt to supersede an already-superseded (non-head) page; return a typed error to the caller
-- [ ] 2.4 Update `src/core/migrate.rs` import path to round-trip `superseded_by` correctly via frontmatter `supersedes`
-- [ ] 2.5 Unit tests: head/non-head invariants, atomic two-end update, rejection of non-head supersede, multi-step chain (A → B → C) integrity, frontmatter round-trip
+- [x] 2.2 Update page write/upsert paths so a write with frontmatter `supersedes: <slug>` resolves the prior slug to its page id, sets the new page's row, and updates the prior page's `superseded_by` atomically (single transaction)
+- [x] 2.3 Reject writes that attempt to supersede an already-superseded (non-head) page; return a typed error to the caller
+- [x] 2.4 Update `src/core/migrate.rs` import path to round-trip `superseded_by` correctly via frontmatter `supersedes`
+- [x] 2.5 Unit tests: head/non-head invariants, atomic two-end update, rejection of non-head supersede, multi-step chain (A → B → C) integrity, frontmatter round-trip
 
 ## 3. Head-only retrieval default + `include_superseded` opt-in
 
-- [ ] 3.1 Add `include_superseded: bool` (default `false`) to `hybrid_search` in `src/core/search.rs`; apply `superseded_by IS NULL` predicate when not set
-- [ ] 3.2 Add the same parameter and predicate to `progressive_retrieve` in `src/core/progressive.rs`, applied before token-budget expansion
-- [ ] 3.3 Plumb `include_superseded` through `memory_search` and `memory_query` MCP tools in `src/mcp/server.rs`
-- [ ] 3.4 Add `--include-superseded` flag to `quaid search` (`src/commands/search.rs`) and `quaid query` (`src/commands/query.rs`)
-- [ ] 3.5 Update `memory_get` to return the page regardless of head status and include `superseded_by: <slug-or-null>` in the response
-- [ ] 3.6 Update `memory_graph` to expose `superseded_by` as a navigable edge type distinct from `links`-table edges
-- [ ] 3.7 Tests: head-only default in `tests/supersede_chain.rs` (search, query, progressive, graph); `--include-superseded` exposes chain; `memory_get` returns non-head with successor pointer
+- [x] 3.1 Add `include_superseded: bool` (default `false`) to `hybrid_search` in `src/core/search.rs`; apply `superseded_by IS NULL` predicate when not set
+- [x] 3.2 Add the same parameter and predicate to `progressive_retrieve` in `src/core/progressive.rs`, applied before token-budget expansion
+- [x] 3.3 Plumb `include_superseded` through `memory_search` and `memory_query` MCP tools in `src/mcp/server.rs`
+- [x] 3.4 Add `--include-superseded` flag to `quaid search` (`src/commands/search.rs`) and `quaid query` (`src/commands/query.rs`)
+- [x] 3.5 Update `memory_get` to return the page regardless of head status and include `superseded_by: <slug-or-null>` in the response
+- [x] 3.6 Update `memory_graph` to expose `superseded_by` as a navigable edge type distinct from `links`-table edges
+- [x] 3.7 Tests: head-only default in `tests/supersede_chain.rs` (search, query, progressive, graph); `--include-superseded` exposes chain; `memory_get` returns non-head with successor pointer
 
 ## 4. Conversation file format
 

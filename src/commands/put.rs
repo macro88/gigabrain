@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 #[cfg(unix)]
 use crate::core::fs_safety;
+use crate::core::supersede;
 use crate::core::{file_state, markdown, page_uuid, palace, raw_imports, vault_sync};
 
 #[derive(Debug, Clone)]
@@ -37,6 +38,7 @@ struct PreparedPut {
     compiled_truth: String,
     timeline: String,
     frontmatter_json: String,
+    supersedes: Option<String>,
     wing: String,
     room: String,
     now: String,
@@ -290,6 +292,7 @@ fn put_from_string_with_output(
                 compiled_truth: compiled_truth.clone(),
                 timeline: timeline.clone(),
                 frontmatter_json: serde_json::to_string(&frontmatter)?,
+                supersedes: frontmatter.get("supersedes").cloned(),
                 wing: wing.clone(),
                 room: room.clone(),
                 now: now.clone(),
@@ -619,6 +622,16 @@ fn persist_page_record(
         rusqlite::params![prepared.collection_id, prepared.namespace, prepared.slug],
         |row| row.get(0),
     )?;
+
+    supersede::reconcile_supersede_chain(
+        &tx,
+        prepared.collection_id,
+        &prepared.namespace,
+        page_id,
+        &prepared.slug,
+        prepared.supersedes.as_deref(),
+    )
+    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))?;
 
     if let Some(file_stat) = file_stat {
         file_state::upsert_file_state(
@@ -1511,6 +1524,23 @@ mod tests {
         .ok()
     }
 
+    fn superseded_by_for_slug(conn: &Connection, slug: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT superseded_by FROM pages WHERE slug = ?1",
+            [slug],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten()
+    }
+
+    fn page_id_for_slug(conn: &Connection, slug: &str) -> i64 {
+        conn.query_row("SELECT id FROM pages WHERE slug = ?1", [slug], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
     // ── create ─────────────────────────────────────────────────
 
     #[test]
@@ -1650,6 +1680,119 @@ mod tests {
             active_raw_import_bytes_for_slug(&conn, "people/alice"),
             updated.as_bytes()
         );
+    }
+
+    #[test]
+    fn create_successor_updates_both_ends_of_supersede_chain_atomically() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nOriginal fact\n",
+            None,
+        )
+        .unwrap();
+
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nUpdated fact\n",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+        assert_eq!(superseded_by_for_slug(&conn, "facts/b"), None);
+        assert_eq!(
+            conn.query_row::<String, _, _>(
+                "SELECT compiled_truth FROM pages WHERE slug = 'facts/a'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+            "Original fact"
+        );
+    }
+
+    #[test]
+    fn superseding_non_head_page_is_rejected_without_partial_write() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+
+        let error = put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/a\n---\nC\n",
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SupersedeConflictError"));
+        assert_eq!(
+            conn.query_row::<i64, _, _>(
+                "SELECT COUNT(*) FROM pages WHERE slug = 'facts/c'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+    }
+
+    #[test]
+    fn multi_step_supersede_chain_stays_linked() {
+        let conn = open_test_db();
+        put_from_string(
+            &conn,
+            "facts/a",
+            "---\ntitle: A\ntype: fact\n---\nA\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/b",
+            "---\ntitle: B\ntype: fact\nsupersedes: facts/a\n---\nB\n",
+            None,
+        )
+        .unwrap();
+        put_from_string(
+            &conn,
+            "facts/c",
+            "---\ntitle: C\ntype: fact\nsupersedes: facts/b\n---\nC\n",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/a"),
+            Some(page_id_for_slug(&conn, "facts/b"))
+        );
+        assert_eq!(
+            superseded_by_for_slug(&conn, "facts/b"),
+            Some(page_id_for_slug(&conn, "facts/c"))
+        );
+        assert_eq!(superseded_by_for_slug(&conn, "facts/c"), None);
     }
 
     #[cfg(unix)]

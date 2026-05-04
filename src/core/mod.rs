@@ -21,5 +21,6 @@ pub mod quarantine;
 pub mod raw_imports;
 pub mod reconciler;
 pub mod search;
+pub mod supersede;
 pub mod types;
 pub mod vault_sync;

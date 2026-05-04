@@ -4,10 +4,12 @@ use rusqlite::Connection;
 
 use super::collections::{self, OpKind, SlugResolution};
 use super::fts::{
-    sanitize_fts_query, search_fts_canonical_tiered_with_namespace,
-    search_fts_tiered_with_namespace,
+    sanitize_fts_query, search_fts_canonical_tiered_with_namespace_filtered,
+    search_fts_tiered_with_namespace_filtered,
 };
-use super::inference::{search_vec_canonical_with_namespace, search_vec_with_namespace};
+use super::inference::{
+    search_vec_canonical_with_namespace_filtered, search_vec_with_namespace_filtered,
+};
 use super::types::{SearchError, SearchMergeStrategy, SearchResult};
 
 /// Hybrid search with exact-slug short-circuit, FTS5, and vector search.
@@ -19,10 +21,19 @@ pub fn hybrid_search(
     query: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_with_namespace(query, wing, collection_filter, None, conn, limit)
+    hybrid_search_with_namespace(
+        query,
+        wing,
+        collection_filter,
+        None,
+        include_superseded,
+        conn,
+        limit,
+    )
 }
 
 /// Namespace-aware variant of [`hybrid_search`].
@@ -32,6 +43,7 @@ pub fn hybrid_search_with_namespace(
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -40,6 +52,7 @@ pub fn hybrid_search_with_namespace(
         wing,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         false,
@@ -52,10 +65,19 @@ pub fn hybrid_search_canonical(
     query: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    hybrid_search_canonical_with_namespace(query, wing, collection_filter, None, conn, limit)
+    hybrid_search_canonical_with_namespace(
+        query,
+        wing,
+        collection_filter,
+        None,
+        include_superseded,
+        conn,
+        limit,
+    )
 }
 
 /// Namespace-aware canonical-slug variant of [`hybrid_search`].
@@ -64,6 +86,7 @@ pub fn hybrid_search_canonical_with_namespace(
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -72,6 +95,7 @@ pub fn hybrid_search_canonical_with_namespace(
         wing,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         true,
@@ -83,6 +107,7 @@ fn hybrid_search_impl(
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -98,6 +123,7 @@ fn hybrid_search_impl(
             wing,
             collection_filter,
             namespace_filter,
+            include_superseded,
             conn,
             canonical_slug,
         )? {
@@ -111,35 +137,46 @@ fn hybrid_search_impl(
     }
 
     let fts_results = if canonical_slug {
-        search_fts_canonical_tiered_with_namespace(
+        search_fts_canonical_tiered_with_namespace_filtered(
             &fts_safe,
             wing,
             collection_filter,
             namespace_filter,
+            include_superseded,
             conn,
             limit,
         )?
     } else {
-        search_fts_tiered_with_namespace(
+        search_fts_tiered_with_namespace_filtered(
             &fts_safe,
             wing,
             collection_filter,
             namespace_filter,
+            include_superseded,
             conn,
             limit,
         )?
     };
     let vec_results = if canonical_slug {
-        search_vec_canonical_with_namespace(
+        search_vec_canonical_with_namespace_filtered(
             trimmed,
             10,
             wing,
             collection_filter,
             namespace_filter,
+            include_superseded,
             conn,
         )?
     } else {
-        search_vec_with_namespace(trimmed, 10, wing, collection_filter, namespace_filter, conn)?
+        search_vec_with_namespace_filtered(
+            trimmed,
+            10,
+            wing,
+            collection_filter,
+            namespace_filter,
+            include_superseded,
+            conn,
+        )?
     };
 
     let mut merged = match read_merge_strategy(conn)? {
@@ -192,10 +229,19 @@ fn exact_slug_result(
     slug: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
+    include_superseded: bool,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
-    exact_slug_result_with_namespace(slug, wing, collection_filter, None, conn, canonical_slug)
+    exact_slug_result_with_namespace(
+        slug,
+        wing,
+        collection_filter,
+        None,
+        include_superseded,
+        conn,
+        canonical_slug,
+    )
 }
 
 fn exact_slug_result_with_namespace(
@@ -203,6 +249,7 @@ fn exact_slug_result_with_namespace(
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Option<SearchResult>, SearchError> {
@@ -212,6 +259,7 @@ fn exact_slug_result_with_namespace(
             wing,
             collection_filter,
             namespace_filter,
+            include_superseded,
             conn,
         );
     }
@@ -240,6 +288,9 @@ fn exact_slug_result_with_namespace(
             query.push_str(" OR namespace = '')");
             params.push(Box::new(namespace.to_owned()));
         }
+    }
+    if !include_superseded {
+        query.push_str(" AND superseded_by IS NULL");
     }
     if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
         query.push_str(" ORDER BY CASE WHEN namespace = ?");
@@ -272,9 +323,17 @@ fn exact_slug_result_canonical(
     slug: &str,
     wing: Option<&str>,
     collection_filter: Option<i64>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
-    exact_slug_result_canonical_with_namespace(slug, wing, collection_filter, None, conn)
+    exact_slug_result_canonical_with_namespace(
+        slug,
+        wing,
+        collection_filter,
+        None,
+        include_superseded,
+        conn,
+    )
 }
 
 fn exact_slug_result_canonical_with_namespace(
@@ -282,6 +341,7 @@ fn exact_slug_result_canonical_with_namespace(
     wing: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
     if let Some(collection_id) = collection_filter {
@@ -290,6 +350,7 @@ fn exact_slug_result_canonical_with_namespace(
             wing,
             collection_id,
             namespace_filter,
+            include_superseded,
             conn,
         );
     }
@@ -317,7 +378,14 @@ fn exact_slug_result_canonical_with_namespace(
         Err(_) => return Ok(None),
     };
 
-    let result = query_exact_slug_canonical(&resolved.2, wing, resolved.0, namespace_filter, conn);
+    let result = query_exact_slug_canonical(
+        &resolved.2,
+        wing,
+        resolved.0,
+        namespace_filter,
+        include_superseded,
+        conn,
+    );
 
     match result {
         Ok(result) => Ok(Some(result)),
@@ -331,9 +399,17 @@ fn exact_slug_result_canonical_for_collection(
     slug: &str,
     wing: Option<&str>,
     collection_id: i64,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
-    exact_slug_result_canonical_for_collection_with_namespace(slug, wing, collection_id, None, conn)
+    exact_slug_result_canonical_for_collection_with_namespace(
+        slug,
+        wing,
+        collection_id,
+        None,
+        include_superseded,
+        conn,
+    )
 }
 
 fn exact_slug_result_canonical_for_collection_with_namespace(
@@ -341,6 +417,7 @@ fn exact_slug_result_canonical_for_collection_with_namespace(
     wing: Option<&str>,
     collection_id: i64,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<Option<SearchResult>, SearchError> {
     let stripped_slug = if let Some((collection_name, relative_slug)) = slug.split_once("::") {
@@ -354,8 +431,14 @@ fn exact_slug_result_canonical_for_collection_with_namespace(
         slug.to_owned()
     };
 
-    let result =
-        query_exact_slug_canonical(&stripped_slug, wing, collection_id, namespace_filter, conn);
+    let result = query_exact_slug_canonical(
+        &stripped_slug,
+        wing,
+        collection_id,
+        namespace_filter,
+        include_superseded,
+        conn,
+    );
 
     match result {
         Ok(result) => Ok(Some(result)),
@@ -369,6 +452,7 @@ fn query_exact_slug_canonical(
     wing: Option<&str>,
     collection_id: i64,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
 ) -> Result<SearchResult, rusqlite::Error> {
     let mut query = String::from(
@@ -396,6 +480,9 @@ fn query_exact_slug_canonical(
             query.push_str(" OR p.namespace = '')");
             params.push(Box::new(namespace.to_owned()));
         }
+    }
+    if !include_superseded {
+        query.push_str(" AND p.superseded_by IS NULL");
     }
     if let Some(namespace) = namespace_filter.filter(|namespace| !namespace.is_empty()) {
         query.push_str(" ORDER BY CASE WHEN p.namespace = ?");
@@ -624,7 +711,7 @@ mod tests {
     fn hybrid_search_returns_empty_for_blank_query() {
         let conn = open_test_db();
 
-        let results = hybrid_search("   ", None, None, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search("   ", None, None, false, &conn, 1000).expect("hybrid search");
 
         assert!(results.is_empty());
     }
@@ -642,7 +729,7 @@ mod tests {
         );
 
         let results =
-            hybrid_search("people/alice", None, None, &conn, 1000).expect("hybrid search");
+            hybrid_search("people/alice", None, None, false, &conn, 1000).expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -660,8 +747,8 @@ mod tests {
             "people",
         );
 
-        let results =
-            hybrid_search("[[people/alice]]", None, None, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search("[[people/alice]]", None, None, false, &conn, 1000)
+            .expect("hybrid search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "people/alice");
@@ -711,7 +798,8 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("AI founder", None, None, &conn, 1000).expect("hybrid search");
+        let results =
+            hybrid_search("AI founder", None, None, false, &conn, 1000).expect("hybrid search");
         let slugs: Vec<_> = results.iter().map(|result| result.slug.as_str()).collect();
 
         assert!(slugs.contains(&"people/alice"));
@@ -752,7 +840,7 @@ mod tests {
             "no embeddings are written in this proof, so vector recall must stay empty"
         );
 
-        let results = hybrid_search("neural network inference", None, None, &conn, 1000)
+        let results = hybrid_search("neural network inference", None, None, false, &conn, 1000)
             .expect("hybrid search");
 
         assert_eq!(
@@ -795,8 +883,9 @@ mod tests {
             "canonical hybrid proof must not depend on vector quality"
         );
 
-        let results = hybrid_search_canonical("neural network inference", None, None, &conn, 1000)
-            .expect("canonical hybrid search");
+        let results =
+            hybrid_search_canonical("neural network inference", None, None, false, &conn, 1000)
+                .expect("canonical hybrid search");
 
         assert_eq!(
             results
@@ -832,8 +921,8 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results =
-            hybrid_search("AI founder", Some("people"), None, &conn, 1000).expect("hybrid search");
+        let results = hybrid_search("AI founder", Some("people"), None, false, &conn, 1000)
+            .expect("hybrid search");
 
         assert!(!results.is_empty());
         assert!(results.iter().all(|result| result.wing == "people"));
@@ -863,13 +952,21 @@ mod tests {
             None,
             None,
             Some("test-ns"),
+            false,
             &conn,
             10,
         )
         .expect("namespaced query");
-        let global_only =
-            hybrid_search_canonical_with_namespace("privatetoken", None, None, Some(""), &conn, 10)
-                .expect("global query");
+        let global_only = hybrid_search_canonical_with_namespace(
+            "privatetoken",
+            None,
+            None,
+            Some(""),
+            false,
+            &conn,
+            10,
+        )
+        .expect("global query");
 
         assert!(namespaced
             .iter()
@@ -932,7 +1029,8 @@ mod tests {
         )
         .expect("insert config");
 
-        let results = hybrid_search("systems language", None, None, &conn, 1).expect("rrf search");
+        let results =
+            hybrid_search("systems language", None, None, false, &conn, 1).expect("rrf search");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "concepts/rust");
@@ -961,16 +1059,19 @@ mod tests {
             "people/alice",
             Some("people"),
             Some(default_collection_id),
+            false,
             &conn,
             false,
         )
         .expect("exact slug");
-        let wrong_wing = exact_slug_result("people/alice", Some("companies"), None, &conn, false)
-            .expect("wrong wing");
+        let wrong_wing =
+            exact_slug_result("people/alice", Some("companies"), None, false, &conn, false)
+                .expect("wrong wing");
         let wrong_collection = exact_slug_result(
             "people/alice",
             None,
             Some(default_collection_id + 999),
+            false,
             &conn,
             false,
         )
@@ -986,7 +1087,7 @@ mod tests {
         let conn = open_test_db();
         conn.execute("DROP TABLE pages", []).expect("drop pages");
 
-        let err = exact_slug_result("people/alice", None, None, &conn, false)
+        let err = exact_slug_result("people/alice", None, None, false, &conn, false)
             .expect_err("missing pages table should fail");
 
         assert!(matches!(err, SearchError::Sqlite(_)));
@@ -1014,7 +1115,7 @@ mod tests {
             "people",
         );
 
-        let err = hybrid_search_canonical("people/alice", None, None, &conn, 10)
+        let err = hybrid_search_canonical("people/alice", None, None, false, &conn, 10)
             .expect_err("ambiguous canonical search should fail");
 
         assert!(matches!(
@@ -1040,9 +1141,10 @@ mod tests {
             "people",
         );
 
-        let result = exact_slug_result_canonical("work::people/alice", Some("people"), None, &conn)
-            .expect("canonical exact slug")
-            .expect("matching page");
+        let result =
+            exact_slug_result_canonical("work::people/alice", Some("people"), None, false, &conn)
+                .expect("canonical exact slug")
+                .expect("matching page");
 
         assert_eq!(result.slug, "work::people/alice");
         assert_eq!(result.wing, "people");
@@ -1062,9 +1164,14 @@ mod tests {
             "people",
         );
 
-        let result =
-            exact_slug_result_canonical("work::people/alice", Some("companies"), None, &conn)
-                .expect("canonical exact slug");
+        let result = exact_slug_result_canonical(
+            "work::people/alice",
+            Some("companies"),
+            None,
+            false,
+            &conn,
+        )
+        .expect("canonical exact slug");
 
         assert!(result.is_none());
     }
@@ -1075,8 +1182,9 @@ mod tests {
         conn.execute("DROP TABLE collections", [])
             .expect("drop collections");
 
-        let err = exact_slug_result_canonical_for_collection("work::people/alice", None, 1, &conn)
-            .expect_err("missing collections table should fail");
+        let err =
+            exact_slug_result_canonical_for_collection("work::people/alice", None, 1, false, &conn)
+                .expect_err("missing collections table should fail");
 
         assert!(matches!(err, SearchError::Sqlite(_)));
     }
@@ -1085,8 +1193,8 @@ mod tests {
     fn exact_slug_result_canonical_returns_none_for_invalid_bare_slug() {
         let conn = open_test_db();
 
-        let result =
-            exact_slug_result_canonical("/etc/passwd", None, None, &conn).expect("invalid slug");
+        let result = exact_slug_result_canonical("/etc/passwd", None, None, false, &conn)
+            .expect("invalid slug");
 
         assert!(result.is_none());
     }
@@ -1109,6 +1217,7 @@ mod tests {
             "work::people/alice",
             Some("people"),
             work_collection_id,
+            false,
             &conn,
         )
         .expect("matching canonical exact slug");
@@ -1116,6 +1225,7 @@ mod tests {
             "default::people/alice",
             None,
             work_collection_id,
+            false,
             &conn,
         )
         .expect("wrong prefix");
@@ -1123,6 +1233,7 @@ mod tests {
             "missing::people/alice",
             None,
             work_collection_id,
+            false,
             &conn,
         )
         .expect("missing prefix");
@@ -1130,6 +1241,7 @@ mod tests {
             "people/alice",
             Some("companies"),
             work_collection_id,
+            false,
             &conn,
         )
         .expect("wrong wing");
@@ -1176,8 +1288,8 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results =
-            hybrid_search("what is rust?", None, None, &conn, 1000).expect("hybrid search with ?");
+        let results = hybrid_search("what is rust?", None, None, false, &conn, 1000)
+            .expect("hybrid search with ?");
         assert!(!results.is_empty());
     }
 
@@ -1197,7 +1309,7 @@ mod tests {
         embed::run(&conn, None, true, false).expect("embed pages");
 
         let results =
-            hybrid_search("AND?", None, None, &conn, 1000).expect("hybrid search with AND?");
+            hybrid_search("AND?", None, None, false, &conn, 1000).expect("hybrid search with AND?");
         assert!(results.is_empty());
     }
 
@@ -1214,7 +1326,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        let results = hybrid_search("???***", None, None, &conn, 1000)
+        let results = hybrid_search("???***", None, None, false, &conn, 1000)
             .expect("hybrid search with punctuation only");
         assert!(results.is_empty());
     }
@@ -1235,7 +1347,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("hello, world.", None, None, &conn, 1000).is_ok());
+        assert!(hybrid_search("hello, world.", None, None, false, &conn, 1000).is_ok());
     }
 
     #[test]
@@ -1251,7 +1363,9 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("what's rust's type system?", None, None, &conn, 1000).is_ok());
+        assert!(
+            hybrid_search("what's rust's type system?", None, None, false, &conn, 1000).is_ok()
+        );
     }
 
     #[test]
@@ -1267,7 +1381,7 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("path/to/thing key=value", None, None, &conn, 1000).is_ok());
+        assert!(hybrid_search("path/to/thing key=value", None, None, false, &conn, 1000).is_ok());
     }
 
     #[test]
@@ -1283,6 +1397,6 @@ mod tests {
         );
         embed::run(&conn, None, true, false).expect("embed pages");
 
-        assert!(hybrid_search("memory; safety", None, None, &conn, 1000).is_ok());
+        assert!(hybrid_search("memory; safety", None, None, false, &conn, 1000).is_ok());
     }
 }

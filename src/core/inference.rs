@@ -1081,12 +1081,33 @@ pub fn search_vec_with_namespace(
     namespace_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_with_namespace_filtered(
+        query,
+        k,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        false,
+        conn,
+    )
+}
+
+pub fn search_vec_with_namespace_filtered(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    include_superseded: bool,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_vec_internal(
         query,
         k,
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         false,
     )
@@ -1112,12 +1133,33 @@ pub fn search_vec_canonical_with_namespace(
     namespace_filter: Option<&str>,
     conn: &Connection,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_vec_canonical_with_namespace_filtered(
+        query,
+        k,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        false,
+        conn,
+    )
+}
+
+pub fn search_vec_canonical_with_namespace_filtered(
+    query: &str,
+    k: usize,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    include_superseded: bool,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_vec_internal(
         query,
         k,
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         true,
     )
@@ -1129,6 +1171,7 @@ fn search_vec_internal(
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     canonical_slug: bool,
 ) -> Result<Vec<SearchResult>, SearchError> {
@@ -1203,6 +1246,10 @@ fn search_vec_internal(
             sql.push_str(" OR p.namespace = '')");
             params.push(Box::new(namespace.to_owned()));
         }
+    }
+
+    if !include_superseded {
+        sql.push_str(" AND p.superseded_by IS NULL");
     }
 
     let limit_index = params.len() + 1;

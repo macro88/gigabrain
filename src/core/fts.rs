@@ -109,6 +109,7 @@ pub fn search_fts_with_namespace(
         wing_filter,
         collection_filter,
         namespace_filter,
+        false,
         conn,
         limit,
         false,
@@ -135,11 +136,32 @@ pub fn search_fts_canonical_with_namespace(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_canonical_with_namespace_filtered(
+        query,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        false,
+        conn,
+        limit,
+    )
+}
+
+pub fn search_fts_canonical_with_namespace_filtered(
+    query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    include_superseded: bool,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_internal(
         query,
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         true,
@@ -193,11 +215,32 @@ pub fn search_fts_tiered_with_namespace(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_tiered_with_namespace_filtered(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        false,
+        conn,
+        limit,
+    )
+}
+
+pub fn search_fts_tiered_with_namespace_filtered(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    include_superseded: bool,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_tiered_internal(
         sanitized_query,
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         false,
@@ -233,11 +276,32 @@ pub fn search_fts_canonical_tiered_with_namespace(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
+    search_fts_canonical_tiered_with_namespace_filtered(
+        sanitized_query,
+        wing_filter,
+        collection_filter,
+        namespace_filter,
+        false,
+        conn,
+        limit,
+    )
+}
+
+pub fn search_fts_canonical_tiered_with_namespace_filtered(
+    sanitized_query: &str,
+    wing_filter: Option<&str>,
+    collection_filter: Option<i64>,
+    namespace_filter: Option<&str>,
+    include_superseded: bool,
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SearchResult>, SearchError> {
     search_fts_tiered_internal(
         sanitized_query,
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         true,
@@ -249,6 +313,7 @@ fn search_fts_tiered_internal(
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -259,6 +324,7 @@ fn search_fts_tiered_internal(
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         canonical_slug,
@@ -277,6 +343,7 @@ fn search_fts_tiered_internal(
         wing_filter,
         collection_filter,
         namespace_filter,
+        include_superseded,
         conn,
         limit,
         canonical_slug,
@@ -288,6 +355,7 @@ fn search_fts_internal(
     wing_filter: Option<&str>,
     collection_filter: Option<i64>,
     namespace_filter: Option<&str>,
+    include_superseded: bool,
     conn: &Connection,
     limit: usize,
     canonical_slug: bool,
@@ -340,6 +408,10 @@ fn search_fts_internal(
             sql.push_str(" OR p.namespace = '')");
             params.push(Box::new(namespace.to_owned()));
         }
+    }
+
+    if !include_superseded {
+        sql.push_str(" AND p.superseded_by IS NULL");
     }
 
     // bm25() returns negative values; ascending order = most relevant first.

@@ -177,7 +177,7 @@ fn neighborhood_graph_from_root(
           ORDER BY p.slug, l.relationship"
     );
 
-    let mut seen_edges: HashSet<i64> = HashSet::new();
+    let mut seen_edges: HashSet<String> = HashSet::new();
 
     'bfs: while let Some((page_id, current_depth)) = queue.pop_front() {
         if current_depth >= effective_depth {
@@ -222,7 +222,7 @@ fn neighborhood_graph_from_root(
                 continue;
             }
 
-            if seen_edges.insert(link_id) {
+            if seen_edges.insert(format!("link:{link_id}")) {
                 if edges.len() >= MAX_EDGES {
                     break 'bfs;
                 }
@@ -247,9 +247,133 @@ fn neighborhood_graph_from_root(
                 queue.push_back((target_id, current_depth + 1));
             }
         }
+
+        for (target_id, to_slug, to_type, to_title) in
+            supersede_successors(page_id, canonical_slug, conn)?
+        {
+            if seen_edges.insert(format!("supersede:{current_slug}->{to_slug}")) {
+                if edges.len() >= MAX_EDGES {
+                    break 'bfs;
+                }
+                edges.push(GraphEdge {
+                    from: current_slug.clone(),
+                    to: to_slug.clone(),
+                    relationship: "superseded_by".to_string(),
+                    valid_from: None,
+                    valid_until: None,
+                });
+            }
+
+            if visited.insert(target_id) {
+                if nodes.len() >= MAX_NODES {
+                    break 'bfs;
+                }
+                nodes.push(GraphNode {
+                    slug: to_slug.clone(),
+                    node_type: to_type,
+                    title: to_title,
+                });
+                queue.push_back((target_id, current_depth + 1));
+            }
+        }
+
+        for (from_id, from_slug, from_type, from_title) in
+            supersede_predecessors(page_id, canonical_slug, conn)?
+        {
+            if seen_edges.insert(format!("supersede:{from_slug}->{current_slug}")) {
+                if edges.len() >= MAX_EDGES {
+                    break 'bfs;
+                }
+                edges.push(GraphEdge {
+                    from: from_slug.clone(),
+                    to: current_slug.clone(),
+                    relationship: "superseded_by".to_string(),
+                    valid_from: None,
+                    valid_until: None,
+                });
+            }
+
+            if visited.insert(from_id) {
+                if nodes.len() >= MAX_NODES {
+                    break 'bfs;
+                }
+                nodes.push(GraphNode {
+                    slug: from_slug.clone(),
+                    node_type: from_type,
+                    title: from_title,
+                });
+                queue.push_back((from_id, current_depth + 1));
+            }
+        }
     }
 
     Ok(GraphResult { nodes, edges })
+}
+
+fn supersede_successors(
+    page_id: i64,
+    canonical_slug: bool,
+    conn: &Connection,
+) -> Result<Vec<(i64, String, String, String)>, rusqlite::Error> {
+    let slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT p.id, {slug_expr}, p.type, p.title
+         FROM pages current
+         JOIN pages p ON current.superseded_by = p.id{collection_join}
+         WHERE current.id = ?1"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([page_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+fn supersede_predecessors(
+    page_id: i64,
+    canonical_slug: bool,
+    conn: &Connection,
+) -> Result<Vec<(i64, String, String, String)>, rusqlite::Error> {
+    let slug_expr = if canonical_slug {
+        "c.name || '::' || p.slug"
+    } else {
+        "p.slug"
+    };
+    let collection_join = if canonical_slug {
+        " JOIN collections c ON c.id = p.collection_id"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT p.id, {slug_expr}, p.type, p.title
+         FROM pages p{collection_join}
+         WHERE p.superseded_by = ?1
+         ORDER BY p.slug"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([page_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
 }
 
 // ── Tests ────────────────────────────────────────────────────

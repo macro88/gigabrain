@@ -13,10 +13,10 @@ use crate::core::collections::{self, CollectionError, OpKind, SlugResolution};
 use crate::core::fts::sanitize_fts_query;
 use crate::core::gaps;
 use crate::core::graph::{self, GraphError, TemporalFilter};
-use crate::core::markdown;
 use crate::core::namespace;
 use crate::core::progressive::progressive_retrieve_with_namespace;
 use crate::core::search::hybrid_search_canonical_with_namespace;
+use crate::core::supersede;
 use crate::core::types::SearchError;
 use crate::core::vault_sync;
 
@@ -145,6 +145,7 @@ fn canonicalize_page_for_mcp(
     resolved: &vault_sync::ResolvedSlug,
 ) -> crate::core::types::Page {
     let mut rendered = page.clone();
+    rendered.slug = canonical_slug(&resolved.collection_name, &resolved.slug);
     rendered.frontmatter.insert(
         "slug".to_string(),
         canonical_slug(&resolved.collection_name, &resolved.slug),
@@ -327,7 +328,10 @@ fn map_search_error(e: SearchError) -> rmcp::Error {
 
 fn map_anyhow_error(e: anyhow::Error) -> rmcp::Error {
     let msg = e.to_string();
-    if msg.contains("ConflictError") || msg.contains("ConcurrentRenameError") {
+    if msg.contains("ConflictError")
+        || msg.contains("ConcurrentRenameError")
+        || msg.contains("SupersedeConflictError")
+    {
         rmcp::Error::new(ErrorCode(-32009), msg, None)
     } else if msg.contains("page not found") || msg.contains("link not found") {
         rmcp::Error::new(ErrorCode(-32001), msg, None)
@@ -457,6 +461,8 @@ pub struct MemoryQueryInput {
     pub limit: Option<u32>,
     /// Retrieval depth: "auto" for progressive expansion, absent/empty for direct results only
     pub depth: Option<String>,
+    /// Include superseded historical pages in results
+    pub include_superseded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -471,6 +477,8 @@ pub struct MemorySearchInput {
     pub wing: Option<String>,
     /// Maximum results to return
     pub limit: Option<u32>,
+    /// Include superseded historical pages in results
+    pub include_superseded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -595,8 +603,35 @@ impl QuaidServer {
         let db = self.db.lock().unwrap_or_else(|e| e.into_inner());
         let resolved = resolve_slug_for_mcp(&db, &input.slug, OpKind::Read)?;
         let page = vault_sync::get_page_by_input(&db, &input.slug).map_err(map_vault_sync_error)?;
-        let rendered = markdown::render_page(&canonicalize_page_for_mcp(&page, &resolved));
-        Ok(CallToolResult::success(vec![Content::text(rendered)]))
+        let canonical_page = canonicalize_page_for_mcp(&page, &resolved);
+        let successor_slug = supersede::successor_slug_by_id(&db, canonical_page.superseded_by)
+            .map_err(map_db_error)?;
+        let supersedes = canonical_page
+            .frontmatter
+            .get("supersedes")
+            .map(|slug| canonical_slug(&resolved.collection_name, slug));
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "slug": canonical_page.slug,
+            "uuid": canonical_page.uuid,
+            "type": canonical_page.page_type,
+            "title": canonical_page.title,
+            "summary": canonical_page.summary,
+            "compiled_truth": canonical_page.compiled_truth,
+            "timeline": canonical_page.timeline,
+            "frontmatter": canonical_page.frontmatter,
+            "wing": canonical_page.wing,
+            "room": canonical_page.room,
+            "version": canonical_page.version,
+            "created_at": canonical_page.created_at,
+            "updated_at": canonical_page.updated_at,
+            "truth_updated_at": canonical_page.truth_updated_at,
+            "timeline_updated_at": canonical_page.timeline_updated_at,
+            "supersedes": supersedes,
+            "superseded_by": successor_slug,
+        }))
+        .map_err(|e| rmcp::Error::new(ErrorCode(-32003), e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     #[tool(description = "Write or update a page")]
@@ -703,6 +738,7 @@ impl QuaidServer {
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
+        let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(10).min(MAX_LIMIT) as usize;
         let results = hybrid_search_canonical_with_namespace(
@@ -710,6 +746,7 @@ impl QuaidServer {
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
             namespace_filter,
+            include_superseded,
             &db,
             limit,
         )
@@ -744,6 +781,7 @@ impl QuaidServer {
                     3,
                     collection_filter.as_ref().map(|c| c.id),
                     namespace_filter,
+                    include_superseded,
                     &db,
                 )
                 .unwrap_or(results)
@@ -767,14 +805,16 @@ impl QuaidServer {
         let namespace_filter = input.namespace.as_deref().or(Some(""));
         let collection_filter =
             resolve_read_collection_filter_for_mcp(&db, input.collection.as_deref())?;
+        let include_superseded = input.include_superseded.unwrap_or(false);
 
         let limit = input.limit.unwrap_or(50).min(MAX_LIMIT) as usize;
         let safe_query = sanitize_fts_query(&input.query);
-        let results = crate::core::fts::search_fts_canonical_with_namespace(
+        let results = crate::core::fts::search_fts_canonical_with_namespace_filtered(
             &safe_query,
             input.wing.as_deref(),
             collection_filter.as_ref().map(|collection| collection.id),
             namespace_filter,
+            include_superseded,
             &db,
             limit,
         )
@@ -1723,10 +1763,9 @@ mod tests {
             })
             .unwrap();
 
-        let rendered = extract_text(&result);
-        assert!(rendered.contains("slug: memory::people/alice"));
-        assert!(rendered.contains("Memory Alice"));
-        assert!(!rendered.contains("Default Alice"));
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
+        assert_eq!(payload["slug"], "memory::people/alice");
+        assert_eq!(payload["compiled_truth"], "Memory Alice");
     }
 
     #[test]
@@ -2015,11 +2054,14 @@ mod tests {
                 slug: "notes/uuid".to_string(),
             })
             .unwrap();
-        let rendered = extract_text(&result);
+        let payload: serde_json::Value = serde_json::from_str(&extract_text(&result)).unwrap();
 
-        assert!(rendered.contains("quaid_id: 01969f11-9448-7d79-8d3f-c68f54761234"));
-        assert!(rendered.contains("slug: default::notes/uuid"));
-        assert!(rendered.contains("Updated"));
+        assert_eq!(
+            payload["frontmatter"]["quaid_id"],
+            "01969f11-9448-7d79-8d3f-c68f54761234"
+        );
+        assert_eq!(payload["slug"], "default::notes/uuid");
+        assert_eq!(payload["compiled_truth"], "Updated");
     }
 
     #[test]
@@ -2096,6 +2138,7 @@ mod tests {
                 wing: None,
                 limit: None,
                 depth: None,
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2141,6 +2184,7 @@ mod tests {
                 wing: None,
                 limit: Some(1),
                 depth: Some("auto".to_string()),
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2189,6 +2233,7 @@ mod tests {
                 wing: None,
                 limit: Some(5),
                 depth: Some("auto".to_string()),
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2218,6 +2263,7 @@ mod tests {
                 namespace: None,
                 wing: None,
                 limit: None,
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2238,6 +2284,7 @@ mod tests {
             namespace: None,
             wing: None,
             limit: None,
+            include_superseded: None,
         });
 
         assert!(
@@ -2308,6 +2355,7 @@ mod tests {
                 namespace: None,
                 wing: None,
                 limit: None,
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2341,6 +2389,7 @@ mod tests {
                 wing: None,
                 limit: None,
                 depth: None,
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2394,6 +2443,7 @@ mod tests {
                 wing: None,
                 limit: None,
                 depth: None,
+                include_superseded: None,
             })
             .unwrap_err();
         assert_eq!(query_error.code, ErrorCode(-32001));
@@ -2408,6 +2458,7 @@ mod tests {
                 namespace: None,
                 wing: None,
                 limit: None,
+                include_superseded: None,
             })
             .unwrap_err();
         assert_eq!(search_error.code, ErrorCode(-32001));
@@ -2448,6 +2499,7 @@ mod tests {
                 namespace: None,
                 wing: None,
                 limit: None,
+                include_superseded: None,
             })
             .unwrap();
 
@@ -2481,6 +2533,7 @@ mod tests {
                 wing: None,
                 limit: None,
                 depth: None,
+                include_superseded: None,
             })
             .unwrap();
 

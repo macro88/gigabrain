@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::core::{markdown, novelty, page_uuid, palace, raw_imports, vault_sync};
+use crate::core::{markdown, novelty, page_uuid, palace, raw_imports, supersede, vault_sync};
 
 pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
     let file = Path::new(path);
@@ -72,6 +72,7 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             .optional()?;
         let page_uuid = page_uuid::resolve_page_uuid(&frontmatter, existing_uuid.as_deref())?;
         let frontmatter_json = serde_json::to_string(&frontmatter)?;
+        let supersedes = frontmatter.get("supersedes").cloned();
 
         db.execute(
             "INSERT INTO pages \
@@ -108,6 +109,8 @@ pub fn run(db: &Connection, path: &str, force: bool) -> Result<()> {
             [&slug],
             |row| row.get(0),
         )?;
+        supersede::reconcile_supersede_chain(db, 1, "", page_id, &slug, supersedes.as_deref())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         raw_imports::rotate_active_raw_import(db, page_id, path, &raw_bytes)?;
         println!("Ingested {slug}");
 
