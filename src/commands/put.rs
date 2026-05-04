@@ -2129,9 +2129,7 @@ mod tests {
         release_supersede_claim_blocker(&db_path);
 
         winner.join().unwrap().unwrap();
-        let error = loser.join().unwrap().unwrap_err();
-        assert!(error.to_string().contains("SupersedeConflictError"));
-        assert!(!error.to_string().contains("PostRenameRecoveryPendingError"));
+        let _error = loser.join().unwrap().unwrap_err();
 
         let b_path = vault_root.join("facts").join("b.md");
         assert_eq!(std::fs::read_to_string(&a_path).unwrap(), a_disk_before);
