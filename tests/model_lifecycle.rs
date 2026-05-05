@@ -19,7 +19,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, OnceLock,
 };
 use std::thread;
@@ -69,6 +69,7 @@ struct MockFile {
 
 struct MockModelServer {
     base_url: String,
+    request_count: Arc<AtomicUsize>,
     shutdown: Arc<AtomicBool>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
@@ -107,6 +108,8 @@ impl MockModelServer {
         let repo_id = repo_id.to_owned();
         let revision = revision.to_owned();
         let file_names = files.keys().cloned().collect::<Vec<_>>();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_counter = Arc::clone(&request_count);
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_signal = Arc::clone(&shutdown);
 
@@ -121,6 +124,7 @@ impl MockModelServer {
                     Err(_) => break,
                 };
                 let mut stream = stream;
+                request_counter.fetch_add(1, Ordering::Relaxed);
                 let request = read_request(&mut stream);
                 if request.is_empty() {
                     continue;
@@ -176,9 +180,14 @@ impl MockModelServer {
 
         Self {
             base_url,
+            request_count,
             shutdown,
             join_handle: Some(join_handle),
         }
+    }
+
+    fn request_count(&self) -> usize {
+        self.request_count.load(Ordering::Relaxed)
     }
 }
 
@@ -279,7 +288,7 @@ fn seed_valid_cache(
             serde_json::json!({
                 "path": path,
                 "sha256": format!("{:x}", Sha256::digest(&file.content)),
-                "verified_from_source": true
+                "verified_from_source": false
             })
         })
         .collect::<Vec<_>>();
@@ -363,6 +372,7 @@ fn download_model_installs_manifest_and_recovers_stale_cache() {
     let status = cached_model_status(repo_id).expect("cache status");
     assert!(status.is_cached);
     assert!(status.verified);
+    assert!(!status.source_pinned);
 }
 
 #[test]
@@ -432,6 +442,97 @@ fn download_model_succeeds_when_another_writer_populates_the_cache_first() {
     let status = cached_model_status(repo_id).expect("cache status");
     assert!(status.is_cached);
     assert!(status.verified);
+    assert!(!status.source_pinned);
+}
+
+#[test]
+fn download_model_scavenges_stale_download_dirs_without_touching_recent_ones() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let repo_id = "org/test-model";
+    let revision = "main";
+    let server = MockModelServer::start(repo_id, revision, mock_files(false));
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let stale_dir = cache_root.path().join(".org-test-model-download-1-stale");
+    let recent_dir = cache_root
+        .path()
+        .join(format!(".org-test-model-download-{}-recent", u64::MAX));
+    std::fs::create_dir_all(&stale_dir).expect("create stale dir");
+    std::fs::create_dir_all(&recent_dir).expect("create recent dir");
+    std::fs::write(stale_dir.join("partial.bin"), b"stale").expect("write stale file");
+    std::fs::write(recent_dir.join("partial.bin"), b"recent").expect("write recent file");
+
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let mut reporter = NoopProgressReporter;
+    let _cache_dir = download_model(repo_id, &mut reporter).expect("download model");
+
+    assert!(!stale_dir.exists(), "stale dir should be scavenged");
+    assert!(recent_dir.exists(), "recent dir should be preserved");
+}
+
+#[test]
+fn load_model_from_local_cache_is_local_only_and_does_not_fetch_when_cache_is_missing() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let repo_id = "org/test-model";
+    let revision = "main";
+    let server = MockModelServer::start(repo_id, revision, mock_files(false));
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let before = server.request_count();
+    let error = quaid::core::conversation::model_lifecycle::load_model_from_local_cache(repo_id)
+        .expect_err("missing cache should fail closed");
+    let after = server.request_count();
+
+    assert!(error
+        .to_string()
+        .contains("no local model cache is present"));
+    assert_eq!(
+        before, after,
+        "local-only load must not make network requests"
+    );
+}
+
+#[test]
+fn load_model_from_local_cache_is_local_only_and_does_not_fetch_when_cache_is_invalid() {
+    let _lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let repo_id = "org/test-model";
+    let revision = "main";
+    let server = MockModelServer::start(repo_id, revision, mock_files(false));
+    let cache_root = tempfile::TempDir::new().expect("cache root");
+    let cache_dir = cache_root.path().join("org-test-model");
+    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+    std::fs::write(cache_dir.join("manifest.json"), b"{\"bad\":true}").expect("write bad manifest");
+    let _env = EnvGuard::set_all(&[
+        ("QUAID_HF_BASE_URL", server.base_url.clone()),
+        (
+            "QUAID_MODEL_CACHE_DIR",
+            cache_root.path().display().to_string(),
+        ),
+    ]);
+
+    let before = server.request_count();
+    let error = quaid::core::conversation::model_lifecycle::load_model_from_local_cache(repo_id)
+        .expect_err("invalid cache should fail closed");
+    let after = server.request_count();
+
+    assert!(error.to_string().contains("re-run `quaid model pull"));
+    assert_eq!(
+        before, after,
+        "invalid local cache must not trigger a fetch"
+    );
 }
 
 #[test]

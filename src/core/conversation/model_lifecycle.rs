@@ -2,8 +2,10 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -11,6 +13,7 @@ const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://huggingface.co";
 const MODEL_CACHE_ROOT_ENV: &str = "QUAID_MODEL_CACHE_DIR";
 const HUGGINGFACE_BASE_URL_ENV: &str = "QUAID_HF_BASE_URL";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
+const STALE_DOWNLOAD_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 const PHI_35_MINI_REVISION: &str = "2fe192450127e6a83f7441aef6e3ca586c338b77";
 const GEMMA_3_1B_REVISION: &str = "dcc83ea841ab6100d6b47a070329e1ba4cf78752";
@@ -94,7 +97,173 @@ pub struct CachedModelStatus {
     pub cache_dir: PathBuf,
     pub is_cached: bool,
     pub verified: bool,
+    pub source_pinned: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinnedDigest {
+    Sha256(&'static str),
+    GitBlobSha1(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourcePinnedFile {
+    path: &'static str,
+    digest: PinnedDigest,
+}
+
+const PHI_35_MINI_FILES: &[SourcePinnedFile] = &[
+    SourcePinnedFile {
+        path: "added_tokens.json",
+        digest: PinnedDigest::GitBlobSha1("178968dec606c790aa335e9142f6afec37288470"),
+    },
+    SourcePinnedFile {
+        path: "config.json",
+        digest: PinnedDigest::GitBlobSha1("62d1ca8d4b3c8ab21ac9a30775e1a224be66ef58"),
+    },
+    SourcePinnedFile {
+        path: "generation_config.json",
+        digest: PinnedDigest::GitBlobSha1("93dfd6366eab0bbae1613c5deab3a43bc989e5f8"),
+    },
+    SourcePinnedFile {
+        path: "model.safetensors.index.json",
+        digest: PinnedDigest::GitBlobSha1("9d8ea7b588c536f06b274d405d1c3281cb722602"),
+    },
+    SourcePinnedFile {
+        path: "model-00001-of-00002.safetensors",
+        digest: PinnedDigest::Sha256(
+            "c5214cdb995ed3dd716add8d9efbfe016b76bb2f1c4c1e6c1c6a95497d7a8837",
+        ),
+    },
+    SourcePinnedFile {
+        path: "model-00002-of-00002.safetensors",
+        digest: PinnedDigest::Sha256(
+            "41246eed2b75b66526339c5d32d6f7acdefe0bd24180f97c74303f4656877344",
+        ),
+    },
+    SourcePinnedFile {
+        path: "special_tokens_map.json",
+        digest: PinnedDigest::GitBlobSha1("badfd2a349071a6b3ae2681838e51695781f60e1"),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.json",
+        digest: PinnedDigest::GitBlobSha1("e213d846868b09aefa5225e6026d91b41e19e7ff"),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.model",
+        digest: PinnedDigest::Sha256(
+            "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+        ),
+    },
+    SourcePinnedFile {
+        path: "tokenizer_config.json",
+        digest: PinnedDigest::GitBlobSha1("7280c871b0d18a2a03000fb8d638983793aa33e1"),
+    },
+];
+
+const GEMMA_3_1B_FILES: &[SourcePinnedFile] = &[
+    SourcePinnedFile {
+        path: "added_tokens.json",
+        digest: PinnedDigest::GitBlobSha1("e17bde03d42feda32d1abfca6d3b598b9a020df7"),
+    },
+    SourcePinnedFile {
+        path: "config.json",
+        digest: PinnedDigest::GitBlobSha1("06ab0678bc32d4f1474f31b35914512b1f9edaf7"),
+    },
+    SourcePinnedFile {
+        path: "generation_config.json",
+        digest: PinnedDigest::GitBlobSha1("37a4c871d263a349f50e4a313db3e72164950702"),
+    },
+    SourcePinnedFile {
+        path: "model.safetensors",
+        digest: PinnedDigest::Sha256(
+            "3d4ef8d71c14db7e448a09ebe891cfb6bf32c57a9b44499ae0d1c098e48516b6",
+        ),
+    },
+    SourcePinnedFile {
+        path: "special_tokens_map.json",
+        digest: PinnedDigest::GitBlobSha1("1a6193244714d3d78be48666cb02cdbfac62ad86"),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.json",
+        digest: PinnedDigest::Sha256(
+            "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+        ),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.model",
+        digest: PinnedDigest::Sha256(
+            "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+        ),
+    },
+    SourcePinnedFile {
+        path: "tokenizer_config.json",
+        digest: PinnedDigest::GitBlobSha1("7bdd14f0eaec30c8d2c56bc9d543587676e19c0f"),
+    },
+];
+
+const GEMMA_3_4B_FILES: &[SourcePinnedFile] = &[
+    SourcePinnedFile {
+        path: "added_tokens.json",
+        digest: PinnedDigest::GitBlobSha1("e17bde03d42feda32d1abfca6d3b598b9a020df7"),
+    },
+    SourcePinnedFile {
+        path: "chat_template.json",
+        digest: PinnedDigest::GitBlobSha1("719b0cd0d7a373a400b0c119ee0e051f41ea88d9"),
+    },
+    SourcePinnedFile {
+        path: "config.json",
+        digest: PinnedDigest::GitBlobSha1("fcdc8a6cd637c7ae460065204e7fd0d8c00a38fc"),
+    },
+    SourcePinnedFile {
+        path: "generation_config.json",
+        digest: PinnedDigest::GitBlobSha1("37a4c871d263a349f50e4a313db3e72164950702"),
+    },
+    SourcePinnedFile {
+        path: "model.safetensors.index.json",
+        digest: PinnedDigest::GitBlobSha1("4b95241f208f06d324d17c9675568ec58dafd9fb"),
+    },
+    SourcePinnedFile {
+        path: "model-00001-of-00002.safetensors",
+        digest: PinnedDigest::Sha256(
+            "eb5fd5e97ddd07b56778733e9653c07312529cb00980a318fc3e1c4e3b5a8f1f",
+        ),
+    },
+    SourcePinnedFile {
+        path: "model-00002-of-00002.safetensors",
+        digest: PinnedDigest::Sha256(
+            "fdde0e5aa5ced0fa203b3d50f4ab78168b7e3a3e08c6349f5cc9326666e1bb13",
+        ),
+    },
+    SourcePinnedFile {
+        path: "preprocessor_config.json",
+        digest: PinnedDigest::GitBlobSha1("b1e00fc184f61b698181821169c6374cd5813e5c"),
+    },
+    SourcePinnedFile {
+        path: "processor_config.json",
+        digest: PinnedDigest::GitBlobSha1("453c7966d4b5d0b4a317c585989f64c58c2a6bf0"),
+    },
+    SourcePinnedFile {
+        path: "special_tokens_map.json",
+        digest: PinnedDigest::GitBlobSha1("1a6193244714d3d78be48666cb02cdbfac62ad86"),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.json",
+        digest: PinnedDigest::Sha256(
+            "4667f2089529e8e7657cfb6d1c19910ae71ff5f28aa7ab2ff2763330affad795",
+        ),
+    },
+    SourcePinnedFile {
+        path: "tokenizer.model",
+        digest: PinnedDigest::Sha256(
+            "1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c",
+        ),
+    },
+    SourcePinnedFile {
+        path: "tokenizer_config.json",
+        digest: PinnedDigest::GitBlobSha1("7bdd14f0eaec30c8d2c56bc9d543587676e19c0f"),
+    },
+];
 
 #[derive(Debug, Error)]
 pub enum ModelLifecycleError {
@@ -208,13 +377,17 @@ pub fn cache_dir_for_alias(alias: &str) -> Result<PathBuf, ModelLifecycleError> 
 pub fn cached_model_status(alias: &str) -> Result<CachedModelStatus, ModelLifecycleError> {
     let alias = resolve_model_alias(alias)?;
     let cache_dir = cache_dir_for_resolved_alias(&alias)?;
-    let (is_cached, verified) = if cache_dir.is_dir() {
-        match verify_cache_manifest(&cache_dir, &alias) {
-            Ok(()) => (true, true),
-            Err(_) => (true, false),
+    let (is_cached, verified, source_pinned) = if cache_dir.is_dir() {
+        match validated_manifest(&cache_dir, &alias) {
+            Ok(manifest) => (
+                true,
+                true,
+                manifest.files.iter().all(|file| file.verified_from_source),
+            ),
+            Err(_) => (true, false, false),
         }
     } else {
-        (false, false)
+        (false, false, false)
     };
 
     Ok(CachedModelStatus {
@@ -222,7 +395,39 @@ pub fn cached_model_status(alias: &str) -> Result<CachedModelStatus, ModelLifecy
         cache_dir,
         is_cached,
         verified,
+        source_pinned,
     })
+}
+
+/// Returns a verified local cache directory without touching the network.
+///
+/// Runtime loaders must use this seam instead of `download_model()` so missing or corrupt
+/// caches fail closed instead of silently fetching.
+pub fn load_model_from_local_cache(alias: &str) -> Result<PathBuf, ModelLifecycleError> {
+    let alias = resolve_model_alias(alias)?;
+    let cache_dir = cache_dir_for_resolved_alias(&alias)?;
+    if !cache_dir.is_dir() {
+        return Err(ModelLifecycleError::CacheInvalid {
+            cache_dir: cache_dir.display().to_string(),
+            message: format!(
+                "no local model cache is present; run `quaid model pull {}` or `quaid extraction enable` first",
+                alias.requested_alias
+            ),
+        });
+    }
+    verify_cache_manifest(&cache_dir, &alias).map_err(|error| match error {
+        ModelLifecycleError::CacheInvalid { cache_dir, message } => {
+            ModelLifecycleError::CacheInvalid {
+                cache_dir,
+                message: format!(
+                    "{message}; re-run `quaid model pull {}` or `quaid extraction enable`",
+                    alias.requested_alias
+                ),
+            }
+        }
+        other => other,
+    })?;
+    Ok(cache_dir)
 }
 
 pub fn download_model(
@@ -268,6 +473,7 @@ fn download_model_online(
         alias: alias.requested_alias.clone(),
         message: format!("create cache root {}: {error}", cache_root.display()),
     })?;
+    scavenge_stale_download_dirs(cache_root, &alias.cache_key);
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -281,13 +487,27 @@ fn download_model_online(
             message: format!("build HTTP client: {error}"),
         })?;
 
-    let metadata = fetch_model_metadata(&client, &alias)?;
-    let files = select_files_to_download(&metadata, &alias)?;
-    progress.planned(&alias, files.len());
+    let metadata = source_pins_for_alias(&alias)
+        .is_none()
+        .then(|| fetch_model_metadata(&client, &alias))
+        .transpose()?;
+    let planned_file_count = source_pins_for_alias(&alias)
+        .map(|files| files.len())
+        .unwrap_or_else(|| {
+            metadata
+                .as_ref()
+                .map(|metadata| select_files_to_download(metadata, &alias).map(|files| files.len()))
+                .transpose()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        });
+    progress.planned(&alias, planned_file_count);
 
     let temp_dir = cache_root.join(format!(
-        ".{}-download-{}",
+        ".{}-download-{}-{}",
         alias.cache_key,
+        download_timestamp_secs(),
         uuid::Uuid::new_v4()
     ));
     fs::create_dir_all(&temp_dir).map_err(|error| ModelLifecycleError::Download {
@@ -295,7 +515,21 @@ fn download_model_online(
         message: format!("create temporary cache {}: {error}", temp_dir.display()),
     })?;
 
-    let install_result = install_model_into_dir(&client, &alias, &files, &temp_dir, progress);
+    let install_result = match source_pins_for_alias(&alias) {
+        Some(files) => {
+            install_source_pinned_model_into_dir(&client, &alias, files, &temp_dir, progress)
+        }
+        None => {
+            let Some(metadata) = metadata.as_ref() else {
+                return Err(ModelLifecycleError::Metadata {
+                    alias: alias.requested_alias.clone(),
+                    message: "download metadata was not fetched for an unpinned alias".to_owned(),
+                });
+            };
+            let files = select_files_to_download(&metadata, &alias)?;
+            install_model_into_dir(&client, &alias, &files, &temp_dir, progress)
+        }
+    };
     if let Err(error) = install_result {
         let _ = fs::remove_dir_all(&temp_dir);
         return Err(error);
@@ -333,6 +567,38 @@ fn install_model_into_dir(
 
     for relative_path in files {
         let artifact = download_artifact(client, alias, relative_path, temp_dir, progress)?;
+        manifest_files.push(CachedFile {
+            path: artifact.relative_path,
+            sha256: artifact.sha256,
+            verified_from_source: artifact.verified_from_source,
+        });
+    }
+
+    manifest_files.sort_by(|left, right| left.path.cmp(&right.path));
+    let manifest = CacheManifest {
+        requested_alias: alias.requested_alias.clone(),
+        repo_id: alias.repo_id.clone(),
+        revision: alias.revision.clone(),
+        files: manifest_files,
+    };
+    write_manifest(temp_dir, &manifest, alias)?;
+    verify_cache_manifest(temp_dir, alias)?;
+    Ok(())
+}
+
+#[cfg(feature = "online-model")]
+fn install_source_pinned_model_into_dir(
+    client: &reqwest::blocking::Client,
+    alias: &ResolvedModelAlias,
+    files: &[SourcePinnedFile],
+    temp_dir: &Path,
+    progress: &mut impl ProgressReporter,
+) -> Result<(), ModelLifecycleError> {
+    let mut manifest_files = Vec::with_capacity(files.len());
+
+    for pinned_file in files {
+        let artifact =
+            download_source_pinned_artifact(client, alias, pinned_file, temp_dir, progress)?;
         manifest_files.push(CachedFile {
             path: artifact.relative_path,
             sha256: artifact.sha256,
@@ -394,7 +660,6 @@ fn download_artifact(
     progress.file_started(&relative_path, total_bytes);
 
     let expected_sha256 = expected_sha256_from_headers(response.headers());
-    let verified_from_source = expected_sha256.is_some();
     let mut file = File::create(&destination).map_err(|error| ModelLifecycleError::Download {
         alias: alias.requested_alias.clone(),
         message: format!("create {}: {error}", destination.display()),
@@ -446,7 +711,99 @@ fn download_artifact(
     Ok(DownloadedArtifact {
         relative_path,
         sha256: actual_sha256,
-        verified_from_source,
+        verified_from_source: false,
+    })
+}
+
+#[cfg(feature = "online-model")]
+fn download_source_pinned_artifact(
+    client: &reqwest::blocking::Client,
+    alias: &ResolvedModelAlias,
+    pinned_file: &SourcePinnedFile,
+    temp_dir: &Path,
+    progress: &mut impl ProgressReporter,
+) -> Result<DownloadedArtifact, ModelLifecycleError> {
+    let relative_path = normalize_relative_path(pinned_file.path).map_err(|message| {
+        ModelLifecycleError::Metadata {
+            alias: alias.requested_alias.clone(),
+            message,
+        }
+    })?;
+    let destination = temp_dir.join(&relative_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| ModelLifecycleError::Download {
+            alias: alias.requested_alias.clone(),
+            message: format!("create {}: {error}", parent.display()),
+        })?;
+    }
+
+    let url = format!(
+        "{}/{}/resolve/{}/{}",
+        huggingface_base_url().trim_end_matches('/'),
+        alias.repo_id,
+        alias.revision.as_deref().unwrap_or("main"),
+        relative_path
+    );
+    let mut response = client
+        .get(&url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| ModelLifecycleError::Download {
+            alias: alias.requested_alias.clone(),
+            message: format!("GET {url}: {error}"),
+        })?;
+
+    let total_bytes = response.content_length();
+    progress.file_started(&relative_path, total_bytes);
+
+    let mut file = File::create(&destination).map_err(|error| ModelLifecycleError::Download {
+        alias: alias.requested_alias.clone(),
+        message: format!("create {}: {error}", destination.display()),
+    })?;
+    let mut sha256 = Sha256::new();
+    let mut downloaded = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| ModelLifecycleError::Download {
+                alias: alias.requested_alias.clone(),
+                message: format!("read {url}: {error}"),
+            })?;
+        if read == 0 {
+            break;
+        }
+        std::io::Write::write_all(&mut file, &buffer[..read]).map_err(|error| {
+            ModelLifecycleError::Download {
+                alias: alias.requested_alias.clone(),
+                message: format!("write {}: {error}", destination.display()),
+            }
+        })?;
+        sha256.update(&buffer[..read]);
+        downloaded += read as u64;
+        progress.file_progress(&relative_path, downloaded, total_bytes);
+    }
+    std::io::Write::flush(&mut file).map_err(|error| ModelLifecycleError::Download {
+        alias: alias.requested_alias.clone(),
+        message: format!("flush {}: {error}", destination.display()),
+    })?;
+
+    let actual_sha256 = format!("{:x}", sha256.finalize());
+    verify_source_pin(
+        &relative_path,
+        downloaded,
+        pinned_file.digest,
+        &actual_sha256,
+        &destination,
+        alias,
+    )?;
+
+    progress.file_finished(&relative_path, &actual_sha256);
+    Ok(DownloadedArtifact {
+        relative_path,
+        sha256: actual_sha256,
+        verified_from_source: true,
     })
 }
 
@@ -496,6 +853,127 @@ fn fetch_model_metadata(
         alias: alias.requested_alias.clone(),
         message: last_error.unwrap_or_else(|| "metadata request failed".to_owned()),
     })
+}
+
+fn download_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn source_pins_for_alias(alias: &ResolvedModelAlias) -> Option<&'static [SourcePinnedFile]> {
+    match alias.requested_alias.to_ascii_lowercase().as_str() {
+        "phi-3.5-mini" => Some(PHI_35_MINI_FILES),
+        "gemma-3-1b" => Some(GEMMA_3_1B_FILES),
+        "gemma-3-4b" => Some(GEMMA_3_4B_FILES),
+        _ => None,
+    }
+}
+
+fn scavenge_stale_download_dirs(cache_root: &Path, cache_key: &str) {
+    let Ok(entries) = fs::read_dir(cache_root) else {
+        return;
+    };
+    let now = download_timestamp_secs();
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(created_at) = parse_download_timestamp(&file_name, cache_key, &entry.path())
+        else {
+            continue;
+        };
+        if now.saturating_sub(created_at) < STALE_DOWNLOAD_TTL.as_secs() {
+            continue;
+        }
+        let _ = fs::remove_dir_all(entry.path());
+    }
+}
+
+fn parse_download_timestamp(file_name: &str, cache_key: &str, path: &Path) -> Option<u64> {
+    let prefix = format!(".{cache_key}-download-");
+    let suffix = file_name.strip_prefix(&prefix)?;
+    let timestamp = suffix
+        .split_once('-')
+        .and_then(|(timestamp, _)| timestamp.parse::<u64>().ok());
+    if timestamp.is_some() {
+        return timestamp;
+    }
+    path.metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .filter(|age| *age >= STALE_DOWNLOAD_TTL)
+        .map(|age| download_timestamp_secs().saturating_sub(age.as_secs()))
+}
+
+#[cfg(feature = "online-model")]
+fn verify_source_pin(
+    relative_path: &str,
+    byte_len: u64,
+    digest: PinnedDigest,
+    actual_sha256: &str,
+    destination: &Path,
+    alias: &ResolvedModelAlias,
+) -> Result<(), ModelLifecycleError> {
+    let (algorithm, expected, actual) = match digest {
+        PinnedDigest::Sha256(expected) => ("SHA-256", expected, actual_sha256),
+        PinnedDigest::GitBlobSha1(expected) => {
+            let actual = git_blob_sha1_for_file(destination, byte_len).map_err(|message| {
+                ModelLifecycleError::Download {
+                    alias: alias.requested_alias.clone(),
+                    message,
+                }
+            })?;
+            return if actual == expected {
+                Ok(())
+            } else {
+                let _ = fs::remove_file(destination);
+                Err(ModelLifecycleError::Download {
+                    alias: alias.requested_alias.clone(),
+                    message: format!(
+                        "integrity check failed for {}: expected git blob SHA-1 {}, got {}",
+                        relative_path, expected, actual
+                    ),
+                })
+            };
+        }
+    };
+
+    if actual != expected {
+        let _ = fs::remove_file(destination);
+        return Err(ModelLifecycleError::Download {
+            alias: alias.requested_alias.clone(),
+            message: format!(
+                "integrity check failed for {}: expected {} {}, got {}",
+                relative_path, algorithm, expected, actual
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn git_blob_sha1_for_file(path: &Path, byte_len: u64) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", byte_len).as_bytes());
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(feature = "online-model")]
@@ -654,6 +1132,14 @@ fn verify_cache_manifest(
     cache_dir: &Path,
     alias: &ResolvedModelAlias,
 ) -> Result<(), ModelLifecycleError> {
+    let _ = validated_manifest(cache_dir, alias)?;
+    Ok(())
+}
+
+fn validated_manifest(
+    cache_dir: &Path,
+    alias: &ResolvedModelAlias,
+) -> Result<CacheManifest, ModelLifecycleError> {
     let manifest =
         read_manifest(cache_dir).map_err(|message| ModelLifecycleError::CacheInvalid {
             cache_dir: cache_dir.display().to_string(),
@@ -717,7 +1203,7 @@ fn verify_cache_manifest(
         }
     }
 
-    Ok(())
+    Ok(manifest)
 }
 
 fn write_manifest(
@@ -801,6 +1287,26 @@ mod tests {
         assert_eq!(
             gemma.revision.as_deref(),
             Some("dcc83ea841ab6100d6b47a070329e1ba4cf78752")
+        );
+    }
+
+    #[test]
+    fn source_pins_cover_curated_aliases() {
+        let phi = resolve_model_alias("phi-3.5-mini").expect("resolve phi");
+        let gemma_1b = resolve_model_alias("gemma-3-1b").expect("resolve gemma 1b");
+        let gemma_4b = resolve_model_alias("gemma-3-4b").expect("resolve gemma 4b");
+
+        assert_eq!(
+            source_pins_for_alias(&phi).map(|files| files.len()),
+            Some(10)
+        );
+        assert_eq!(
+            source_pins_for_alias(&gemma_1b).map(|files| files.len()),
+            Some(8)
+        );
+        assert_eq!(
+            source_pins_for_alias(&gemma_4b).map(|files| files.len()),
+            Some(13)
         );
     }
 

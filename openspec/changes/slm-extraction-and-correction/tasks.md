@@ -22,9 +22,9 @@
 - [x] 3.1 Create `src/core/conversation/model_lifecycle.rs` with the local model cache layout (`~/.quaid/models/<alias>/{tokenizer.json,model.safetensors,...}`)
 - [x] 3.2 Implement `download_model(alias: &str, progress: impl ProgressReporter) -> Result<PathBuf>` that resolves alias to a Hugging Face repo, downloads files into the cache, and runs SHA-256 integrity checks
 - [x] 3.3 Resolve aliases: `phi-3.5-mini` → `microsoft/Phi-3.5-mini-instruct` (with the appropriate quantised variant), `gemma-3-1b`, `gemma-3-4b`, plus any non-alias passes through as a raw repo id
-- [x] 3.4 Atomic install: download into a temp directory, verify, then rename into the final cache location to avoid partial-cache states
+- [x] 3.4 Atomic install + stale-temp scavenging: download into a temp directory, verify, then rename into the final cache location to avoid partial-cache states, and scavenge stale `.alias-download-*` leftovers on later installs
 - [x] 3.5 On integrity-check failure, remove the partial download and return an actionable error
-- [x] 3.6 Tests: `tests/model_lifecycle.rs` covers alias resolution, atomic install, partial-download recovery, and integrity verification (using a mock HTTP server / fixture model)
+- [x] 3.6 Tests: `tests/model_lifecycle.rs` covers alias resolution, atomic install, stale-temp scavenging, partial-download recovery, local-only cache load / no-silent-fetch, and integrity verification (using a mock HTTP server / fixture model)
 
 ## 4. CLI — `quaid extraction` and `quaid model` subcommands
 

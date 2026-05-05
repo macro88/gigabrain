@@ -3,7 +3,9 @@ use clap::Subcommand;
 use rusqlite::{params, Connection};
 
 use crate::core::{
-    conversation::model_lifecycle::{cached_model_status, download_model, ConsoleProgressReporter},
+    conversation::model_lifecycle::{
+        cached_model_status, download_model, load_model_from_local_cache, ConsoleProgressReporter,
+    },
     db,
 };
 
@@ -52,12 +54,22 @@ fn status(db: &Connection) -> Result<()> {
     println!("Model alias: {}", cache_status.alias.requested_alias);
     println!("Model repo: {}", cache_status.alias.repo_id);
     println!("Model cache dir: {}", cache_status.cache_dir.display());
+    let cache_state = match (
+        cache_status.is_cached,
+        cache_status.verified,
+        cache_status.source_pinned,
+    ) {
+        (true, true, true) => "verified (source-pinned)",
+        (true, true, false) => "verified (manifest-only)",
+        (true, false, _) => "present but invalid",
+        (false, _, _) => "missing",
+    };
+    println!("Model cache state: {cache_state}");
     println!(
-        "Model cache state: {}",
-        match (cache_status.is_cached, cache_status.verified) {
-            (true, true) => "verified",
-            (true, false) => "present but invalid",
-            (false, _) => "missing",
+        "Runtime local-only load: {}",
+        match load_model_from_local_cache(&alias) {
+            Ok(path) => format!("ready ({})", path.display()),
+            Err(error) => format!("blocked ({error})"),
         }
     );
     println!("Queue: pending={pending} running={running} failed_last_24h={failed_recent}");
